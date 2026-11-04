@@ -7,6 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import * as ed from '@noble/ed25519';
 import { sha512 } from '@noble/hashes/sha512';
+import { sha256 } from '@noble/hashes/sha256';
 import type { Socket, Platform } from '../../../support/platform.js';
 import { WsFramer, decode, encode } from '../../framing.js';
 import { resumeSession, verifyResumeIdentityProof } from '../resume.js';
@@ -85,6 +86,9 @@ const platform = {
   randomBytes: (n: number) => new Uint8Array(n).fill(0x11),
   timingSafeEqual: (a: Uint8Array, b: Uint8Array) =>
     a.length === b.length && a.every((v, i) => v === b[i]),
+  // REAL SHA-256: resumeSession pins SHA256(server_pub_key) as trustedPin
+  // via the platform — the fake must hash like the server, not stand in.
+  sha256: (d: Uint8Array) => sha256(d),
 } as unknown as Platform;
 
 function decodeSent(socket: ScriptedSocket, i: number): unknown {

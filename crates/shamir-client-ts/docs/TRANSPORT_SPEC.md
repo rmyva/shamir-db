@@ -85,12 +85,14 @@ interface ConnectOptions {
 }
 ```
 
-Note: unlike the napi/Node client, the TS client does not implement
-TOFU pinning of the server's Ed25519 identity — `acceptNewHost`/
-`trustedPin` were declared but never consulted, giving a false sense of
-protection (task #622). Removed from the type rather than left dead;
-real pinning (with a browser storage backend and an `acceptNewHost`
-UX) is unimplemented and would need its own design pass.
+Note: unlike the napi/Node client's historical gap, the TS client now
+implements TOFU pinning of the server's Ed25519 identity in the shared
+session layer: every handshake verifies `identity_sig`,
+`acceptNewHost: false` refuses first contact before any I/O, and the
+captured `SHA256(server_pub_key)` pin is exposed via
+`ShamirClient.trustedPin()` (pass it back as the `trustedPin` option;
+see docs/README.md). Persisting the pin in browser storage is up to the
+application.
 
 ## ShamirClient API (mirror napi)
 ```ts

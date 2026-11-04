@@ -120,7 +120,9 @@ export interface ConnectOptions {
    * TLS options. `ca`: PEM CA certificate(s) trusted for the server
    * certificate, used by 'tcp' and 'ws-native' only (setting it with the
    * browser-profile transport throws). Trust = `rejectUnauthorized`
-   * (default true) plus `ca`; no `identity_sig` pin check in TS (task #622).
+   * (default true) plus `ca`; on top of that, every session handshake
+   * verifies the server's Ed25519 `identity_sig` and the optional
+   * `trustedPin` above — a mismatch throws `ServerIdentityChangedError`.
    */
   tls?: { rejectUnauthorized?: boolean; ca?: string | Uint8Array };
   /**

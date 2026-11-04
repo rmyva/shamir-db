@@ -184,15 +184,19 @@ const client = await connect({
   // origin defaults to `https://${host}`
 });
 
-// ticket and pin come from a previous browser session:
-//   `client.resumptionTicket()` and `client.trustedPin()`.
-// Resume a browser-profile session from a ticket (binding mode 0x02 —
-// no resume_proof; the ticket is sent right after the WSS link is up).
+// Ticket and identity come from a previous browser session:
+//   `client.resumptionTicket()` — the ticket for `resume`;
+//   `client.serverPubKeyPin()` — the RAW server public key that `resume`
+//   expects as `serverPubKey` (binding mode 0x02 has no resume_proof, so
+//   this pinned key is the identity check on the resume path);
+//   `client.trustedPin()` — the SHA256(server_pub_key) pin for
+//   `connect`'s `trustedPin` option. NOT interchangeable: passing the pin
+//   as `serverPubKey` (or the key as `trustedPin`) pins the wrong bytes.
 const resumed = await resume({
   host: 'db.example.com',
   port: 443,
   ticket,
-  serverPubKey: pin,
+  serverPubKey: rawServerPubKey,
 });
 ```
 

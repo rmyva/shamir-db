@@ -18,6 +18,17 @@ import type { ConnectLocalOptions } from '../../types/index.js';
 import { ARGON2_VERSION_13, TRANSPORT_KIND_UNIX, BINDING_MODE_NONE } from '../../protocol/scram.js';
 import { buildAuthMessage } from '../../protocol/scram.js';
 import { openIpcSocket } from '../../../platform/node.js';
+import * as ed from '@noble/ed25519';
+import { sha512 } from '@noble/hashes/sha512';
+import { sha256 } from '@noble/hashes/sha256';
+import { buildIdentityInput } from '../../protocol/session/open.js';
+
+if (ed.etc.sha512Sync === undefined) {
+  ed.etc.sha512Sync = (...m) => sha512(ed.etc.concatBytes(...m));
+}
+
+const SERVER_PRIV = new Uint8Array(32).fill(7);
+const SERVER_PUB = ed.getPublicKey(SERVER_PRIV);
 
 const openedClients: ShamirClient[] = [];
 
@@ -145,7 +156,10 @@ function challengeFrame(): Uint8Array {
 function makeFakePlatform(socket: FakeSocket): Platform {
   return {
     hmacSha256: (k, d) => fakeHmac(k, d),
-    sha256: (d) => fakeHmac(new Uint8Array(0), d),
+    // REAL SHA-256: auth_ok.identity_sig is Ed25519 over an input that
+    // hashes the server pub key — a stand-in digest would make the fixture
+    // signature unverifiable by the client's recomputation.
+    sha256: (d) => sha256(d),
     randomBytes: (n) => {
       const out = new Uint8Array(n);
       for (let i = 0; i < n; i++) out[i] = (i * 31 + 7) & 0xff;
@@ -218,12 +232,35 @@ describe('ShamirClient.connectLocal', () => {
     const clientNonce = platform.randomBytes(32);
     const serverSig = computeServerSignature(platform, clientNonce);
     const sessionId = new Uint8Array(32).fill(0x11);
-    const serverPubKey = new Uint8Array(32).fill(0x12);
+    const serverPubKey = SERVER_PUB;
     const expiresAtNs = BigInt('1830000000000000000');
+    // Real Ed25519 identity_sig over the identity input the client
+    // recomputes in verifyAuthOkIdentity (same auth_message bytes: IPC
+    // binding = TRANSPORT_KIND_UNIX/BINDING_MODE_NONE, zero exporter, the
+    // deterministic client_nonce). An all-zero sig fails the now-mandatory
+    // verification, so the fixture must sign for real.
+    const identitySig = ed.sign(
+      buildIdentityInput(platform, {
+        serverPubKey,
+        transportKind: TRANSPORT_KIND_UNIX,
+        bindingMode: BINDING_MODE_NONE,
+        tlsExporterOrZeros: new Uint8Array(32),
+        authMessage: buildAuthMessage(USERNAME.normalize('NFC'), clientNonce, {
+          serverNonce: SERVER_NONCE,
+          salt: SALT,
+          kdf: KDF,
+          transportKind: TRANSPORT_KIND_UNIX,
+          bindingMode: BINDING_MODE_NONE,
+        }),
+        sessionId,
+        expiresAtNs,
+      }),
+      SERVER_PRIV,
+    );
 
     socket.pushFrame(challengeFrame());
     socket.pushFrame(
-      encode([serverSig, serverPubKey, new Uint8Array(64), sessionId, expiresAtNs]),
+      encode([serverSig, serverPubKey, identitySig, sessionId, expiresAtNs]),
     );
 
     const client = await ShamirClient.connectLocal(platform, opts);

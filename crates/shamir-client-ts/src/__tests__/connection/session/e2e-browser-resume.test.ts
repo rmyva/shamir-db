@@ -17,10 +17,13 @@ import { connect as connectBrowser, resume as resumeBrowser, ServerIdentityChang
 import {
   SERVER_AVAILABLE,
   HOST,
+  ORIGIN,
   ADMIN_USER,
   ADMIN_PASSWORD,
   startMultiListenerServer,
 } from '../../e2e-harness.js';
+import { installBrowserSocket } from '../token/support/browser-socket.js';
+import type { BrowserSocketObserver } from '../token/support/browser-socket.js';
 import type { MultiServerHandle } from '../../e2e-harness.js';
 
 describe.skipIf(!SERVER_AVAILABLE)(
@@ -29,10 +32,16 @@ describe.skipIf(!SERVER_AVAILABLE)(
     let server: MultiServerHandle | null = null;
     let first: ShamirClient | null = null;
     let firstPin: Uint8Array | null = null;
-    let firstTicket: Uint8Array | null = null;
+    let firstTicket: Uint8Array | undefined;
+    let browserSocket: BrowserSocketObserver | null = null;
 
     beforeAll(async () => {
       server = await startMultiListenerServer();
+      // Browser entry points on Node: install the ws-based WebSocket
+      // adapter that sends the allow-listed Origin and trusts the harness
+      // CA (same approach as e2e-browser.test.ts). Left installed for the
+      // whole suite — `resumeBrowser` needs it too — and restored in afterAll.
+      browserSocket = installBrowserSocket(ORIGIN, server.caPem);
       try {
         first = await connectBrowser({
           host: HOST,
@@ -54,6 +63,10 @@ describe.skipIf(!SERVER_AVAILABLE)(
       if (first) {
         try { await first.close(); } catch { /* ok */ }
         first = null;
+      }
+      if (browserSocket) {
+        browserSocket.restore();
+        browserSocket = null;
       }
       if (server) {
         try { await server.stop(); } catch { /* ok */ }
