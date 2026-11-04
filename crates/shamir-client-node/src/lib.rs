@@ -1,9 +1,11 @@
 //! Node.js native binding for `shamir-client`.
 //!
 //! The Node API supports every Rust client entry point except subscriptions
-//! and cursors: TLS, WebSocket, plain-loopback and local (Unix socket / named
-//! pipe) SCRAM connects, ticket resumption over TLS and WebSocket, API-token
-//! WebSocket sessions, the token REST client, password `login`, batch
+//! and cursors: TLS, WebSocket (native and browser-profile), plain-loopback
+//! and local (Unix socket / named pipe) SCRAM connects, ticket resumption
+//! over TLS, WebSocket (native and browser-profile), plain loopback TCP and
+//! local IPC, API-token WebSocket sessions, the token REST client, password
+//! `login`, batch
 //! execution, replication and API-token creation (`createApiToken`).
 //! JavaScript sees:
 //!

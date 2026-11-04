@@ -57,6 +57,15 @@ const ws = await ShamirClient.connectWs({
   username: 'alice', password: 'secret', acceptNewHost: true,
 });
 
+// Браузерный профиль WebSocket: слушатель ws, profile: tls_no_export,
+// путь /shamir/v1/browser; Origin обязателен и должен быть в allowlist слушателя.
+const browser = await ShamirClient.connectWsBrowser({
+  host: '127.0.0.1', port: 7334, serverName: 'localhost',
+  origin: 'https://app.example',           // пустая строка = заголовка нет, слушатель откажет
+  username: 'alice', password: 'secret', acceptNewHost: true,
+  caPem: fs.readFileSync('ca.pem', 'utf8'), // доверять этому сертификату; без него — WebPKI-корни
+});
+
 // TCP без TLS: только loopback.
 const plain = await ShamirClient.connectPlain({
   host: '127.0.0.1', port: 7332,
@@ -72,6 +81,7 @@ const local = await ShamirClient.connectLocal({
 
 - `connectPlain` **только для loopback**: для любого другого адреса он отвечает ошибкой, в тексте которой есть `loopback`, и не открывает сокет.
 - `connectWs` и `connectPlain` подключаются к **первому** адресу, в который разрешилось имя хоста; перебора адресов нет.
+- `connectWsBrowser` — браузерный профиль WebSocket: без Origin (или с Origin вне allowlist слушателя) upgrade отклоняется (400/403); `serverName` — имя, с которым сверяется сертификат; `caPem` — PEM доверенного CA, по умолчанию встроенные WebPKI-корни.
 
 ## Resume по билету
 
@@ -91,7 +101,27 @@ const a = await ShamirClient.resume({
 const b = await ShamirClient.resumeWs({
   host: '127.0.0.1', port: 7333, serverName: 'localhost', ticket, trustedPin,
 });
+
+// Для resumePlain/resumeLocal/resumeWsBrowser билет берётся из сессии соответствующего транспорта
+// (анти-даунгрейд см. ниже), поэтому в примере ниже ticket и trustedPin — из сессии того же транспорта.
+
+// Браузерный профиль (билет должен быть получен там же: браузерный -> браузерный)
+const c = await ShamirClient.resumeWsBrowser({
+  host: '127.0.0.1', port: 7334, serverName: 'localhost',
+  origin: 'https://app.example', ticket, trustedPin, caPem,
+});
+
+// TCP без TLS (только loopback) и локальный IPC
+const d = await ShamirClient.resumePlain({
+  host: '127.0.0.1', port: 7332, ticket, trustedPin,
+});
+const e = await ShamirClient.resumeLocal({
+  addr: process.platform === 'win32' ? '\\\\.\\pipe\\shamir' : '/run/shamir.sock',
+  ticket, trustedPin,
+});
 ```
+
+Анти-даунгрейд: сервер отклоняет resume, если привязка канала нового слушателя СЛАБЕЕ, чем при аутентификации. Силы: plain/IPC (0x00) < браузерный профиль (0x02) < TLS exporter (0x01). Разрешено: plain -> plain, plain -> сильнее (например, TCP+TLS), браузерный -> браузерный, IPC -> IPC. Запрещено: билет TLS-exporter возобновить по plain TCP или браузерному профилю.
 
 Неверный пин или испорченный билет — ошибка; текст ошибки не содержит ни билета, ни пина.
 

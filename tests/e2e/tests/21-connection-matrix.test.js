@@ -1,7 +1,8 @@
 /**
  * Connection matrix — every napi connection variant against ONE server that
- * exposes TCP+TLS, WS+TLS, plain loopback TCP, HTTPS, plain HTTP (both with
- * password login) and a local IPC listener (see helpers/matrix-server.js).
+ * exposes TCP+TLS, WS+TLS, the browser-profile WS+TLS listener, plain loopback
+ * TCP, HTTPS, plain HTTP (both with password login) and a local IPC listener
+ * — seven listeners in all (see helpers/matrix-server.js).
  *
  * The matrix server is started lazily by the first test and stopped by the
  * last one; the shared `server`/`client` of the orchestrator are not used.
@@ -20,6 +21,7 @@ module.exports = async function ({ test, assert, assertEq, assertThrows, fixture
   const RESUME_TIMEOUTS = { handshakeTimeoutMs: 30000, requestTimeoutMs: 30000 };
   const LOCAL_TIMEOUTS = { connectTimeoutMs: 10000, requestTimeoutMs: 30000 };
   const TOKEN_TIMEOUTS = { connectTimeoutMs: 10000, requestTimeoutMs: 30000 };
+  const RESUME_LOCAL_TIMEOUTS = { connectTimeoutMs: 10000, handshakeTimeoutMs: 30000, requestTimeoutMs: 30000 };
 
   let matrixPromise = null;
   let counter = 0;
@@ -118,6 +120,33 @@ module.exports = async function ({ test, assert, assertEq, assertThrows, fixture
     };
   }
 
+  function browserSessionOpts(m, user) {
+    return {
+      host: m.host,
+      port: m.ports.browser,
+      serverName: 'localhost',
+      origin: m.browserOrigin,
+      username: user.name,
+      password: user.password,
+      acceptNewHost: true,
+      caPem: m.caPem,
+      ...SESSION_TIMEOUTS,
+    };
+  }
+
+  function browserResumeOpts(m, first) {
+    return {
+      host: m.host,
+      port: m.ports.browser,
+      serverName: 'localhost',
+      origin: m.browserOrigin,
+      ticket: first.resumptionTicket(),
+      trustedPin: first.serverPubKeyPin(),
+      caPem: m.caPem,
+      ...RESUME_TIMEOUTS,
+    };
+  }
+
   // Secret material must never appear in an error message, in any common
   // text encoding.
   function leaks(message, bufs) {
@@ -152,10 +181,11 @@ module.exports = async function ({ test, assert, assertEq, assertThrows, fixture
     });
   }
 
-  test('matrix server starts with six listeners', async () => {
+  test('matrix server starts with seven listeners', async () => {
     const m = await matrix();
     assert(m.caPem.includes('BEGIN CERTIFICATE'), 'caPem must be a PEM certificate');
     assert(m.ipcAddr.length > 0, 'ipc address must be set');
+    assertEq(m.browserOrigin, 'https://shamir.test');
   });
 
   // ─── connectWs ─────────────────────────────────────────────────────────
@@ -313,6 +343,302 @@ module.exports = async function ({ test, assert, assertEq, assertThrows, fixture
       await closeQuietly(resumed);
       await closeQuietly(first);
     }
+  });
+
+  // ─── browser-profile WebSocket ───────────────────────────────────────
+
+  test('connectWsBrowser: session over the browser profile runs a batch', async () => {
+    const m = await matrix();
+    const c = await ShamirClient.connectWsBrowser(browserSessionOpts(m, { name: m.user, password: m.password }));
+    try {
+      assertEq(c.authKind(), 'scram');
+      await c.ping();
+      const db = await freshDb(c, 'mx_browser');
+      await writeRow(c, db, 'b', 7);
+      assertEq((await readRows(c, db, 'b')).length, 1);
+    } finally {
+      await closeQuietly(c);
+    }
+  });
+
+  test('connectWsBrowser: missing Origin is refused before the native call', async () => {
+    const m = await matrix();
+    await assertThrows(
+      () =>
+        ShamirClient.connectWsBrowser({
+          host: m.host,
+          port: m.ports.browser,
+          serverName: 'localhost',
+          username: m.user,
+          password: m.password,
+          acceptNewHost: true,
+          caPem: m.caPem,
+          ...SESSION_TIMEOUTS,
+        }),
+      (e) => e instanceof TypeError && /origin/.test(e.message),
+      'missing Origin must be refused by the JS wrapper'
+    );
+  });
+
+  test('connectWsBrowser: empty Origin is refused by the listener (400)', async () => {
+    const m = await matrix();
+    await assertThrows(
+      () =>
+        ShamirClient.connectWsBrowser({
+          host: m.host,
+          port: m.ports.browser,
+          serverName: 'localhost',
+          origin: '',
+          username: m.user,
+          password: m.password,
+          acceptNewHost: true,
+          caPem: m.caPem,
+          ...SESSION_TIMEOUTS,
+        }),
+      (e) => /400/.test(e.message),
+      'empty Origin must be refused by the listener'
+    );
+  });
+
+  test('connectWsBrowser: wrong Origin is refused by the listener (403)', async () => {
+    const m = await matrix();
+    await assertThrows(
+      () =>
+        ShamirClient.connectWsBrowser({
+          host: m.host,
+          port: m.ports.browser,
+          serverName: 'localhost',
+          origin: 'https://evil.example',
+          username: m.user,
+          password: m.password,
+          acceptNewHost: true,
+          caPem: m.caPem,
+          ...SESSION_TIMEOUTS,
+        }),
+      (e) => /403/.test(e.message),
+      'wrong Origin must be refused by the listener'
+    );
+  });
+
+  test('resumeWsBrowser: ticket obtained over the browser profile resumes there', async () => {
+    const m = await matrix();
+    const user = await ordinaryUser(await sharedAdmin(m));
+    const first = await ShamirClient.connectWsBrowser(browserSessionOpts(m, user));
+    let resumed = null;
+    try {
+      const ticket = first.resumptionTicket();
+      assert(ticket !== null && ticket.length > 0, 'expected a resumption ticket');
+      resumed = await ShamirClient.resumeWsBrowser(browserResumeOpts(m, first));
+      await resumed.ping();
+    } finally {
+      await closeQuietly(resumed);
+      await closeQuietly(first);
+    }
+  });
+
+  // ─── resume over plain TCP and local IPC ────────────────────────────
+
+  test('resumePlain: ticket obtained over plain TCP resumes over plain TCP', async () => {
+    const m = await matrix();
+    const user = await ordinaryUser(await sharedAdmin(m));
+    const first = await ShamirClient.connectPlain({
+      host: m.host,
+      port: m.ports.plain,
+      username: user.name,
+      password: user.password,
+      acceptNewHost: true,
+      ...SESSION_TIMEOUTS,
+    });
+    let resumed = null;
+    try {
+      const ticket = first.resumptionTicket();
+      assert(ticket !== null && ticket.length > 0, 'expected a resumption ticket');
+      resumed = await ShamirClient.resumePlain({
+        host: m.host,
+        port: m.ports.plain,
+        ticket,
+        trustedPin: first.serverPubKeyPin(),
+        ...RESUME_TIMEOUTS,
+      });
+      await resumed.ping();
+    } finally {
+      await closeQuietly(resumed);
+      await closeQuietly(first);
+    }
+  });
+
+  test('resume: plain ticket upgrades to TCP+TLS', async () => {
+    const m = await matrix();
+    const user = await ordinaryUser(await sharedAdmin(m));
+    const first = await ShamirClient.connectPlain({
+      host: m.host,
+      port: m.ports.plain,
+      username: user.name,
+      password: user.password,
+      acceptNewHost: true,
+      ...SESSION_TIMEOUTS,
+    });
+    let resumed = null;
+    try {
+      const ticket = first.resumptionTicket();
+      assert(ticket !== null && ticket.length > 0, 'expected a resumption ticket');
+      resumed = await ShamirClient.resume({
+        host: m.host,
+        port: m.ports.tcp,
+        serverName: 'localhost',
+        ticket,
+        trustedPin: first.serverPubKeyPin(),
+        ...RESUME_TIMEOUTS,
+      });
+      await resumed.ping();
+    } finally {
+      await closeQuietly(resumed);
+      await closeQuietly(first);
+    }
+  });
+
+  test('resumePlain: native TLS ticket is refused (anti-downgrade)', async () => {
+    const m = await matrix();
+    const first = await freshUserTcp(m);
+    try {
+      const ticket = Buffer.from(first.resumptionTicket());
+      const pin = Buffer.from(first.serverPubKeyPin());
+      // The exact server code is intentionally not asserted; the refusal
+      // itself is the assertion.
+      const err = await assertThrows(() =>
+        ShamirClient.resumePlain({
+          host: m.host,
+          port: m.ports.plain,
+          ticket,
+          trustedPin: pin,
+          ...RESUME_TIMEOUTS,
+        })
+      );
+      assert(!leaks(err.message, [ticket, pin]), 'error must not echo ticket or pin');
+    } finally {
+      await closeQuietly(first);
+    }
+  });
+
+  test('resumeWsBrowser: native TLS ticket is refused (anti-downgrade)', async () => {
+    const m = await matrix();
+    const first = await freshUserTcp(m);
+    try {
+      const ticket = Buffer.from(first.resumptionTicket());
+      const pin = Buffer.from(first.serverPubKeyPin());
+      // The exact server code is intentionally not asserted; the refusal
+      // itself is the assertion.
+      const err = await assertThrows(() => ShamirClient.resumeWsBrowser(browserResumeOpts(m, first)));
+      assert(!leaks(err.message, [ticket, pin]), 'error must not echo ticket or pin');
+    } finally {
+      await closeQuietly(first);
+    }
+  });
+
+  test('resumeLocal: ticket obtained over IPC resumes over IPC', async () => {
+    const m = await matrix();
+    const user = await ordinaryUser(await sharedAdmin(m));
+    const first = await ShamirClient.connectLocal({
+      addr: m.ipcAddr,
+      username: user.name,
+      password: user.password,
+      acceptNewHost: true,
+      ...LOCAL_TIMEOUTS,
+    });
+    let resumed = null;
+    try {
+      const ticket = first.resumptionTicket();
+      assert(ticket !== null && ticket.length > 0, 'expected a resumption ticket');
+      resumed = await ShamirClient.resumeLocal({
+        addr: m.ipcAddr,
+        ticket,
+        trustedPin: first.serverPubKeyPin(),
+        ...RESUME_LOCAL_TIMEOUTS,
+      });
+      await resumed.ping();
+    } finally {
+      await closeQuietly(resumed);
+      await closeQuietly(first);
+    }
+  });
+
+  test('forged ticket is refused over the browser profile, plain TCP and IPC', async () => {
+    const m = await matrix();
+
+    async function forgedCase(openSession, resumeCall) {
+      const first = await openSession();
+      try {
+        const ticket = Buffer.from(first.resumptionTicket());
+        const pin = Buffer.from(first.serverPubKeyPin());
+        const forged = Buffer.from(ticket);
+        forged[forged.length - 1] ^= 0xff;
+        forged[0] ^= 0xff;
+        const err = await assertThrows(() => resumeCall(first, forged, pin));
+        assert(!leaks(err.message, [ticket, forged, pin]), 'error must not echo ticket or pin');
+      } finally {
+        await closeQuietly(first);
+      }
+    }
+
+    // Browser profile.
+    await forgedCase(
+      () => ShamirClient.connectWsBrowser(browserSessionOpts(m, { name: m.user, password: m.password })),
+      (first, forged, pin) =>
+        ShamirClient.resumeWsBrowser({
+          host: m.host,
+          port: m.ports.browser,
+          serverName: 'localhost',
+          origin: m.browserOrigin,
+          ticket: forged,
+          trustedPin: pin,
+          caPem: m.caPem,
+          ...RESUME_TIMEOUTS,
+        })
+    );
+
+    // Plain loopback TCP.
+    await forgedCase(
+      async () => {
+        const user = await ordinaryUser(await sharedAdmin(m));
+        return ShamirClient.connectPlain({
+          host: m.host,
+          port: m.ports.plain,
+          username: user.name,
+          password: user.password,
+          acceptNewHost: true,
+          ...SESSION_TIMEOUTS,
+        });
+      },
+      (first, forged, pin) =>
+        ShamirClient.resumePlain({
+          host: m.host,
+          port: m.ports.plain,
+          ticket: forged,
+          trustedPin: pin,
+          ...RESUME_TIMEOUTS,
+        })
+    );
+
+    // Local IPC.
+    await forgedCase(
+      async () => {
+        const user = await ordinaryUser(await sharedAdmin(m));
+        return ShamirClient.connectLocal({
+          addr: m.ipcAddr,
+          username: user.name,
+          password: user.password,
+          acceptNewHost: true,
+          ...LOCAL_TIMEOUTS,
+        });
+      },
+      (first, forged, pin) =>
+        ShamirClient.resumeLocal({
+          addr: m.ipcAddr,
+          ticket: forged,
+          trustedPin: pin,
+          ...RESUME_LOCAL_TIMEOUTS,
+        })
+    );
   });
 
   test('resume: wrong pin rejects without echoing ticket or pin', async () => {

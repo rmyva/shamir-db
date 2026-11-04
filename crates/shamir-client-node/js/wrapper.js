@@ -14,6 +14,7 @@
 //   3. **repl / createScramUser** — detect domain-level DB error markers
 //      and throw `ShamirDbError`.
 //   4. **connectWs / connectPlain / connectLocal / resume / resumeWs /
+//      connectWsBrowser / resumeWsBrowser / resumePlain / resumeLocal /
 //      connectTokenWs, authKind, createApiToken, ShamirTokenHttpClient, login**
 //      — extra transports and API-token auth, validated in JS before native.
 //
@@ -242,17 +243,57 @@ function validateConnectLocal(options) {
   }
 }
 
+function requireTicket(options) {
+  if (!isBytes(options.ticket) || options.ticket.length === 0) {
+    throw new TypeError('ticket must be a non-empty Buffer');
+  }
+}
+
+function requirePin(options) {
+  if (!isBytes(options.trustedPin) || options.trustedPin.length !== 32) {
+    throw new TypeError('trustedPin must be 32 bytes');
+  }
+}
+
 function validateResume(options) {
   requireObject(options);
   requireString(options, 'host');
   if (!Number.isInteger(options.port)) throw new TypeError('port must be an integer');
   requireString(options, 'serverName');
-  if (!isBytes(options.ticket) || options.ticket.length === 0) {
-    throw new TypeError('ticket must be a non-empty Buffer');
-  }
-  if (!isBytes(options.trustedPin) || options.trustedPin.length !== 32) {
-    throw new TypeError('trustedPin must be 32 bytes');
-  }
+  requireTicket(options);
+  requirePin(options);
+}
+
+function validateConnectBrowser(options) {
+  validateConnectTls(options);
+  requireString(options, 'origin');
+  optionalString(options, 'caPem');
+}
+
+function validateResumeBrowser(options) {
+  requireObject(options);
+  requireString(options, 'host');
+  if (!Number.isInteger(options.port)) throw new TypeError('port must be an integer');
+  requireString(options, 'serverName');
+  requireString(options, 'origin');
+  requireTicket(options);
+  requirePin(options);
+  optionalString(options, 'caPem');
+}
+
+function validateResumePlain(options) {
+  requireObject(options);
+  requireString(options, 'host');
+  if (!Number.isInteger(options.port)) throw new TypeError('port must be an integer');
+  requireTicket(options);
+  requirePin(options);
+}
+
+function validateResumeLocal(options) {
+  requireObject(options);
+  requireString(options, 'addr');
+  requireTicket(options);
+  requirePin(options);
 }
 
 function validateTokenHttp(options) {
@@ -333,6 +374,26 @@ class ShamirClient extends native.ShamirClient {
   static async resumeWs(options) {
     validateResume(options);
     return rewrap(await super.resumeWs(normaliseBytes(options, ['ticket', 'trustedPin'])));
+  }
+
+  static async connectWsBrowser(options) {
+    validateConnectBrowser(options);
+    return rewrap(await super.connectWsBrowser(normaliseBytes(options, ['trustedPin'])));
+  }
+
+  static async resumeWsBrowser(options) {
+    validateResumeBrowser(options);
+    return rewrap(await super.resumeWsBrowser(normaliseBytes(options, ['ticket', 'trustedPin'])));
+  }
+
+  static async resumePlain(options) {
+    validateResumePlain(options);
+    return rewrap(await super.resumePlain(normaliseBytes(options, ['ticket', 'trustedPin'])));
+  }
+
+  static async resumeLocal(options) {
+    validateResumeLocal(options);
+    return rewrap(await super.resumeLocal(normaliseBytes(options, ['ticket', 'trustedPin'])));
   }
 
   static async connectTokenWs(options) {

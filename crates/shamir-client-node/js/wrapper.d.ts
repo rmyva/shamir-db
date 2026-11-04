@@ -84,6 +84,14 @@ export interface ConnectLocalOptions {
   requestTimeoutMs?: number;
 }
 
+/**
+ * Anti-downgrade: the server refuses a resume when the new listener's
+ * channel binding is WEAKER than at authentication — plain/IPC (0x00) is
+ * weaker than the browser profile (0x02), which is weaker than the TLS
+ * exporter (0x01). Allowed: plain -> plain, plain -> a stronger listener,
+ * browser -> browser, local IPC -> local IPC. Refused: a TLS-exporter
+ * ticket resumed over plain TCP or the browser profile.
+ */
 /** Session-resume parameters (`resume` / `resumeWs`). */
 export interface ResumeOptions {
   host: string;
@@ -96,6 +104,74 @@ export interface ResumeOptions {
   ticket: Buffer;
   /** Required server public-key pin (32 bytes). */
   trustedPin: Buffer;
+  handshakeTimeoutMs?: number;
+  requestTimeoutMs?: number;
+}
+
+/**
+ * Browser-profile WebSocket session parameters (`connectWsBrowser`): SCRAM
+ * over a `kind: ws` listener with profile `tls_no_export`, path
+ * `/shamir/v1/browser`, channel binding 0x02. The listener refuses upgrades
+ * whose `Origin` is not allowlisted.
+ */
+export interface ConnectWsBrowserOptions {
+  host: string;
+  port: number;
+  serverName: string;
+  /** `Origin` header of the upgrade; empty string omits it and is refused by the listener. */
+  origin: string;
+  username: string;
+  /** A JavaScript string cannot be wiped by the library; only the native copy is zeroized. */
+  password: string;
+  acceptNewHost?: boolean;
+  trustedPin?: Buffer;
+  /** Extra CA certificate (PEM) to trust for the certificate check; default is the bundled WebPKI roots. */
+  caPem?: string;
+  connectTimeoutMs?: number;
+  handshakeTimeoutMs?: number;
+  requestTimeoutMs?: number;
+}
+
+/** Resume parameters over the browser-profile WebSocket (binding 0x02). */
+export interface ResumeWsBrowserOptions {
+  host: string;
+  port: number;
+  serverName: string;
+  /** `Origin` header of the upgrade; empty string omits it and is refused by the listener. */
+  origin: string;
+  /**
+   * Resumption ticket. A JavaScript Buffer cannot be wiped by the library;
+   * only the native copy is zeroized.
+   */
+  ticket: Buffer;
+  /** Required server public-key pin (32 bytes). */
+  trustedPin: Buffer;
+  caPem?: string;
+  handshakeTimeoutMs?: number;
+  requestTimeoutMs?: number;
+}
+
+/**
+ * Resume parameters over plain loopback TCP (binding 0x00). No TLS, so no
+ * `serverName`.
+ */
+export interface ResumePlainOptions {
+  host: string;
+  port: number;
+  ticket: Buffer;
+  trustedPin: Buffer;
+  handshakeTimeoutMs?: number;
+  requestTimeoutMs?: number;
+}
+
+/** Resume parameters over local IPC (Unix socket / Windows named pipe, binding 0x00). */
+export interface ResumeLocalOptions {
+  /** Unix socket path, or a Windows named pipe such as `\\.\pipe\name`. */
+  addr: string;
+  ticket: Buffer;
+  trustedPin: Buffer;
+  connectTimeoutMs?: number;
+  /** Deadline (ms) for the whole resume. Omitted = unbounded. */
   handshakeTimeoutMs?: number;
   requestTimeoutMs?: number;
 }
@@ -204,6 +280,16 @@ export declare class ShamirClient {
   static connectLocal(opts: ConnectLocalOptions): Promise<ShamirClient>;
   static resume(opts: ResumeOptions): Promise<ShamirClient>;
   static resumeWs(opts: ResumeOptions): Promise<ShamirClient>;
+  /**
+   * Session over the browser-profile WebSocket listener (binding 0x02).
+   * Requires an `origin` the listener allowlists.
+   */
+  static connectWsBrowser(opts: ConnectWsBrowserOptions): Promise<ShamirClient>;
+  /** Resume over the browser-profile WebSocket (binding 0x02). */
+  static resumeWsBrowser(opts: ResumeWsBrowserOptions): Promise<ShamirClient>;
+  /** Loopback only. */
+  static resumePlain(opts: ResumePlainOptions): Promise<ShamirClient>;
+  static resumeLocal(opts: ResumeLocalOptions): Promise<ShamirClient>;
   static connectTokenWs(opts: TokenWsOptions): Promise<ShamirClient>;
   authKind(): 'scram' | 'token' | 'unknown';
   /** Throws ShamirDbError (`token_request_denied` on token sessions). */

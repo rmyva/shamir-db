@@ -1,9 +1,10 @@
 /**
  * Connection-matrix server helper.
  *
- * Spawns the prebuilt `shamir-server` with SIX listeners at once (TCP+TLS,
- * WebSocket+TLS, plain loopback TCP, HTTPS and plain HTTP with password login,
- * local IPC) so one process serves every napi connection variant.
+ * Spawns the prebuilt `shamir-server` with SEVEN listeners at once (TCP+TLS,
+ * WebSocket+TLS, browser-profile WebSocket+TLS (path /shamir/v1/browser,
+ * Origin allowlist), plain loopback TCP, HTTPS and plain HTTP with password
+ * login, local IPC) so one process serves every napi connection variant.
  * Separate from helpers/server.js so the shared single-listener server used
  * by the other suites stays untouched.
  */
@@ -26,7 +27,8 @@ const SERVER_BIN = path.join(
 const { ADMIN_USER, ADMIN_PASSWORD } = require('./server');
 
 const HOST = '127.0.0.1';
-const LISTENER_COUNT = 6;
+const BROWSER_ORIGIN = 'https://shamir.test';
+const LISTENER_COUNT = 7;
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
 /**
@@ -62,10 +64,12 @@ function readBoundListeners(logs, ipcAddr) {
   const tcpTls = tcp.find((e) => e.profile === 'tlsexporter');
   const tcpPlain = tcp.find((e) => e.profile === 'plain');
   const wsTls = ws.find((e) => e.profile === 'tlsexporter');
-  if (!ipcBound || !tcpTls || !tcpPlain || !wsTls || http.length < 2) return undefined;
+  const wsBrowser = ws.find((e) => e.profile === 'tlsnoexport');
+  if (!ipcBound || !tcpTls || !tcpPlain || !wsTls || !wsBrowser || http.length < 2) return undefined;
   return {
     tcp: tcpTls.port,
     ws: wsTls.port,
+    browser: wsBrowser.port,
     plain: tcpPlain.port,
     httpTls: http[0].port,
     httpPlain: http[1].port,
@@ -108,6 +112,15 @@ listeners: [
         addr: ${HOST}:0
         path: /shamir/v1
         profile: tls_exporter
+    }
+    {
+        kind: ws
+        addr: ${HOST}:0
+        path: /shamir/v1/browser
+        profile: tls_no_export
+        browser_origin_allowlist: [
+            ${BROWSER_ORIGIN}
+        ]
     }
     {
         kind: tcp
@@ -191,8 +204,8 @@ async function readCert(dir) {
 
 /**
  * Start the multi-listener server. Returns
- * `{ host, ports: {tcp, ws, plain, httpTls, httpPlain}, ipcAddr, caPem,
- *    user, password, stop, logs }`.
+ * `{ host, ports: {tcp, ws, browser, plain, httpTls, httpPlain}, ipcAddr,
+ *    browserOrigin, caPem, user, password, stop, logs }`.
  */
 async function startMatrixServer() {
   if (!fs.existsSync(SERVER_BIN)) {
@@ -273,6 +286,7 @@ async function startMatrixServer() {
       host: HOST,
       ports,
       ipcAddr,
+      browserOrigin: BROWSER_ORIGIN,
       caPem,
       user: ADMIN_USER,
       password: ADMIN_PASSWORD,

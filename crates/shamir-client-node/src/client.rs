@@ -9,7 +9,10 @@ use shamir_client as core;
 use shamir_query_types::wire::repl::ReplRequest;
 use shamir_query_types::wire::DbResponse;
 
-use crate::connect_variants::{self, ConnectLocalOptions, ConnectPlainOptions, ResumeOptions};
+use crate::connect_variants::{
+    self, ConnectLocalOptions, ConnectPlainOptions, ConnectWsBrowserOptions, ResumeLocalOptions,
+    ResumeOptions, ResumePlainOptions, ResumeWsBrowserOptions,
+};
 use crate::request_state::State;
 use crate::secrets::{self, Snapshots};
 use crate::token::{self, CreateApiTokenOptions, TokenWsOptions};
@@ -211,6 +214,50 @@ impl ShamirClient {
         opts: ResumeOptions,
     ) -> Result<PromiseRaw<'env, ShamirClient>> {
         connect_variants::resume_ws(env, opts)
+    }
+
+    /// Session over the browser-profile WebSocket listener (`kind: ws`,
+    /// `profile: tls_no_export`, path `/shamir/v1/browser`, binding 0x02).
+    /// The listener refuses upgrades whose `Origin` is not allowlisted; TLS
+    /// trusts WebPKI roots or `caPem`, and the Ed25519 TOFU-pin dance
+    /// applies on top.
+    #[napi]
+    pub fn connect_ws_browser<'env>(
+        env: &'env Env,
+        opts: ConnectWsBrowserOptions,
+    ) -> Result<PromiseRaw<'env, ShamirClient>> {
+        connect_variants::connect_ws_browser(env, opts)
+    }
+
+    /// Resume a session over the browser-profile WebSocket listener
+    /// (binding 0x02).
+    #[napi]
+    pub fn resume_ws_browser<'env>(
+        env: &'env Env,
+        opts: ResumeWsBrowserOptions,
+    ) -> Result<PromiseRaw<'env, ShamirClient>> {
+        connect_variants::resume_ws_browser(env, opts)
+    }
+
+    /// Resume a session over plain loopback TCP (binding 0x00). The core
+    /// refuses non-loopback addresses; the server refuses a ticket issued
+    /// under a stronger binding (anti-downgrade).
+    #[napi]
+    pub fn resume_plain<'env>(
+        env: &'env Env,
+        opts: ResumePlainOptions,
+    ) -> Result<PromiseRaw<'env, ShamirClient>> {
+        connect_variants::resume_plain(env, opts)
+    }
+
+    /// Resume a session over local IPC (Unix socket / Windows named pipe,
+    /// binding 0x00).
+    #[napi]
+    pub fn resume_local<'env>(
+        env: &'env Env,
+        opts: ResumeLocalOptions,
+    ) -> Result<PromiseRaw<'env, ShamirClient>> {
+        connect_variants::resume_local(env, opts)
     }
 
     /// Open an API-token session over the token WebSocket.

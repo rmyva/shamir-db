@@ -17,6 +17,10 @@ class NativeClient {
   static async connectLocal(o) { nativeCalls.push(['connectLocal', o]); return new NativeClient(); }
   static async resume(o) { nativeCalls.push(['resume', o]); return new NativeClient(); }
   static async resumeWs(o) { nativeCalls.push(['resumeWs', o]); return new NativeClient(); }
+  static async connectWsBrowser(o) { nativeCalls.push(['connectWsBrowser', o]); return new NativeClient(); }
+  static async resumeWsBrowser(o) { nativeCalls.push(['resumeWsBrowser', o]); return new NativeClient(); }
+  static async resumePlain(o) { nativeCalls.push(['resumePlain', o]); return new NativeClient(); }
+  static async resumeLocal(o) { nativeCalls.push(['resumeLocal', o]); return new NativeClient(); }
   static async connectTokenWs(o) { nativeCalls.push(['connectTokenWs', o]); return new NativeClient(); }
   authKind() { return 'token'; }
   async createApiToken(o) { nativeCalls.push(['createApiToken', o]); return response; }
@@ -175,6 +179,10 @@ test('new statics return wrapped instances and forward options', async () => {
     connectLocal: { addr: '/tmp/s', username: 'u', password: SECRET },
     resume: { host: 'h', port: 1, serverName: 's', ticket: SECRET_BYTES, trustedPin: PIN },
     resumeWs: { host: 'h', port: 1, serverName: 's', ticket: SECRET_BYTES, trustedPin: PIN },
+    connectWsBrowser: { host: 'h', port: 1, serverName: 's', origin: 'https://app.test', username: 'u', password: SECRET },
+    resumeWsBrowser: { host: 'h', port: 1, serverName: 's', origin: 'https://app.test', ticket: SECRET_BYTES, trustedPin: PIN },
+    resumePlain: { host: '127.0.0.1', port: 1, ticket: SECRET_BYTES, trustedPin: PIN },
+    resumeLocal: { addr: '/tmp/s', ticket: SECRET_BYTES, trustedPin: PIN },
     connectTokenWs: { host: 'h', port: 1, token: SECRET },
   };
   for (const [name, o] of Object.entries(opts)) {
@@ -198,6 +206,15 @@ test('validation rejects with TypeError, leaks no secret, skips native', async (
     ['connectPlain', { host: '127.0.0.1', port: 1, username: 'u', password: SECRET, trustedPin: SECRET_BYTES }],
     ['connectLocal', { addr: 5, username: 'u', password: SECRET }],
     ['connectWs', null],
+    ['connectWsBrowser', { host: 'h', port: 1, serverName: 's', username: 'u', password: SECRET }],
+    ['connectWsBrowser', { host: 'h', port: 1, serverName: 's', origin: 42, username: 'u', password: SECRET }],
+    ['connectWsBrowser', { host: 'h', port: 1, serverName: 's', origin: 'https://app.test', username: 'u', password: SECRET, caPem: 7 }],
+    ['resumeWsBrowser', { host: 'h', port: 1, serverName: 's', origin: 'https://app.test', ticket: Buffer.alloc(0), trustedPin: PIN }],
+    ['resumeWsBrowser', { host: 'h', port: 1, serverName: 's', origin: 'https://app.test', ticket: SECRET_BYTES, trustedPin: PIN }],
+    ['resumePlain', { host: 'h', port: 1, ticket: SECRET_BYTES, trustedPin: Buffer.alloc(31) }],
+    ['resumePlain', { host: 5, port: 1, ticket: SECRET_BYTES, trustedPin: PIN }],
+    ['resumeLocal', { addr: 5, ticket: SECRET_BYTES, trustedPin: PIN }],
+    ['resumeLocal', { addr: '/tmp/s', ticket: SECRET, trustedPin: PIN }],
   ];
   for (const [name, o] of cases) {
     nativeCalls = [];
@@ -216,6 +233,18 @@ test('validation rejects with TypeError, leaks no secret, skips native', async (
   { message: 'trustedPin must be 32 bytes' });
   await assert.rejects(() => wrapper.ShamirClient.connectTokenWs({ host: 'h', port: 1, token: '' }),
     { message: 'token must be a non-empty string' });
+  await assert.rejects(() => wrapper.ShamirClient.connectWsBrowser(
+    { host: 'h', port: 1, serverName: 's', username: 'u', password: SECRET }),
+  { message: 'origin must be a string' });
+  await assert.rejects(() => wrapper.ShamirClient.resumeWsBrowser(
+    { host: 'h', port: 1, serverName: 's', origin: 'https://app.test', ticket: SECRET_BYTES, trustedPin: Buffer.alloc(31) }),
+  { message: 'trustedPin must be 32 bytes' });
+  await assert.rejects(() => wrapper.ShamirClient.resumePlain(
+    { host: 'h', port: 1, ticket: Buffer.alloc(0), trustedPin: PIN }),
+  { message: 'ticket must be a non-empty Buffer' });
+  await assert.rejects(() => wrapper.ShamirClient.resumeLocal(
+    { addr: '/tmp/s', ticket: Buffer.alloc(0), trustedPin: PIN }),
+  { message: 'ticket must be a non-empty Buffer' });
 });
 
 test('createApiToken maps the success map and throws typed errors', async () => {

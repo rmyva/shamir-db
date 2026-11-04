@@ -13,14 +13,21 @@ const CV_MOD_RS: &str = include_str!("../connect_variants/mod.rs");
 const CV_CONNECT_LOCAL_RS: &str = include_str!("../connect_variants/connect_local.rs");
 const CV_CONNECT_PLAIN_RS: &str = include_str!("../connect_variants/connect_plain.rs");
 const CV_CONNECT_WS_RS: &str = include_str!("../connect_variants/connect_ws.rs");
+const CV_CONNECT_WS_BROWSER_RS: &str = include_str!("../connect_variants/connect_ws_browser.rs");
 const CV_OPTIONS_MOD_RS: &str = include_str!("../connect_variants/options/mod.rs");
 const CV_OPTIONS_LOCAL_RS: &str = include_str!("../connect_variants/options/local.rs");
 const CV_OPTIONS_PLAIN_RS: &str = include_str!("../connect_variants/options/plain.rs");
 const CV_OPTIONS_RESUME_RS: &str = include_str!("../connect_variants/options/resume.rs");
+const CV_OPTIONS_BROWSER_RS: &str = include_str!("../connect_variants/options/browser.rs");
+const CV_OPTIONS_RESUME_LOCAL_RS: &str =
+    include_str!("../connect_variants/options/resume_local.rs");
 const CV_RESUME_MOD_RS: &str = include_str!("../connect_variants/resume/mod.rs");
 const CV_RESUME_SHARED_RS: &str = include_str!("../connect_variants/resume/shared.rs");
 const CV_RESUME_TLS_RS: &str = include_str!("../connect_variants/resume/tls.rs");
 const CV_RESUME_WS_RS: &str = include_str!("../connect_variants/resume/ws.rs");
+const CV_RESUME_LOCAL_RS: &str = include_str!("../connect_variants/resume/local.rs");
+const CV_RESUME_PLAIN_RS: &str = include_str!("../connect_variants/resume/plain.rs");
+const CV_RESUME_WS_BROWSER_RS: &str = include_str!("../connect_variants/resume/ws_browser.rs");
 const TOKEN_ADMIN_RS: &str = include_str!("../token/admin.rs");
 const TOKEN_ENDPOINT_RS: &str = include_str!("../token/endpoint.rs");
 const TOKEN_HTTP_CLIENT_RS: &str = include_str!("../token/http_client.rs");
@@ -151,10 +158,25 @@ fn option_and_view_sources_never_derive_debug() {
         ("connect_variants/options/local.rs", CV_OPTIONS_LOCAL_RS),
         ("connect_variants/options/plain.rs", CV_OPTIONS_PLAIN_RS),
         ("connect_variants/options/resume.rs", CV_OPTIONS_RESUME_RS),
+        ("connect_variants/options/browser.rs", CV_OPTIONS_BROWSER_RS),
+        (
+            "connect_variants/options/resume_local.rs",
+            CV_OPTIONS_RESUME_LOCAL_RS,
+        ),
+        (
+            "connect_variants/connect_ws_browser.rs",
+            CV_CONNECT_WS_BROWSER_RS,
+        ),
         ("connect_variants/resume/mod.rs", CV_RESUME_MOD_RS),
         ("connect_variants/resume/shared.rs", CV_RESUME_SHARED_RS),
         ("connect_variants/resume/tls.rs", CV_RESUME_TLS_RS),
         ("connect_variants/resume/ws.rs", CV_RESUME_WS_RS),
+        ("connect_variants/resume/local.rs", CV_RESUME_LOCAL_RS),
+        ("connect_variants/resume/plain.rs", CV_RESUME_PLAIN_RS),
+        (
+            "connect_variants/resume/ws_browser.rs",
+            CV_RESUME_WS_BROWSER_RS,
+        ),
         ("token/admin.rs", TOKEN_ADMIN_RS),
         ("token/endpoint.rs", TOKEN_ENDPOINT_RS),
         ("token/http_client.rs", TOKEN_HTTP_CLIENT_RS),
@@ -179,6 +201,16 @@ fn secret_bearing_sources_protect_their_secrets() {
         ("connect_variants/connect_local.rs", CV_CONNECT_LOCAL_RS),
         ("connect_variants/connect_plain.rs", CV_CONNECT_PLAIN_RS),
         ("connect_variants/resume/shared.rs", CV_RESUME_SHARED_RS),
+        (
+            "connect_variants/connect_ws_browser.rs",
+            CV_CONNECT_WS_BROWSER_RS,
+        ),
+        ("connect_variants/resume/local.rs", CV_RESUME_LOCAL_RS),
+        ("connect_variants/resume/plain.rs", CV_RESUME_PLAIN_RS),
+        (
+            "connect_variants/resume/ws_browser.rs",
+            CV_RESUME_WS_BROWSER_RS,
+        ),
     ] {
         assert!(source.contains("secrets::protect"), "{name} lacks protect");
     }
