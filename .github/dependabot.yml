@@ -1,7 +1,7 @@
-# Dependabot version updates with a 7-day cooldown — the bot-PR vector of the
+# Dependabot version updates with a 3-day cooldown — the bot-PR vector of the
 # supply-chain cooldown policy. The lockfile-level enforcement lives in
 # /cooldown.toml (cargo-cooldown) + the `cooldown` CI job; this stops Dependabot
-# from even PROPOSING a bump to a version younger than 7 days.
+# from even PROPOSING a bump to a version younger than 3 days.
 # Security advisories (GHSA/RUSTSEC) bypass the cooldown so critical patches
 # still land promptly.
 version: 2
@@ -11,7 +11,7 @@ updates:
     schedule:
       interval: "weekly"
     cooldown:
-      default-days: 7
+      default-days: 3
     open-pull-requests-limit: 5
   # Keep the CI actions themselves on a cooldown too (same supply-chain risk).
   - package-ecosystem: "github-actions"
@@ -19,4 +19,4 @@ updates:
     schedule:
       interval: "weekly"
     cooldown:
-      default-days: 7
+      default-days: 3

@@ -664,7 +664,7 @@ jobs:
   # no toolchain: crates.io publication times and the RustSec advisory database
   # are read over the network and any failure to read them fails the job.
   cooldown:
-    name: dependency cooldown (7d)
+    name: dependency cooldown (3d)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: plan

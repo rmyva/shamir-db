@@ -86,7 +86,7 @@ clients, or the host it runs on. In scope (non-exhaustive):
 - **Periodic advisory re-scan** runs weekly via `cargo audit`
   (`.github/workflows/supply-chain.yml`), because RUSTSEC advisories change
   independently of commits.
-- The workspace uses a 7-day **dependency cooldown** (`cooldown.toml`,
+- The workspace uses a 3-day **dependency cooldown** (`cooldown.toml`,
   `cargo-cooldown`) so freshly-published registry versions cannot enter the
   tree without explicit review.
 - No hardcoded secrets are tracked in the repository (confirmed by the
@@ -113,7 +113,7 @@ role, `wasmtime` is treated as a **priority-upgrade dependency**:
   re-scan, and on any report of a new cranelift/wasmtime CVE.
 - **No cooldown deferral.** Unlike lower-trust-boundary dependencies, `wasmtime`
   bumps that fix a security issue (or a sandbox-hardening release) should **not**
-  be deferred through the standard 7-day dependency cooldown
+  be deferred through the standard 3-day dependency cooldown
   (`cooldown.toml` / `cargo-cooldown`) the way routine version bumps are. A
   security-motivated `wasmtime` bump may bypass the cooldown with a recorded
   justification in the PR description (the cooldown exists to let freshly-

@@ -158,6 +158,6 @@ opt-level = 1
 # vendor/hnsw_rs/VENDORED.md. The version stays 0.3.5, so the exact pin in
 # crates/shamir-index/Cargo.toml and the dump-format guard HNSW_RS_VERSION are unchanged.
 # Drop this entry (and the member + directory) once an upstream release has the fix and
-# has passed the dependency cooldown (7 days).
+# has passed the dependency cooldown (3 days).
 [patch.crates-io]
 hnsw_rs = { path = "vendor/hnsw_rs" }

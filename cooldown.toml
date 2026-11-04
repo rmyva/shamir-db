@@ -1,14 +1,14 @@
 # Dependency admission policy (supply-chain cooldown).
 #
 # WHY: freshly-published compromised releases are the dominant registry attack
-# vector (npm/PyPI 2025). A 7-day quarantine gives automated scanners + the
+# vector (npm/PyPI 2025). A 3-day quarantine gives automated scanners + the
 # community time to catch a malicious version BEFORE we pull it. This is RFC
 # 3923 (cargo-min-publish-age); cargo's native client-side
 # `registry.global-min-publish-age` enforcement is still pending (registry-side
 # pubtime infra landed in Cargo 1.94).
 #
 # POLICY (DEC-3 Q4). A registry package version may enter any committed
-# Cargo.lock only if it was published at least 7 days before admission. "New"
+# Cargo.lock only if it was published at least 3 days before admission. "New"
 # means absent from the protected base (current master); presence in a proposed
 # lockfile is never approval, and `cargo update --precise` records a resolution,
 # not an authorization. A younger version may be admitted only for a security
@@ -16,7 +16,7 @@
 # source, version, checksum and registry publication time; the RUSTSEC
 # advisories it fixes (or the exact primary it is a required lockstep companion
 # of); the reason; the approver and approval date; and an expiry equal to its
-# 7-day maturity date. Exceptions waive publication age only - never advisory,
+# 3-day maturity date. Exceptions waive publication age only - never advisory,
 # license, source, integrity or test gates. Wildcards, families, ranges and
 # labels are not exceptions. CI fails on a missing, mismatched, unused or
 # expired exception; at maturity the entry is deleted by a reconciliation PR
@@ -44,4 +44,4 @@ incompatible-publish-age = "deny"
 lockfile-baseline = "floor"
 
 [registry]
-global-min-publish-age = "7 days"
+global-min-publish-age = "3 days"

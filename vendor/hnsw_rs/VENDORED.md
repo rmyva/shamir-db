@@ -40,4 +40,4 @@ upstream fix yet.
 ## Dropping the vendor copy
 
 Remove `vendor/hnsw_rs`, the `[patch.crates-io]` entry and the `members` entry once an upstream
-release contains an equivalent fix and has passed the dependency cooldown (7 days); re-pin `HNSW_RS_VERSION`.
+release contains an equivalent fix and has passed the dependency cooldown (3 days); re-pin `HNSW_RS_VERSION`.

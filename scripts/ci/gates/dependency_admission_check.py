@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dependency admission gate: the dependency cooldown (7 days) with auditable exceptions.
+"""Dependency admission gate: the dependency cooldown (3 days) with auditable exceptions.
 
 A registry package version may enter a committed Cargo.lock only if it was
 published at least `global-min-publish-age` (cooldown.toml) before admission.
