@@ -19,8 +19,7 @@ import { TokenTransportError } from './core/protocol/token/errors.js';
  * Open an authenticated ShamirDB connection from a browser.
  * Uses native WebSocket and WebCrypto / argon2-browser.
  */
-// Node-only `transport` values and `tls` options are not part of the browser surface.
-export function connect(opts: Omit<ConnectOptions, 'transport' | 'tls'> & { transport?: 'ws-browser'; tls?: { rejectUnauthorized?: boolean } }): Promise<ShamirClient>;
+export function connect(opts: ConnectOptions): Promise<ShamirClient>;
 export function connect(opts: BrowserTokenConnectOptions & ({ channel: 'http' } | { url: `http://${string}` | `https://${string}` })): Promise<TokenHttpClient>;
 export function connect(opts: BrowserTokenConnectOptions & ({ channel: 'ws' } | { url: `ws://${string}` | `wss://${string}` })): Promise<TokenWsClient>;
 export function connect(opts: BrowserTokenConnectOptions): Promise<PublicTokenClient>;
