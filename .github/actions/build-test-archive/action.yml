@@ -22,10 +22,10 @@ runs:
   using: composite
   steps:
     - uses: dtolnay/rust-toolchain@eb0a44f258ec94ab9ee0f14f998f4cf332c25d3a  # 1.95.0
-    - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0  # v2.87.22
+    - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32  # v2.88.0
       with:
         tool: nextest@0.9.137
-    - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+    - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31  # v2
       with:
         shared-key: ${{ inputs.shared-key }}
     - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba  # v0.0.11
@@ -42,7 +42,7 @@ runs:
         ./scripts/test.sh --archive-to "$RUNNER_TEMP/test-archive.tar.zst" --locked
         end=$(date +%s)
         echo "test archive built in $((end - start))s" >> "$GITHUB_STEP_SUMMARY"
-    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
       if: inputs.upload == 'true'
       with:
         name: ${{ inputs.artifact-name }}
