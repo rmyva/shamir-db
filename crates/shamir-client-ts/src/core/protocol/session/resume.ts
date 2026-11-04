@@ -194,6 +194,9 @@ export async function resumeSession(
         ? resp[RESUME_OK_SERVER_QUERY_VERSION]
         : 0;
 
+    // On a 0x01 link the key was verified against the pinned key before the
+    // ticket was sent; the 0x02 browser profile has no proof exchange (TLS is
+    // the only transport-level check) and the pinned key is used as-is.
     return {
       framer,
       sessionId,
@@ -204,6 +207,7 @@ export async function resumeSession(
       serverQueryVersion,
       normalizedUser: undefined,
       binding,
+      trustedPin: platform.sha256(opts.serverPubKey),
     };
   } catch (e) {
     await framer.close();

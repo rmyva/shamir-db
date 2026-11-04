@@ -70,7 +70,7 @@ await client.close();
 
 `connect()` and `resume()` accept `transport?: 'ws-browser' | 'tcp' | 'ws-native'`. The default stays `'ws-browser'` (the browser-profile WebSocket). `'tcp'` connects to a listener `kind: tcp, profile: tls_exporter`; `'ws-native'` connects to `wss://host:port/shamir/v1` (listener `kind: ws, profile: tls_exporter, path: /shamir/v1`, subprotocol `shamir-v1`, no Origin header). The channel binding is the real TLS exporter (label `EXPORTER-ShamirDB-AUTH-v1`). `changePassword` works over these sessions. `tls.ca` (PEM of the CA certificate to trust) is valid only for `'tcp'` and `'ws-native'`; `tls.rejectUnauthorized` defaults to `true`. Not supported in the browser entry.
 
-Trust model: TLS certificate verification (`rejectUnauthorized: true` plus `ca`). The TypeScript client does not verify the server's `identity_sig` pin (#622, T9-8), so pinning is not provided. Resume verifies a server identity proof before the ticket is sent. See the [client matrix](../../../docs/guide-docs/guide/client-matrix.md).
+Trust model: TLS certificate verification (`rejectUnauthorized: true` plus `ca`) plus the server's Ed25519 identity. Every session handshake verifies `identity_sig`; pass `trustedPin` — the pin of a previous connection — to pin the server (recommended hardening); a mismatch throws `ServerIdentityChangedError` before any data flows. Without a pin the first server is accepted (trust-on-first-use, `acceptNewHost`, default `true`) and its pin is exposed for persistence. Resume over a `tls_exporter` transport additionally verifies a server identity proof before the ticket is sent. See the [client matrix](../../../docs/guide-docs/guide/client-matrix.md).
 
 ```ts
 import { connect, resume } from '@shamir/client';
@@ -101,6 +101,18 @@ const resumed = await resume({
   host, port, ticket: ticket!, serverPubKey: pin,
   transport: 'tcp',
   tls: { ca },
+});
+```
+
+Pinning the server identity (recommended): capture the pin on first contact,
+then pass it on every later connection. A mismatch throws
+`ServerIdentityChangedError` and no session is established.
+
+```ts
+const pin = client.trustedPin(); // SHA256(server_pub_key)
+const pinned = await connect({
+  host, port, username: 'admin', password: 'correct horse battery staple',
+  trustedPin: pin, transport: 'tcp', tls: { ca },
 });
 ```
 
@@ -162,7 +174,7 @@ The callback receives a `Tx` handle whose operations route through `txExecute`. 
 ## Browser
 
 ```ts
-import { connect, Query, Batch } from '@shamir/client/browser';
+import { connect, resume, Query, Batch } from '@shamir/client/browser';
 
 const client = await connect({
   host: 'db.example.com',
@@ -171,12 +183,24 @@ const client = await connect({
   password: 's3cret',
   // origin defaults to `https://${host}`
 });
+
+// ticket and pin come from a previous browser session:
+//   `client.resumptionTicket()` and `client.trustedPin()`.
+// Resume a browser-profile session from a ticket (binding mode 0x02 —
+// no resume_proof; the ticket is sent right after the WSS link is up).
+const resumed = await resume({
+  host: 'db.example.com',
+  port: 443,
+  ticket,
+  serverPubKey: pin,
+});
 ```
 
 **Notes:**
 - The browser entry point uses native `WebSocket` and `WebCrypto`/`argon2-browser`.
 - There is no `rejectUnauthorized` in browsers — self-signed certificates must be OS-trusted.
 - The server requires the `Origin` header to be in its `browser_origin_allowlist`.
+- `resume` is exported from the browser entry for the browser WebSocket profile; transports `tcp` / `ws-native` remain Node-only.
 
 ---
 

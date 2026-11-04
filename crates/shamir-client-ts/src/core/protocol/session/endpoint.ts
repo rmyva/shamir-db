@@ -11,8 +11,8 @@ import type { Socket } from '../../support/platform.js';
 
 /**
  * TLS trust options. Trust is `rejectUnauthorized` (default true) plus `ca`
- * (PEM CA certificate(s) trusted for the server certificate). There is no
- * `identity_sig` pin check in TS (task #622).
+ * (PEM CA certificate(s) trusted for the server certificate). The Ed25519
+ * identity pin is a separate option (`ConnectOptions.trustedPin`).
  */
 export interface SessionTlsOptions {
   rejectUnauthorized?: boolean;

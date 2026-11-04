@@ -9,7 +9,7 @@ export type { LoginOptions, LoginResult, LoginMetadata, LoginScope } from './log
 
 import { ShamirClient } from './core/client/client.js';
 import { BrowserPlatform } from './platform/browser.js';
-import type { ConnectOptions, BrowserConnectOptions, BrowserTokenConnectOptions } from './core/types/connection.js';
+import type { ConnectOptions, BrowserConnectOptions, BrowserTokenConnectOptions, ResumeOptions } from './core/types/connection.js';
 import { connectTokenBrowser } from './platform/connect/browser-connect.js';
 import type { TokenHttpClient } from './entry/token-client.js';
 import type { TokenWsClient, PublicTokenClient } from './entry/ws/token-client.js';
@@ -32,6 +32,17 @@ export async function connect(opts: BrowserConnectOptions): Promise<ShamirClient
   }
   if ('token' in opts) throw new TokenTransportError('invalid_request', 'Token authentication must be explicit');
   return ShamirClient.connect(BrowserPlatform, opts);
+}
+
+/**
+ * Fast reconnection from the browser using a resumption ticket from a
+ * previous browser-profile session (binding mode 0x02: no `resume_proof`
+ * exchange — the ticket is sent right after the WSS link is up, exactly as
+ * the Node `resume` does for this profile). Transports 'tcp' and 'ws-native'
+ * are Node only and throw here (no `openNativeLink` on the browser platform).
+ */
+export async function resume(opts: ResumeOptions): Promise<ShamirClient> {
+  return ShamirClient.resume(BrowserPlatform, opts);
 }
 
 export { ApiToken } from './entry/api-token.js';
@@ -63,6 +74,7 @@ export { ShamirClient };
 export {
   ShamirDbError,
   ShamirTimeoutError,
+  ServerIdentityChangedError,
   isRetryableCode,
   isVersionConflict,
   RETRYABLE_ERROR_CODES,

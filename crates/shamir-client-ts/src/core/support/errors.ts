@@ -150,3 +150,34 @@ export class ShamirTimeoutError extends Error {
     Object.setPrototypeOf(this, ShamirTimeoutError.prototype);
   }
 }
+
+/**
+ * The server's Ed25519 identity did not match what the client pinned, or the
+ * server's `identity_sig` did not verify. Mirrors the Rust reference's
+ * `ServerIdentityChanged` / `ServerSignatureInvalid` outcomes of
+ * `process_auth_ok` (crates/shamir-connect/src/client/handshake.rs). The
+ * session is torn down before any application data flows; `reason`
+ * distinguishes the two failure modes. Not retryable against the same pin:
+ * either the deployment's identity key genuinely rotated (update
+ * `trustedPin`) or the connection is intercepted.
+ */
+export class ServerIdentityChangedError extends Error {
+  readonly code = 'server_identity_changed';
+  readonly retryable = false;
+  /**
+   * `"pin_mismatch"`: SHA256(server_pub_key) != trustedPin.
+   * `"identity_sig_invalid"`: the Ed25519 signature over the handshake
+   * identity input did not verify with the server's public key.
+   */
+  readonly reason: 'pin_mismatch' | 'identity_sig_invalid';
+
+  constructor(reason: 'pin_mismatch' | 'identity_sig_invalid', detail?: string) {
+    super(
+      `server identity changed (${reason})${detail === undefined ? '' : `: ${detail}`}`,
+    );
+    this.name = 'ServerIdentityChangedError';
+    this.reason = reason;
+    // Restore prototype chain (TS target < ES2015 interop safety).
+    Object.setPrototypeOf(this, ServerIdentityChangedError.prototype);
+  }
+}

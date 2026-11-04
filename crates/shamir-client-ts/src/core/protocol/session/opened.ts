@@ -19,4 +19,9 @@ export interface SessionOpened {
   /** NFC-normalised username; undefined on resumed sessions. */
   normalizedUser: string | undefined;
   binding: ChannelBinding;
+  /**
+   * Pin of this session's server identity: SHA256(serverPubKey). Persist it
+   * and pass it back as `trustedPin` on later connections.
+   */
+  trustedPin: Uint8Array;
 }

@@ -86,6 +86,17 @@ export interface HandshakeResult {
    * AuthOk array.
    */
   serverQueryVersion: number;
+  /**
+   * The server's 64-byte Ed25519 `identity_sig` (auth_ok positional index 2).
+   * Consumed by the session layer's identity verification; not needed after.
+   */
+  identitySig: Uint8Array;
+  /**
+   * The canonical SCRAM `auth_message` bytes this handshake built. Consumed
+   * by the session layer's identity verification (the auth_message is part of
+   * the signed identity input); not needed after.
+   */
+  authMessage: Uint8Array;
 }
 
 /**
@@ -185,6 +196,10 @@ export async function runHandshake(
   const serverSignature = asBytes(okRaw[OK_SERVER_SIG], 'auth_ok.server_signature');
   const sessionId = asBytes(okRaw[OK_SESSION_ID], 'auth_ok.session_id');
   const serverPubKey = asBytes(okRaw[OK_SERVER_PUB], 'auth_ok.server_pub_key');
+  const identitySig = asBytes(okRaw[OK_IDENTITY_SIG], 'auth_ok.identity_sig');
+  if (identitySig.length !== 64) {
+    throw new Error('auth_ok.identity_sig must be 64 bytes');
+  }
 
   if (!verifyServerSignature(platform, serverKey, authMessage, serverSignature)) {
     throw new Error('server signature verification failed (MITM?)');
@@ -207,5 +222,5 @@ export async function runHandshake(
   const serverQueryVersion =
     typeof okRaw[7] === 'number' ? okRaw[7] : 0;
 
-  return { sessionId, serverPubKey, expiresAtNs, resumptionTicket, resumptionExpiresAtNs, serverQueryVersion };
+  return { sessionId, serverPubKey, identitySig, expiresAtNs, resumptionTicket, resumptionExpiresAtNs, serverQueryVersion, authMessage };
 }

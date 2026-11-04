@@ -61,7 +61,8 @@ export interface ResumeOptions {
    * TLS options. `ca`: PEM CA certificate(s) trusted for the server
    * certificate, used by 'tcp' and 'ws-native' only (setting it with the
    * browser-profile transport throws). Trust = `rejectUnauthorized`
-   * (default true) plus `ca`; no `identity_sig` pin check in TS (task #622).
+   * (default true) plus `ca`; on a tls_exporter resume the server additionally
+   * proves its Ed25519 identity before the ticket is sent.
    */
   tls?: { rejectUnauthorized?: boolean; ca?: string | Uint8Array };
   /**
@@ -85,18 +86,34 @@ export interface ResumeOptions {
 /**
  * Connection parameters (mirrors the napi `ConnectOptions`).
  *
- * Unlike the napi/Node client, this TS client does NOT verify the server's
- * `identity_sig` / do TOFU pinning of its Ed25519 identity (task #622) — a
- * prior `acceptNewHost`/`trustedPin` pair was declared but never consulted
- * anywhere, so it was removed rather than left dead. Real pinning needs a
- * browser storage backend and an `acceptNewHost` UX design pass; until
- * then this client is not MITM-resistant on the initial connection.
+ * The server's Ed25519 identity is verified in every session handshake:
+ * pass `trustedPin` (captured on a previous connection via
+ * `ShamirClient.trustedPin()`) to pin it — the recommended hardening; a
+ * mismatch throws `ServerIdentityChangedError` and no session is
+ * established. With no pin the first server is accepted
+ * (trust-on-first-use, `acceptNewHost`, default `true`) and its pin is
+ * exposed for persistence.
  */
 export interface ConnectOptions {
   host: string;
   port: number;
   username: string;
   password: string;
+  /**
+   * Pinned `SHA256(server_pub_key)` (32 bytes) from a previous connection.
+   * When set, the server's Ed25519 identity is verified against it during the
+   * handshake (before the session is returned); a mismatch throws
+   * `ServerIdentityChangedError`. Capture the pin on first contact via
+   * `ShamirClient.trustedPin()`.
+   */
+  trustedPin?: Uint8Array;
+  /**
+   * Trust-on-first-use (default `true`): with no `trustedPin`, the first
+   * server is accepted and its pin is exposed via `ShamirClient.trustedPin()`
+   * for persistence. `false` with no `trustedPin` refuses to connect before
+   * any network I/O.
+   */
+  acceptNewHost?: boolean;
   /** Transport; see {@link SessionTransport}. */
   transport?: SessionTransport;
   /**
@@ -144,6 +161,10 @@ export interface ConnectLocalOptions {
   addr: string;
   username: string;
   password: string;
+  /** Pinned `SHA256(server_pub_key)`; see {@link ConnectOptions.trustedPin}. */
+  trustedPin?: Uint8Array;
+  /** Trust-on-first-use; see {@link ConnectOptions.acceptNewHost}. */
+  acceptNewHost?: boolean;
   /**
    * Per-request deadline in ms — see {@link ConnectOptions.requestTimeoutMs}.
    */

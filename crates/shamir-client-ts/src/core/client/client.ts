@@ -96,6 +96,8 @@ export class ShamirClient {
   private readonly _normalizedUser: string | undefined;
   /** Channel binding this session was opened with (S1); may be `undefined`. */
   private readonly _channelBinding: ChannelBinding | undefined;
+  /** Pin of the server identity this session is bound to: SHA256(serverPubKey). */
+  private readonly _trustedPin: Uint8Array;
   private nextRequestId = 1;
 
   /**
@@ -124,6 +126,7 @@ export class ShamirClient {
     requestTimeoutMs?: number,
     normalizedUser?: string,
     channelBinding?: ChannelBinding,
+    trustedPin: Uint8Array = new Uint8Array(32),
   ) {
     this.platform = platform;
     this.framer = framer;
@@ -136,6 +139,7 @@ export class ShamirClient {
     this._requestTimeoutMs = requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this._normalizedUser = normalizedUser;
     this._channelBinding = channelBinding;
+    this._trustedPin = trustedPin;
 
     // Start the persistent read loop immediately. The loop is the sole consumer
     // of framer.recv(); it routes each incoming frame to the matching pending
@@ -168,7 +172,7 @@ export class ShamirClient {
     return new ShamirClient(
       platform, o.framer, o.sessionId, o.serverPubKey, o.expiresAtNs,
       o.resumptionTicket, o.resumptionExpiresAtNs, o.serverQueryVersion,
-      requestTimeoutMs, o.normalizedUser, o.binding,
+      requestTimeoutMs, o.normalizedUser, o.binding, o.trustedPin,
     );
   }
 
@@ -180,6 +184,18 @@ export class ShamirClient {
   /** Raw 32-byte Ed25519 server public key from `auth_ok`. */
   serverPubKeyPin(): Uint8Array {
     return this._serverPubKey;
+  }
+
+  /**
+   * `SHA256(server_pub_key)` (32 bytes) — the pin of the server identity this
+   * session is bound to. Verified against `ConnectOptions.trustedPin` when one
+   * was supplied; on first contact (trust-on-first-use) this is the captured
+   * pin. Persist it and pass it back as `trustedPin` on later connections
+   * (recommended hardening). Companion to {@link serverPubKeyPin}, which
+   * returns the RAW 32-byte public key (what `resume` needs).
+   */
+  trustedPin(): Uint8Array {
+    return this._trustedPin;
   }
 
   /** Absolute session expiry (unix nanoseconds). */

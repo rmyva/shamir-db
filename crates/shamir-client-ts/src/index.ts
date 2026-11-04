@@ -82,6 +82,7 @@ export { ShamirClient };
 export {
   ShamirDbError,
   ShamirTimeoutError,
+  ServerIdentityChangedError,
   isRetryableCode,
   isVersionConflict,
   RETRYABLE_ERROR_CODES,

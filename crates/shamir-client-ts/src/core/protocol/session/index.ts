@@ -15,6 +15,10 @@ export {
   openLocalSession,
   endpointFromOptions,
   dialEndpoint,
+  buildIdentityInput,
+  resolveTrustedPin,
+  verifyAuthOkIdentity,
+  IDENTITY_V1,
 } from './open.js';
 export type { EndpointOptions } from './open.js';
 export { resumeSession } from './resume.js';
