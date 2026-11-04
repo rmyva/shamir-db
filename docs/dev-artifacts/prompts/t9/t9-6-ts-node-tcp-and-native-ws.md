@@ -1,0 +1,36 @@
+# T9-6 - TypeScript client on Node: session over TCP+TLS and over the native WebSocket, with the real TLS channel binding
+
+Base: `master` (contains the TS pre-refactor S0-S2 and S4: `crates/shamir-client-ts/src/core/protocol/session/{binding,endpoint,open,opened,resume,index}.ts`, `core/client/client.ts` as thin delegates, `changePassword(..., binding)`). Design: `docs/dev-artifacts/audits/2026-11-04-t9-client-matrix/DESIGN.md`, section 3 "T9-6" (the paragraph that starts "T9-6 TS Node session x TCP and native WS"), the matrix table in section 4 and the S0-S2 and S4 reports at the end of that file; the user-facing support table is `docs/guide-docs/guide/client-matrix.md`. Then CLAUDE.md. Package: `crates/shamir-client-ts` (pure TypeScript; the server and the Rust crates do not change).
+
+## Goal
+
+On Node, the client can connect with the full SCRAM session handshake over:
+
+- **TCP + TLS 1.3** (listener profile `tcp/tls_exporter`, transport kind 0x01 `tcp`, binding mode 0x01 with the real TLS exporter) - matrix row 1;
+- **native WebSocket** (`wss://host:port/shamir/v1`, subprotocol `shamir-v1`, no `Origin`, binding mode 0x01 with the real exporter) - matrix row 2;
+- and **ticket resume** over both (rows 6a, 6b): `resume` with `resume_proof` (Ed25519 over the existing `@noble/ed25519`), for binding mode 0x01 only.
+
+`changePassword` over these sessions uses the real exporter (the S4 plumbing already takes a `ChannelBinding`).
+
+The default of `connect()` on Node does NOT change (browser-profile WebSocket stays the default). The new behaviour is selected by an explicit option, for example `transport: 'tcp' | 'ws-native' | 'ws-browser'` plus the endpoint fields the existing `SessionEndpoint` union already carries (`{ kind: 'tcp', host, port, tls? }`, `{ kind: 'ws-native', url, tls? }`). Read how `connect()` and `open.ts` pick the endpoint today and extend it minimally.
+
+## What to build (follow the design; deviations only with a written reason in the report)
+
+1. **Dialers (the former S3):** new Node-only module(s) under `src/platform/` (see `src/platform/node.ts` and `src/platform/token/socket-node.ts` for the existing Node socket abstractions and the `Socket` interface in `core/support/platform.ts`). TCP: `tls.connect({ host, port, minVersion: 'TLSv1.3', ALPN none, rejectUnauthorized: true by default, ca from the existing option })`; after `secureConnect` take the exporter with `socket.exportKeyingMaterial(32, 'EXPORTER-ShamirDB-AUTH-v1', Buffer.alloc(0))` (an empty context and an absent context are identical in TLS 1.3; check the Rust side `crates/shamir-client/src/client/transport/binding.rs` and the server's `tcp/tls_exporter` profile for the exact label and context and copy them). Native WebSocket: the `ws` package with `['shamir-v1']` and no `Origin`; the exporter is taken from the underlying TLS socket; the upgrade path is `/shamir/v1`, one BINARY message per `[u32_be len][payload]` frame exactly as the Rust `connect_ws` does (`crates/shamir-client/src/client/transport/dial_ws.rs`, `ws_stream.rs`, the server side `crates/shamir-transport-ws`). Both return a `SessionLink { socket, binding }` with `transportKind` and `bindingMode` per the existing binding constants (`TRANSPORT_KIND_TCP` or `TRANSPORT_KIND_WS`, `BINDING_MODE_TLS_EXPORTER`); add the missing constructors to `session/binding.ts` (`tlsExporterBinding(kind, exporter)`) with unit tests. Never log the exporter or any key material.
+2. **Wire the dialers into `connect()` / `open` / `resume`** through the endpoint kinds, without touching the browser entry (`src/browser.ts`, platform-agnostic code must not import `tls`, `net`, `ws`).
+3. **No `identity_sig` pin check in TS** (task #622 is a separate, later step): trust is `rejectUnauthorized: true` plus the `tls.ca` option; state this in the doc comment of the new option.
+4. **Docs:** update the rows of `docs/guide-docs/guide/client-matrix.md` for TS Node (rows 1, 2, 6a, 6b) from `planned T9-6` to the proven status and name the e2e test file, and add a short usage example to the TS client README or guide where the Node connect options are documented (find it with grep). Rust rows are NOT touched by this task.
+
+## Tests (CI-only; they must exercise the real paths)
+
+- Unit: `binding.ts` new constructors (fields, fresh exporter array per call); the endpoint selection logic; frame codec over the WebSocket dialer using an in-process `ws` server on loopback if the existing unit tests do it that way (look at `src/__tests__/connection/token/support/` for how token tests build fake servers) - otherwise keep unit tests pure.
+- E2E against the real server binary, in the style of `src/__tests__/e2e-harness.ts` and `src/__tests__/auth/e2e-change-password-ipc.test.ts` (S4): the harness currently starts only the browser listener and parses the first `listener bound` line (`e2e-harness.ts`, around lines 190-200 and 312-314); teach it to start a server with SEVERAL listeners (browser WS, native WS with `tls_exporter`, TCP `tls_exporter`) and to find each bound address by listener kind. Cases: connect + `ping` + a small query over TCP+TLS; over native WS; resume over each (obtain a ticket, reconnect with `resume`); `changePassword` over TCP+TLS with the real exporter; a negative case: a wrong CA with `rejectUnauthorized: true` fails at connect; prove exporter equality implicitly (a successful SCRAM handshake over `tls_exporter` already proves client and server agree on the exporter, say so in the test comment).
+- Do not edit existing tests except for the harness extension and adding new test files.
+
+## Rules
+
+- NO LOCAL COMPILATION OR TESTS. Allowed commands: `python -I scripts/ci/check_layout.py` only. No `npm`, `npx`, `tsc`, `vitest`, `node`, no cargo. Children (if any) only edit files and must not run commands.
+- Layout limits: at most 7 direct entries per folder, 1000 lines per file, one primary export per file; new Node modules go into a new subfolder of `src/platform/` if the folder is at the limit (check with `ls`; the layout script covers `.ts`). Keep platform-agnostic code free of Node imports; follow the surrounding style (ESM `.js` import suffixes, comments minimal).
+- Since nothing can be compiled, read each new file like `tsc --strict` would: types of `tls.TLSSocket.exportKeyingMaterial`, `ws` event signatures (`message` gives `RawData`, `isBinary`), `Buffer` vs `Uint8Array`, `import type`, `exactOptionalPropertyTypes` if the tsconfig sets it, unused locals/imports under `noUnusedLocals`. Read the real type definitions in `node_modules` only if present in the repo checkout (they usually are not): rely on the existing code that already uses `tls`/`net`/`ws` for exact call shapes.
+- ⛔ NEVER run `git reset` / `checkout` / `clean` / `stash` / `restore` / `rm`, or any git command that mutates the working tree or index (read-only `git show/log/diff` is fine). Only edit files; the orchestrator commits. No machine-local absolute paths in any file. Use forward slashes in all paths.
+- Hard session limit 150 minutes: stop editing 40 minutes before the time in the run file and spend that time on the read-through. Never leave a half-edited item: finish it or record it BLOCKED. Append a "T9-6 report" section to `DESIGN.md` as the last step (what was added, decisions, what is not done).
