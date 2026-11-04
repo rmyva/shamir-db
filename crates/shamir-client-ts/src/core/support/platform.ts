@@ -6,6 +6,11 @@
  * anywhere in core/. Those live in platform/node.ts and platform/browser.ts.
  */
 
+import type {
+  NativeSessionEndpoint,
+  SessionLink,
+} from '../protocol/session/endpoint.js';
+
 /**
  * A binary WebSocket abstraction. The platform adapter wraps `ws` (Node) or
  * native `WebSocket` (browser) behind this thin interface so the core never
@@ -74,4 +79,14 @@ export interface Platform {
    * doc comment states).
    */
   openIpcSocket?(path: string): Promise<Socket>;
+  /**
+   * Open a native session link: TCP+TLS or native WSS, with the real TLS
+   * exporter as channel binding. OPTIONAL — Node only; `BrowserPlatform`
+   * does not implement it. `connectTimeoutMs <= 0` disables the bound. The
+   * implementation must destroy the socket on timeout/failure.
+   */
+  openNativeLink?(
+    endpoint: NativeSessionEndpoint,
+    opts: { connectTimeoutMs: number },
+  ): Promise<SessionLink>;
 }

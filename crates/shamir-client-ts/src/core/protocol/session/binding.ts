@@ -8,6 +8,7 @@ import {
   TRANSPORT_KIND_WS,
   TRANSPORT_KIND_UNIX,
   BINDING_MODE_TLS_NO_EXPORT,
+  BINDING_MODE_TLS_EXPORTER,
   BINDING_MODE_NONE,
 } from '../scram.js';
 
@@ -27,9 +28,8 @@ function zeroExporter(): Uint8Array {
  * Binding for the browser WebSocket profile (`wss://.../shamir/v1/browser`,
  * TLS terminated upstream without exporter — `BINDING_MODE_TLS_NO_EXPORT`).
  * Matches the wire today. Returns a FRESH object with a fresh exporter array
- * on every call (never share the mutable `Uint8Array`). The exporter is
- * carried for the transport layer and is NOT added to the handshake SCRAM
- * `auth_message` (wire-identical requirement); it IS the
+ * on every call (never share the mutable `Uint8Array`). The exporter is the
+ * 32 zero bytes the `auth_message` carries for this profile; it is also the
  * `channel_binding_at_auth` field of `auth_message_cp` (password change).
  */
 export function browserWsBinding(): ChannelBinding {
@@ -44,14 +44,33 @@ export function browserWsBinding(): ChannelBinding {
  * Binding for the local-IPC profile (Unix domain socket / Windows Named Pipe,
  * plain transport, no TLS — `BINDING_MODE_NONE`). Matches the wire today.
  * Returns a FRESH object with a fresh exporter array on every call. The
- * exporter is carried for the transport layer and is NOT added to the handshake
- * SCRAM `auth_message` (wire-identical requirement); it IS the
- * `channel_binding_at_auth` field of `auth_message_cp` (password change).
+ * exporter is the 32 zero bytes the `auth_message` carries for this profile;
+ * it is also the `channel_binding_at_auth` field of `auth_message_cp`
+ * (password change).
  */
 export function ipcBinding(): ChannelBinding {
   return {
     transportKind: TRANSPORT_KIND_UNIX,
     bindingMode: BINDING_MODE_NONE,
     exporter: zeroExporter(),
+  };
+}
+
+/**
+ * Binding for the `tls_exporter` listener profile: TCP+TLS1.3
+ * (`TRANSPORT_KIND_TCP`, 0x01) or native WSS (`TRANSPORT_KIND_WS`, 0x02)
+ * with the real 32-byte TLS exporter. Returns a COPY of `exporter`.
+ */
+export function tlsExporterBinding(
+  transportKind: 0x01 | 0x02,
+  exporter: Uint8Array,
+): ChannelBinding {
+  if (exporter.length !== 32) {
+    throw new RangeError('TLS exporter must be 32 bytes');
+  }
+  return {
+    transportKind,
+    bindingMode: BINDING_MODE_TLS_EXPORTER,
+    exporter: new Uint8Array(exporter),
   };
 }

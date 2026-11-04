@@ -330,3 +330,30 @@ Review fixes (orchestrator, after an independent compiler-style read):
 - The binding decoder accepts `sid` only as a msgpack `bin` of 32 bytes (`str` and arrays are refused).
 - Raw-mode outgoing messages no longer copy the payload.
 - Added a `reader_task` close-mapping test; refusal and binding tests are bounded by timeouts.
+
+## T9-6 report (TS Node: session over TCP+TLS and native WebSocket, resume, changePassword)
+
+Status: implemented, UNVERIFIED. Nothing was compiled or run locally (project policy); only `python -I scripts/ci/check_layout.py` passed. Types and tests were checked by reading only; CI is the first compile.
+
+Added:
+- Core (platform-agnostic): `TRANSPORT_KIND_TCP`, `BINDING_MODE_TLS_EXPORTER` (`scram.ts`); `tlsExporterBinding(kind, exporter)` (`session/binding.ts`, copies, 32-byte check); `SessionTlsOptions` (adds `ca`), `TcpSessionEndpoint`, `WsNativeSessionEndpoint`, `NativeSessionEndpoint` (`session/endpoint.ts`); `endpointFromOptions` and `dialEndpoint` (`session/open.ts`) used by `openScramSession` and `resumeSession`; optional `Platform.openNativeLink`; `transport?: 'ws-browser' | 'tcp' | 'ws-native'` and `tls.ca` on `ConnectOptions` and `ResumeOptions`.
+- `runHandshake` now passes the binding exporter to `buildAuthMessage` (`tlsExporterOrZeros`). Zero for browser/IPC/legacy forms, so those wires are unchanged; for mode 0x01 it is the real exporter, as the server computes it. Before this change the exporter was never put into the auth_message.
+- `resumeSession`: on a 0x01 link, `verifyResumeIdentityProof` first sends the 1-field array `[client_nonce]`, checks the returned key against `serverPubKey` and verifies Ed25519 (`@noble/ed25519`, zip215 false) over `SHAMIR-RESUME-PROOF-v1 || nonce || exporter`; only then the ticket is sent (mirrors Rust `resume_wire_exchange`).
+- Node dialers in `platform/session/`: `dial-tcp.ts` (`tls.connect`, TLSv1.3 minimum, no ALPN, `rejectUnauthorized` default true, `ca`), `dial-ws-native.ts` (`ws`, `['shamir-v1']`, no Origin, wss only, exporter from the upgrade response TLS socket), `tls-exporter.ts` (`exportKeyingMaterial(32, 'EXPORTER-ShamirDB-AUTH-v1', empty)`), `tls-frame-socket.ts`, `tls-options.ts`, `native-platform.ts` (`NodeSessionPlatform`, used by `connect()` and `resume()` in `src/index.ts` only; `connectLocal` and `browser.ts` untouched). `NodeSocket` in `platform/node.ts` is now exported.
+- Tests: unit (`session/__tests__/tls-binding`, `endpoint-select`, `resume-proof`; `platform/session/__tests__/dial-tcp`, `dial-ws-native`); e2e `src/__tests__/connection/session/e2e-native-transports.test.ts` (TCP and native WS query, resume over both, bogus ticket, changePassword over TCP, wrong CA, no CA) with a multi-listener harness (`startMultiListenerServer`, `parseBoundListeners` finds listeners by kind and profile).
+- Docs: matrix rows 1, 2, 6a, 6b for TS Node set to yes with the e2e path; TS README section.
+
+Decisions and deviations:
+- The exporter is taken from the TLS socket after the WebSocket upgrade (same TLS session, same value as the Rust pre-upgrade extraction).
+- `tls.ca` with the default browser transport throws instead of being ignored.
+- No `identity_sig` pin check (task #622); trust is `rejectUnauthorized` plus `ca`.
+
+Not done / risks to check in CI: the ws-native resume path and the `listener bound` log format parse (`profile=Some(TlsExporter)`) are inferred from code, not observed. `@noble/hashes/sha512` import path assumed from hashes 1.8.0. The e2e needs `npm ci` and a release server binary.
+
+Review fixes (orchestrator, after an independent read against the server and the Rust client):
+- `TlsFrameSocket` no longer reuses the local-IPC reader: it has its own linear-time buffer, a 16 MiB frame ceiling, and treats a zero-length frame as the peer's close marker (as `shamir-transport-tcp` does).
+- `runHandshake` hashes the exporter only for binding mode 0x01 (the server's rule); a unit test pins that a browser binding with a non-zero exporter field still gives the pre-change proof.
+- `dialTcp` sends SNI for DNS names (not for IP literals); the browser entry's `connect` overload does not advertise Node-only `transport` values or `tls.ca`.
+- Matrix rows 1, 2, 6a, 6b for TS Node stay `план T9-6` until `ts-e2e-nightly` has run green on this branch (the PR CI skips the e2e suite without a server binary); the status flips in the same PR once it has.
+- Known and accepted: `open.ts` and `resume.ts` carry more than one export (the `session/` folder is at 7 entries and cannot take a subfolder without a larger move); `resume.ts` lazily sets `ed.etc.sha512Sync` on the shared `@noble/ed25519` module.
+

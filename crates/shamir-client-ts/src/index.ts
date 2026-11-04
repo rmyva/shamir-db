@@ -9,6 +9,7 @@ export type { LoginErrorCode } from './login/errors.js';
 export type { LoginOptions, LoginResult, LoginMetadata, LoginScope } from './login/types.js';
 
 import { NodePlatform } from './platform/node.js';
+import { NodeSessionPlatform } from './platform/session/native-platform.js';
 import type { ConnectOptions, ConnectLocalOptions, ResumeOptions, NodeConnectOptions, NodeTokenConnectOptions } from './core/types/connection.js';
 import { connectTokenNode } from './platform/connect/node-connect.js';
 import type { TokenHttpClient } from './entry/token-client.js';
@@ -31,7 +32,7 @@ export async function connect(opts: NodeConnectOptions): Promise<ShamirClient | 
     return connectTokenNode(opts);
   }
   if ('token' in opts) throw new TokenTransportError('invalid_request', 'Token authentication must be explicit');
-  return ShamirClient.connect(NodePlatform, opts);
+  return ShamirClient.connect(NodeSessionPlatform, opts);
 }
 
 /**
@@ -50,7 +51,7 @@ export async function connectLocal(opts: ConnectLocalOptions): Promise<ShamirCli
  * session. Skips the full SCRAM handshake.
  */
 export async function resume(opts: ResumeOptions): Promise<ShamirClient> {
-  return ShamirClient.resume(NodePlatform, opts);
+  return ShamirClient.resume(NodeSessionPlatform, opts);
 }
 
 export { ApiToken } from './entry/api-token.js';

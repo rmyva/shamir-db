@@ -39,13 +39,13 @@
 
 | # | Рукопожатие × транспорт | Rust `shamir-client` | napi `shamir-client-node` | TS в Node | TS в браузере |
 |---|---|---|---|---|---|
-| 1 | сессия × TCP+TLS | да | да | план T9-6 | невозможно: нет TCP |
+| 1 | сессия × TCP+TLS | да | да | план T9-6 (e2e написан: crates/shamir-client-ts/src/__tests__/connection/session/e2e-native-transports.test.ts; статус «да» после зелёного ts-e2e) | невозможно: нет TCP |
 | 1b | сессия × TCP без TLS (loopback) | план T9-2 | план T9-5 | нет | невозможно |
-| 2 | сессия × WS native (`tls_exporter`) | план T9-2 | план T9-5 | план T9-6 | невозможно: нет exporter |
+| 2 | сессия × WS native (`tls_exporter`) | план T9-2 | план T9-5 | план T9-6 (e2e написан: crates/shamir-client-ts/src/__tests__/connection/session/e2e-native-transports.test.ts; статус «да» после зелёного ts-e2e) | невозможно: нет exporter |
 | 3 | сессия × WS, браузерный профиль (`tls_no_export`) | план T9-2 | план T9-5 | да | да |
 | 4 | сессия × IPC | да | план T9-5 | да (смена пароля по IPC: исправление S4) | невозможно |
-| 6a | resume × TCP+TLS | да | план T9-5 | план T9-6 | невозможно |
-| 6b | resume × WS native | план T9-2 | план T9-5 | план T9-6 | невозможно |
+| 6a | resume × TCP+TLS | да | план T9-5 | план T9-6 (e2e написан: crates/shamir-client-ts/src/__tests__/connection/session/e2e-native-transports.test.ts; статус «да» после зелёного ts-e2e) | невозможно |
+| 6b | resume × WS native | план T9-2 | план T9-5 | план T9-6 (e2e написан: crates/shamir-client-ts/src/__tests__/connection/session/e2e-native-transports.test.ts; статус «да» после зелёного ts-e2e) | невозможно |
 | 6c | resume × WS, браузерный профиль | план T9-2 | план T9-5 | да (без resume_proof) | нет: не экспортирован |
 | 6d | resume × TCP без TLS | план T9-2 | план T9-5 | нет | невозможно |
 | 6e | resume × IPC | нет | нет | нет | невозможно |
@@ -58,6 +58,7 @@
 - Строка 9: нативному клиенту браузерный маршрут ничего не даёт, у него есть заголовок Authorization.
 - Строки 1b, 6d, 6e и пин `identity_sig` в TS (#622) собраны в задачу T9-8 и пока не запланированы.
 - Ячейка меняет статус на **да** только в PR, где лежит e2e, который её доказывает. Подзадачи обновляют строки так: T9-2 — 1b, 2, 3, 6b–6d (Rust); T9-3 — 7, 8 (Rust); T9-4 — 10 (Rust); T9-5 — весь столбец napi; T9-6 — 1, 2, 6a, 6b (TS в Node).
+- Строки 1, 2, 6a, 6b в TS: доверие к серверу — проверка TLS-сертификата (`rejectUnauthorized` по умолчанию true и опция `tls.ca`); пин `identity_sig` в TS не проверяется (#622, T9-8).
 
 ## Ограничения REST
 

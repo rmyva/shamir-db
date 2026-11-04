@@ -19,6 +19,10 @@ const CHGPW_V1 = new TextEncoder().encode('SHAMIR-CHGPW-v1');
 
 /** Argon2 version 1.3 (0x13 == 19). */
 export const ARGON2_VERSION_13 = 0x13;
+/** Transport tag for the TCP path (TransportKind::Tcp). */
+export const TRANSPORT_KIND_TCP = 0x01;
+/** Binding mode for the tls_exporter listener profile (BindingMode::TlsExporter). */
+export const BINDING_MODE_TLS_EXPORTER = 0x01;
 /** Transport tag for the WebSocket path (TransportKind::Ws). */
 export const TRANSPORT_KIND_WS = 0x02;
 /** Transport tag for the local-IPC path (TransportKind::Unix — spec

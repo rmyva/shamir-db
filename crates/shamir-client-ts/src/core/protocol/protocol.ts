@@ -13,6 +13,7 @@ import {
   computeClientProof,
   validateKdfParams,
   verifyServerSignature,
+  BINDING_MODE_TLS_EXPORTER,
   BINDING_MODE_TLS_NO_EXPORT,
   SUPPORTED_VERSION,
   type KdfParams,
@@ -96,9 +97,10 @@ export interface HandshakeResult {
  * A legacy numeric form is also accepted: a bare `transportKind` number plus
  * an optional `legacyBindingModeIfNumber` (default
  * `BINDING_MODE_TLS_NO_EXPORT`) — kept so existing callers (the
- * `protocol.test.ts` guard tests) need no change. In either form the
- * exporter is zero-filled and is NOT included in the SCRAM `auth_message`
- * (wire-identical).
+ * `protocol.test.ts` guard tests) need no change. In the numeric form the
+ * exporter is zero-filled. The binding's exporter is part of the SCRAM
+ * `auth_message`: all-zero for non-exporter profiles (browser/IPC/legacy),
+ * the real TLS exporter for binding mode 0x01.
  */
 export async function runHandshake(
   platform: Platform,
@@ -154,6 +156,9 @@ export async function runHandshake(
     kdf,
     transportKind: resolved.transportKind,
     bindingMode: resolved.bindingMode,
+    // The server uses the exporter only for mode 0x01; any other mode hashes zeros.
+    tlsExporterOrZeros:
+      resolved.bindingMode === BINDING_MODE_TLS_EXPORTER ? resolved.exporter : new Uint8Array(32),
   });
   const { clientProof, serverKey } = await computeClientProof(
     platform,

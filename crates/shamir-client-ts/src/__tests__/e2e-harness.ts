@@ -347,7 +347,227 @@ export async function startServer(opts?: {
   };
 }
 
+// ─── multi-listener (browser + native ws + tcp) server ──────────────────────
+
+export interface BoundListener {
+  kind: string;
+  profile: string;
+  port: number;
+}
+
+export function parseBoundListeners(log: string): BoundListener[] {
+  const plain = log.replace(/\x1b\[[0-9;]*m/g, '');
+  const out: BoundListener[] = [];
+  for (const line of plain.split('\n')) {
+    if (!/listener bound/i.test(line)) continue;
+    const addr = /local_addr=\S*:(\d+)/.exec(line);
+    const kind = /kind=(\w+)/.exec(line);
+    const profile = /profile=(?:Some\()?(\w+)/.exec(line);
+    if (addr === null || kind === null || profile === null) continue;
+    out.push({ kind: kind[1], profile: profile[1], port: Number(addr[1]) });
+  }
+  return out;
+}
+
+export interface MultiServerHandle {
+  tcpPort: number;
+  wsNativePort: number;
+  browserPort: number;
+  caPem: string;
+  stop: () => Promise<void>;
+  logs: () => string;
+}
+
+export function writeMultiListenerKtavConfig(dir: string, origin: string): string {
+  const certPath = path.join(dir, 'cert.pem').replace(/\\/g, '/');
+  const keyPath = path.join(dir, 'key.pem').replace(/\\/g, '/');
+  const cfg = `
+data_dir: ${dir.replace(/\\/g, '/')}
+
+logging: {
+    level: info
+    slow_query_threshold_ms: 0
+}
+
+kdf_defaults: {
+    memory_kb: 19456
+    time: 2
+    parallelism: 1
+    argon2_version: 19
+}
+
+argon2_concurrent_max: 4
+
+listeners: [
+    {
+        kind: ws
+        addr: 127.0.0.1:0
+        path: /shamir/v1/browser
+        profile: tls_no_export
+        browser_origin_allowlist: [
+            ${origin}
+        ]
+    }
+    {
+        kind: ws
+        addr: 127.0.0.1:0
+        path: /shamir/v1
+        profile: tls_exporter
+    }
+    {
+        kind: tcp
+        addr: 127.0.0.1:0
+        profile: tls_exporter
+    }
+]
+
+tls: {
+    cert_path: ${certPath}
+    key_path:  ${keyPath}
+}
+
+security: {
+    connection: {
+        auth_init_timeout_ms: 10000
+        max_active_connections: 100
+    }
+    ## Tests open many connections in a burst from one subnet during the
+    ## post-boot warmup window; the default rate limit would reject them.
+    auth_init_rate_per_second: 1000
+    query_limits: {
+        max_result_size_bytes:    10485760
+        max_execution_time_secs:  30
+        max_queries_per_batch:    32
+    }
+}
+
+audit: {
+    max_file_size_mb: 0
+    retention_days: 0
+}
+
+observability: {
+    addr: 127.0.0.1:0
+}
+`.trim();
+
+  const configPath = path.join(dir, 'server.ktav');
+  fs.writeFileSync(configPath, cfg);
+  return configPath;
+}
+
+export async function startMultiListenerServer(): Promise<MultiServerHandle> {
+  assertServerBinaryFresh();
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shamir-ts-e2e-multi-'));
+  if (!generateSelfSignedCert(dataDir)) {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    throw new Error('openssl not available — cannot generate self-signed cert');
+  }
+
+  const configPath = writeMultiListenerKtavConfig(dataDir, ORIGIN);
+  const child = spawn(
+    SERVER_BIN,
+    ['--config', configPath, '--bootstrap-password', ADMIN_PASSWORD],
+    { stdio: ['ignore', 'pipe', 'pipe'] },
+  ) as ChildProcess;
+
+  let logBuf = '';
+  child.stdout?.on('data', (chunk: Buffer) => { logBuf += chunk.toString(); });
+  child.stderr?.on('data', (chunk: Buffer) => { logBuf += chunk.toString(); });
+
+  const find = (
+    bound: BoundListener[],
+    kind: string,
+    profile: string,
+  ): BoundListener | undefined =>
+    bound.find((l) => l.kind === kind && l.profile === profile);
+
+  let ports: { tcp: number; wsNative: number; browser: number };
+  try {
+    ports = await new Promise<{ tcp: number; wsNative: number; browser: number }>(
+      (resolve, reject) => {
+        let done = false;
+        const timer = setTimeout(() => {
+          if (!done) {
+            done = true;
+            reject(new Error(`Server failed to bind all listeners within 15s.\nLogs:\n${logBuf}`));
+          }
+        }, 15_000);
+
+        function check() {
+          if (done) return;
+          const bound = parseBoundListeners(logBuf);
+          const browser = find(bound, 'Ws', 'TlsNoExport');
+          const wsNative = find(bound, 'Ws', 'TlsExporter');
+          const tcp = find(bound, 'Tcp', 'TlsExporter');
+          if (browser === undefined || wsNative === undefined || tcp === undefined) return;
+          done = true;
+          clearTimeout(timer);
+          setTimeout(
+            () => resolve({ tcp: tcp.port, wsNative: wsNative.port, browser: browser.port }),
+            150,
+          );
+        }
+        child.stdout?.on('data', check);
+        child.stderr?.on('data', check);
+        child.on('exit', (code: number | null, signal: string | null) => {
+          if (!done) {
+            done = true;
+            clearTimeout(timer);
+            reject(new Error(
+              `Server exited prematurely (code=${code} signal=${signal}).\nLogs:\n${logBuf}`,
+            ));
+          }
+        });
+      },
+    );
+  } catch (e) {
+    if (child.exitCode === null && !child.killed) child.kill('SIGKILL');
+    try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ok */ }
+    throw e;
+  }
+
+  const caPem = fs.readFileSync(path.join(dataDir, 'cert.pem'), 'utf8');
+
+  return {
+    tcpPort: ports.tcp,
+    wsNativePort: ports.wsNative,
+    browserPort: ports.browser,
+    caPem,
+    stop: async () => {
+      if (!child.killed) {
+        child.kill(process.platform === 'win32' ? 'SIGKILL' : 'SIGTERM');
+        await new Promise<void>((r) => child.once('exit', r));
+      }
+      try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ok */ }
+    },
+    logs: () => logBuf,
+  };
+}
+
+/** PEM of a freshly generated, unrelated self-signed CA (null without openssl). */
+export function readSelfSignedCaPem(): string | null {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shamir-ts-e2e-ca-'));
+  try {
+    if (!generateSelfSignedCert(dir)) return null;
+    return fs.readFileSync(path.join(dir, 'cert.pem'), 'utf8');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // ─── connection helpers ──────────────────────────────────────────────────────
+
+export async function connectNativeAs(
+  transport: 'tcp' | 'ws-native',
+  host: string,
+  port: number,
+  caPem: string,
+  username: string,
+  password: string,
+): Promise<ShamirClient> {
+  return connect({ host, port, username, password, transport, tls: { ca: caPem } });
+}
 
 export async function connectAdmin(host: string, port: number): Promise<ShamirClient> {
   return connect({

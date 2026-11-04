@@ -66,6 +66,44 @@ console.log(resp.results.r.records); // [{ id: 'A1', name: 'widget', qty: 10 }]
 await client.close();
 ```
 
+### Native transports (Node only): TCP+TLS and native WebSocket
+
+`connect()` and `resume()` accept `transport?: 'ws-browser' | 'tcp' | 'ws-native'`. The default stays `'ws-browser'` (the browser-profile WebSocket). `'tcp'` connects to a listener `kind: tcp, profile: tls_exporter`; `'ws-native'` connects to `wss://host:port/shamir/v1` (listener `kind: ws, profile: tls_exporter, path: /shamir/v1`, subprotocol `shamir-v1`, no Origin header). The channel binding is the real TLS exporter (label `EXPORTER-ShamirDB-AUTH-v1`). `changePassword` works over these sessions. `tls.ca` (PEM of the CA certificate to trust) is valid only for `'tcp'` and `'ws-native'`; `tls.rejectUnauthorized` defaults to `true`. Not supported in the browser entry.
+
+Trust model: TLS certificate verification (`rejectUnauthorized: true` plus `ca`). The TypeScript client does not verify the server's `identity_sig` pin (#622, T9-8), so pinning is not provided. Resume verifies a server identity proof before the ticket is sent. See the [client matrix](../../../docs/guide-docs/guide/client-matrix.md).
+
+```ts
+import { connect, resume } from '@shamir/client';
+import { readFileSync } from 'node:fs';
+
+const host = '127.0.0.1';
+const port = 13760;
+const ca = readFileSync('server-cert.pem', 'utf8');
+
+// TCP + TLS 1.3
+const client = await connect({
+  host, port, username: 'admin', password: 'correct horse battery staple',
+  transport: 'tcp',
+  tls: { ca },
+});
+
+// Native WebSocket (wss://host:port/shamir/v1)
+const wsClient = await connect({
+  host, port, username: 'admin', password: 'correct horse battery staple',
+  transport: 'ws-native',
+  tls: { ca },
+});
+
+// Resume with a ticket
+const ticket = client.resumptionTicket();
+const pin = client.serverPubKeyPin();
+const resumed = await resume({
+  host, port, ticket: ticket!, serverPubKey: pin,
+  transport: 'tcp',
+  tls: { ca },
+});
+```
+
 ---
 
 ## Bound handle (no connection threading)

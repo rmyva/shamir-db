@@ -36,6 +36,15 @@ export interface TokenTlsOptions {
  */
 
 /**
+ * Session transport. Default 'ws-browser' = browser-profile WebSocket
+ * `/shamir/v1/browser`, unchanged; 'tcp' = TCP+TLS1.3 listener
+ * `tcp/tls_exporter`; 'ws-native' = `wss://host:port/shamir/v1`, listener
+ * `ws/tls_exporter`, no Origin. 'tcp' and 'ws-native' are Node only and use
+ * the real TLS exporter; `origin` is ignored for them.
+ */
+export type SessionTransport = 'ws-browser' | 'tcp' | 'ws-native';
+
+/**
  * Options for {@link ShamirClient.resume} — fast reconnection using a
  * resumption ticket obtained from a previous session.
  */
@@ -46,7 +55,15 @@ export interface ResumeOptions {
   ticket: Uint8Array;
   /** Server public key pinned from the first connection. */
   serverPubKey: Uint8Array;
-  tls?: { rejectUnauthorized?: boolean };
+  /** Transport; see {@link SessionTransport}. */
+  transport?: SessionTransport;
+  /**
+   * TLS options. `ca`: PEM CA certificate(s) trusted for the server
+   * certificate, used by 'tcp' and 'ws-native' only (setting it with the
+   * browser-profile transport throws). Trust = `rejectUnauthorized`
+   * (default true) plus `ca`; no `identity_sig` pin check in TS (task #622).
+   */
+  tls?: { rejectUnauthorized?: boolean; ca?: string | Uint8Array };
   /**
    * Origin header sent on the WS upgrade. Defaults to `https://${host}`.
    */
@@ -80,7 +97,15 @@ export interface ConnectOptions {
   port: number;
   username: string;
   password: string;
-  tls?: { rejectUnauthorized?: boolean };
+  /** Transport; see {@link SessionTransport}. */
+  transport?: SessionTransport;
+  /**
+   * TLS options. `ca`: PEM CA certificate(s) trusted for the server
+   * certificate, used by 'tcp' and 'ws-native' only (setting it with the
+   * browser-profile transport throws). Trust = `rejectUnauthorized`
+   * (default true) plus `ca`; no `identity_sig` pin check in TS (task #622).
+   */
+  tls?: { rejectUnauthorized?: boolean; ca?: string | Uint8Array };
   /**
    * Origin header sent on the WS upgrade. The server's browser endpoint
    * REQUIRES an Origin in its allowlist (browser.rs §9). Defaults to

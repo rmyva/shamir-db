@@ -28,7 +28,7 @@ export function createNodeTokenPlatform(options: NodeTokenHttpConnectOptions | N
   return createTokenPlatform(options);
 }
 
-class NodeSocket implements Socket {
+export class NodeSocket implements Socket {
   private readonly ws: WebSocket;
   private readonly messageHandlers: Array<(data: Uint8Array) => void> = [];
   private closeHandlers: Array<(err?: Error) => void> = [];

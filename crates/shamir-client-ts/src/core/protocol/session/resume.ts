@@ -5,6 +5,8 @@
  * PLATFORM-AGNOSTIC.
  */
 
+import * as ed from '@noble/ed25519';
+import { sha512 } from '@noble/hashes/sha512';
 import type { Platform } from '../../support/platform.js';
 import { WsFramer, encode, decode } from '../framing.js';
 import {
@@ -15,18 +17,76 @@ import {
   RESUME_OK_RESUMPTION_EXPIRES_AT_NS,
   RESUME_OK_SERVER_QUERY_VERSION,
 } from '../protocol.js';
-import { withConnectTimeout } from '../../client/client-internals.js';
+import { BINDING_MODE_TLS_EXPORTER } from '../scram.js';
 import { DEFAULT_CONNECT_TIMEOUT_MS } from '../../types/connection.js';
 import type { ResumeOptions } from '../../types/connection.js';
-import { browserWsBinding } from './binding.js';
+import { dialEndpoint, endpointFromOptions } from './open.js';
 import type { SessionOpened } from './opened.js';
+
+/** Domain tag of the resume identity proof; must equal RESUME_PROOF_V1. */
+const RESUME_PROOF_V1 = new TextEncoder().encode('SHAMIR-RESUME-PROOF-v1');
+
+/**
+ * Verify the server's identity proof on a tls_exporter resume link, BEFORE
+ * the (bearer) ticket is sent. Mirrors the Rust client's
+ * `resume_wire_exchange`: sends `[client_nonce]` as a 1-field positional
+ * array, expects `[server_pub_key(32), signature(64)]`, and checks the key
+ * against the pinned one and the Ed25519 signature over
+ * `RESUME_PROOF_V1 || client_nonce || exporter`.
+ */
+export async function verifyResumeIdentityProof(
+  platform: Platform,
+  framer: WsFramer,
+  clientNonce: Uint8Array,
+  exporter: Uint8Array,
+  pinnedServerPubKey: Uint8Array,
+): Promise<void> {
+  framer.send(encode([clientNonce]));
+  const resp = decode(await framer.recv());
+  if (!Array.isArray(resp)) {
+    throw new Error('resume proof: malformed response');
+  }
+  let serverPubKey: Uint8Array;
+  let signature: Uint8Array;
+  try {
+    serverPubKey = asBytes(resp[0], 'resume proof: server_pub_key');
+    signature = asBytes(resp[1], 'resume proof: signature');
+  } catch {
+    throw new Error('resume proof: malformed response');
+  }
+  if (serverPubKey.length !== 32 || signature.length !== 64) {
+    throw new Error('resume proof: malformed response');
+  }
+  if (!platform.timingSafeEqual(serverPubKey, pinnedServerPubKey)) {
+    throw new Error('resume: server identity does not match pinned key');
+  }
+  const msg = new Uint8Array(
+    RESUME_PROOF_V1.length + clientNonce.length + exporter.length,
+  );
+  msg.set(RESUME_PROOF_V1, 0);
+  msg.set(clientNonce, RESUME_PROOF_V1.length);
+  msg.set(exporter, RESUME_PROOF_V1.length + clientNonce.length);
+  if (ed.etc.sha512Sync === undefined) {
+    ed.etc.sha512Sync = (...m) => sha512(ed.etc.concatBytes(...m));
+  }
+  let valid = false;
+  try {
+    valid = ed.verify(signature, msg, serverPubKey, { zip215: false });
+  } catch {
+    valid = false;
+  }
+  if (!valid) {
+    throw new Error('resume: server identity proof invalid');
+  }
+}
 
 /**
  * Fast reconnection using a resumption ticket from a previous session.
  *
- * Opens a new WS connection and sends a resume frame (ticket + fresh nonce)
- * instead of running the full SCRAM handshake. The server validates the
- * ticket and issues a new session.
+ * Opens a new connection (transport per `opts.transport`) and sends a resume
+ * frame (ticket + fresh nonce) instead of running the full SCRAM handshake.
+ * On a tls_exporter link the server first proves its identity. The server
+ * validates the ticket and issues a new session.
  *
  * Throws (and closes the socket) if the server rejects the ticket or the
  * response is malformed.
@@ -35,23 +95,30 @@ export async function resumeSession(
   platform: Platform,
   opts: ResumeOptions,
 ): Promise<SessionOpened> {
-  const origin = opts.origin ?? `https://${opts.host}`;
-  const url = `wss://${opts.host}:${opts.port}/shamir/v1/browser`;
-  const socket = await withConnectTimeout(
-    platform.openSocket(url, {
-      rejectUnauthorized: opts.tls?.rejectUnauthorized ?? true,
-      origin,
-    }),
+  const endpoint = endpointFromOptions(opts);
+  const link = await dialEndpoint(
+    platform,
+    endpoint,
     opts.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS,
   );
-  const framer = new WsFramer(socket);
-  const binding = browserWsBinding();
+  const framer = new WsFramer(link.socket);
+  const binding = link.binding;
 
   try {
     const clientNonce = platform.randomBytes(32);
 
-    // Wire: { ticket, client_nonce, binding_mode: 0x02 }
-    // (0x02 = BINDING_MODE_TLS_NO_EXPORT, from the browser binding profile)
+    if (binding.bindingMode === BINDING_MODE_TLS_EXPORTER) {
+      await verifyResumeIdentityProof(
+        platform,
+        framer,
+        clientNonce,
+        binding.exporter,
+        opts.serverPubKey,
+      );
+    }
+
+    // Wire: { ticket, client_nonce, binding_mode }
+    // (binding_mode is the session link's: 0x02 browser profile, 0x01 tls_exporter)
     framer.send(
       encode({
         ticket: opts.ticket,
