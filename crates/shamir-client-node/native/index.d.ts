@@ -32,6 +32,30 @@ export declare class ShamirClient {
   static resume(opts: ResumeOptions): Promise<ShamirClient>
   /** Resume a session over the native WebSocket listener. */
   static resumeWs(opts: ResumeOptions): Promise<ShamirClient>
+  /**
+   * Session over the browser-profile WebSocket listener (`kind: ws`,
+   * `profile: tls_no_export`, path `/shamir/v1/browser`, binding 0x02).
+   * The listener refuses upgrades whose `Origin` is not allowlisted; TLS
+   * trusts WebPKI roots or `caPem`, and the Ed25519 TOFU-pin dance
+   * applies on top.
+   */
+  static connectWsBrowser(opts: ConnectWsBrowserOptions): Promise<ShamirClient>
+  /**
+   * Resume a session over the browser-profile WebSocket listener
+   * (binding 0x02).
+   */
+  static resumeWsBrowser(opts: ResumeWsBrowserOptions): Promise<ShamirClient>
+  /**
+   * Resume a session over plain loopback TCP (binding 0x00). The core
+   * refuses non-loopback addresses; the server refuses a ticket issued
+   * under a stronger binding (anti-downgrade).
+   */
+  static resumePlain(opts: ResumePlainOptions): Promise<ShamirClient>
+  /**
+   * Resume a session over local IPC (Unix socket / Windows named pipe,
+   * binding 0x00).
+   */
+  static resumeLocal(opts: ResumeLocalOptions): Promise<ShamirClient>
   /** Open an API-token session over the token WebSocket. */
   static connectTokenWs(opts: TokenWsOptions): Promise<ShamirClient>
   /**
@@ -215,6 +239,52 @@ export interface ConnectPlainOptions {
   requestTimeoutMs?: number
 }
 
+/**
+ * Parameters of `ShamirClient.connectWsBrowser`: SCRAM over the
+ * browser-profile WebSocket listener (`kind: ws`, `profile: tls_no_export`,
+ * path `/shamir/v1/browser`, binding 0x02). TLS trusts WebPKI roots or
+ * `caPem`; the Ed25519 TOFU-pin dance applies on top.
+ *
+ * A JavaScript string cannot be wiped; only the owned native copy of
+ * `password` is zeroized.
+ */
+export interface ConnectWsBrowserOptions {
+  /** Server host; only its first resolved address is used. */
+  host: string
+  /** Server port. */
+  port: number
+  /** TLS server name the certificate is checked against. */
+  serverName: string
+  /**
+   * `Origin` header of the WebSocket upgrade; the listener refuses origins
+   * outside its allowlist. An empty string omits the header and is refused
+   * by the listener.
+   */
+  origin: string
+  /** Username (raw — server-side normalisation applies). */
+  username: string
+  /**
+   * Plaintext password. Only the native copy is zeroized; the JavaScript
+   * string cannot be wiped.
+   */
+  password: string
+  /** Trust-on-first-use, see `ConnectOptions.acceptNewHost`. */
+  acceptNewHost?: boolean
+  /** Pre-pinned server identity hash, exactly 32 bytes. */
+  trustedPin?: Buffer
+  /**
+   * PEM bundle of trusted CAs for the TLS certificate check; defaults to
+   * the bundled WebPKI roots.
+   */
+  caPem?: string
+  /** Deadline (ms) for the TCP connect attempt. */
+  connectTimeoutMs?: number
+  /** Deadline (ms) for the whole handshake, upgrade included. */
+  handshakeTimeoutMs?: number
+  /** Deadline (ms) for each request/response round-trip. */
+  requestTimeoutMs?: number
+}
+
 /** Parameters of `ShamirClient.createApiToken`. */
 export interface CreateApiTokenOptions {
   /** Token label. */
@@ -281,6 +351,29 @@ export interface LoginOptions {
 }
 
 /**
+ * Parameters of `ShamirClient.resumeLocal`: ticket resumption over the local
+ * IPC transport (Unix socket / Windows named pipe, binding 0x00).
+ *
+ * The ticket is copied into a native buffer that is zeroized on drop,
+ * including when the resume is cancelled before it starts; the JavaScript
+ * `Buffer` it came from cannot be wiped by the binding.
+ */
+export interface ResumeLocalOptions {
+  /** Unix socket path or `\\.\pipe\name` Windows pipe, used as is. */
+  addr: string
+  /** Resumption ticket from a previous session. */
+  ticket: Buffer
+  /** Required pin of the server identity, exactly 32 bytes. */
+  trustedPin: Buffer
+  /** Deadline (ms) for the IPC connect attempt. */
+  connectTimeoutMs?: number
+  /** Deadline (ms) for the whole resume. */
+  handshakeTimeoutMs?: number
+  /** Deadline (ms) for each request/response round-trip. */
+  requestTimeoutMs?: number
+}
+
+/**
  * Parameters of `ShamirClient.resume` / `resumeWs`.
  *
  * The ticket is copied into a native buffer that is zeroized on drop,
@@ -298,6 +391,66 @@ export interface ResumeOptions {
   ticket: Buffer
   /** Required pin of the server identity, exactly 32 bytes. */
   trustedPin: Buffer
+  /** Deadline (ms) for the whole resume, DNS included. */
+  handshakeTimeoutMs?: number
+  /** Deadline (ms) for each request/response round-trip. */
+  requestTimeoutMs?: number
+}
+
+/**
+ * Parameters of `ShamirClient.resumePlain`: ticket resumption over plain
+ * loopback TCP (binding 0x00). No TLS, so no server name; the core refuses
+ * a non-loopback address before any socket is opened, and the server
+ * refuses a ticket issued under a stronger binding (anti-downgrade).
+ *
+ * The ticket is copied into a native buffer that is zeroized on drop,
+ * including when the resume is cancelled before it starts; the JavaScript
+ * `Buffer` it came from cannot be wiped by the binding.
+ */
+export interface ResumePlainOptions {
+  /** Server host; only its first resolved address is used. */
+  host: string
+  /** Server port. */
+  port: number
+  /** Resumption ticket from a previous session. */
+  ticket: Buffer
+  /** Required pin of the server identity, exactly 32 bytes. */
+  trustedPin: Buffer
+  /** Deadline (ms) for the whole resume, DNS included. */
+  handshakeTimeoutMs?: number
+  /** Deadline (ms) for each request/response round-trip. */
+  requestTimeoutMs?: number
+}
+
+/**
+ * Parameters of `ShamirClient.resumeWsBrowser`: ticket resumption over the
+ * browser-profile WebSocket listener (binding 0x02).
+ *
+ * The ticket is copied into a native buffer that is zeroized on drop,
+ * including when the resume is cancelled before it starts; the JavaScript
+ * `Buffer` it came from cannot be wiped by the binding.
+ */
+export interface ResumeWsBrowserOptions {
+  /** Server host; only its first resolved address is used. */
+  host: string
+  /** Server port. */
+  port: number
+  /** TLS server name the certificate is checked against. */
+  serverName: string
+  /**
+   * `Origin` header of the WebSocket upgrade (empty = omitted; refused by
+   * the listener).
+   */
+  origin: string
+  /** Resumption ticket from a previous session. */
+  ticket: Buffer
+  /** Required pin of the server identity, exactly 32 bytes. */
+  trustedPin: Buffer
+  /**
+   * PEM bundle of trusted CAs for the TLS certificate check; defaults to
+   * the bundled WebPKI roots.
+   */
+  caPem?: string
   /** Deadline (ms) for the whole resume, DNS included. */
   handshakeTimeoutMs?: number
   /** Deadline (ms) for each request/response round-trip. */
