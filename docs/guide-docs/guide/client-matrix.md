@@ -39,13 +39,13 @@
 
 | # | Рукопожатие × транспорт | Rust `shamir-client` | napi `shamir-client-node` | TS в Node | TS в браузере |
 |---|---|---|---|---|---|
-| 1 | сессия × TCP+TLS | да | да | план T9-6 (e2e написан: crates/shamir-client-ts/src/__tests__/connection/session/e2e-native-transports.test.ts; статус «да» после зелёного ts-e2e) | невозможно: нет TCP |
+| 1 | сессия × TCP+TLS | да | да | да (тест: crates/shamir-client-ts/src/__tests__/connection/session/e2e-native-transports.test.ts) | невозможно: нет TCP |
 | 1b | сессия × TCP без TLS (loopback) | план T9-2 | план T9-5 | нет | невозможно |
-| 2 | сессия × WS native (`tls_exporter`) | план T9-2 | план T9-5 | план T9-6 (e2e написан: crates/shamir-client-ts/src/__tests__/connection/session/e2e-native-transports.test.ts; статус «да» после зелёного ts-e2e) | невозможно: нет exporter |
+| 2 | сессия × WS native (`tls_exporter`) | план T9-2 | план T9-5 | да (тест: crates/shamir-client-ts/src/__tests__/connection/session/e2e-native-transports.test.ts) | невозможно: нет exporter |
 | 3 | сессия × WS, браузерный профиль (`tls_no_export`) | план T9-2 | план T9-5 | да | да |
 | 4 | сессия × IPC | да | план T9-5 | да (смена пароля по IPC: исправление S4) | невозможно |
-| 6a | resume × TCP+TLS | да | план T9-5 | план T9-6 (e2e написан: crates/shamir-client-ts/src/__tests__/connection/session/e2e-native-transports.test.ts; статус «да» после зелёного ts-e2e) | невозможно |
-| 6b | resume × WS native | план T9-2 | план T9-5 | план T9-6 (e2e написан: crates/shamir-client-ts/src/__tests__/connection/session/e2e-native-transports.test.ts; статус «да» после зелёного ts-e2e) | невозможно |
+| 6a | resume × TCP+TLS | да | план T9-5 | да (тест: crates/shamir-client-ts/src/__tests__/connection/session/e2e-native-transports.test.ts) | невозможно |
+| 6b | resume × WS native | план T9-2 | план T9-5 | да (тест: crates/shamir-client-ts/src/__tests__/connection/session/e2e-native-transports.test.ts) | невозможно |
 | 6c | resume × WS, браузерный профиль | план T9-2 | план T9-5 | да (без resume_proof) | нет: не экспортирован |
 | 6d | resume × TCP без TLS | план T9-2 | план T9-5 | нет | невозможно |
 | 6e | resume × IPC | нет | нет | нет | невозможно |

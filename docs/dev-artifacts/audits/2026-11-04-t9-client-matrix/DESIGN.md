@@ -357,3 +357,5 @@ Review fixes (orchestrator, after an independent read against the server and the
 - Matrix rows 1, 2, 6a, 6b for TS Node stay `план T9-6` until `ts-e2e-nightly` has run green on this branch (the PR CI skips the e2e suite without a server binary); the status flips in the same PR once it has.
 - Known and accepted: `open.ts` and `resume.ts` carry more than one export (the `session/` folder is at 7 entries and cannot take a subfolder without a larger move); `resume.ts` lazily sets `ed.etc.sha512Sync` on the shared `@noble/ed25519` module.
 
+CI result (T9-6): `ts-e2e-nightly` on the fork ran `e2e-native-transports.test.ts` (9 tests) green against the real server; matrix rows 1, 2, 6a, 6b for TS Node are therefore `да`. The two unit failures of the first runs were test-side only (an identity expectation on the platform object that now carries `openNativeLink`, and a `ShamirTimeoutError` class identity after `vi.resetModules`).
+

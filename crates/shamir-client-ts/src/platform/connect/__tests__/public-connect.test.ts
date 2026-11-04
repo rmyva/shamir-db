@@ -15,6 +15,7 @@ import type { TokenCursor as BrowserTokenCursor, SubscriptionEvent as BrowserSub
 import { decodeTokenFrame, decodeTokenPayload, encodeTokenPayload } from '../../../core/protocol/token/ws.js';
 import * as NodePlatformModule from '../../../platform/node.js';
 import * as BrowserPlatformModule from '../../../platform/browser.js';
+import { NodeSessionPlatform } from '../../../platform/session/native-platform.js';
 import type { TokenPlatform, TokenSocket, TokenSocketCloseEvent } from '../../../platform/token/types.js';
 
 const TOKEN_VALUE = `shk1.${'A'.repeat(22)}.${'A'.repeat(43)}`;
@@ -121,7 +122,7 @@ describe('public connect contract', () => {
     const nodeResult: Promise<ShamirClient> = connectNode(options);
     const browserResult: Promise<ShamirClient> = connectBrowser(options);
     await expect(nodeResult).resolves.toBe(client); await expect(browserResult).resolves.toBe(client);
-    expect(connectSpy).toHaveBeenNthCalledWith(1, NodePlatformModule.NodePlatform, options);
+    expect(connectSpy).toHaveBeenNthCalledWith(1, NodeSessionPlatform, options);
     expect(connectSpy).toHaveBeenNthCalledWith(2, BrowserPlatformModule.BrowserPlatform, options);
   });
   it('selects Node HTTP from scheme and runs ping/query requests through REST', async () => {

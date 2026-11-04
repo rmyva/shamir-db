@@ -1,6 +1,5 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ShamirTimeoutError } from '../../../core/support/errors.js';
 
 class FakeTlsSocket extends EventEmitter {
   exportKeyingMaterial = vi.fn((_len: number, _label: string, _ctx: Buffer) => Buffer.alloc(32, 7));
@@ -17,7 +16,9 @@ async function setup() {
   const connectMock = vi.fn((_opts: Record<string, unknown>) => fake);
   vi.doMock('node:tls', () => ({ connect: connectMock, default: { connect: connectMock } }));
   const { dialTcp } = await import('../dial-tcp.js');
-  return { fake, connectMock, dialTcp };
+  // Same module registry as dial-tcp.js (resetModules makes a static import a different class).
+  const { ShamirTimeoutError } = await import('../../../core/support/errors.js');
+  return { fake, connectMock, dialTcp, ShamirTimeoutError };
 }
 
 afterEach(() => {
@@ -95,7 +96,7 @@ describe('dialTcp', () => {
   });
 
   it('times out and destroys the socket', async () => {
-    const { fake, dialTcp } = await setup();
+    const { fake, dialTcp, ShamirTimeoutError } = await setup();
     await expect(dialTcp({ kind: 'tcp', host: 'h', port: 1 }, 20)).rejects.toBeInstanceOf(ShamirTimeoutError);
     expect(fake.destroy).toHaveBeenCalled();
   });
