@@ -149,7 +149,13 @@ module.exports = async function ({ test, assert, assertEq, assertThrows, fixture
 
   // Secret material must never appear in an error message, in any common
   // text encoding.
-  function leaks(message, bufs) {
+  // A refusal must come from the server or the transport, not from wrapper validation
+// (TypeError) and not from a timeout.
+function isServerRefusal(e) {
+  return !(e instanceof TypeError) && !/timed? ?out|timeout/i.test(String(e && e.message));
+}
+
+function leaks(message, bufs) {
     for (const b of bufs) {
       const buf = Buffer.from(b);
       if (buf.length === 0) continue;
@@ -512,7 +518,9 @@ module.exports = async function ({ test, assert, assertEq, assertThrows, fixture
           ticket,
           trustedPin: pin,
           ...RESUME_TIMEOUTS,
-        })
+        }),
+        isServerRefusal,
+        'native TLS ticket over plain TCP must be refused by the server',
       );
       assert(!leaks(err.message, [ticket, pin]), 'error must not echo ticket or pin');
     } finally {
@@ -528,7 +536,11 @@ module.exports = async function ({ test, assert, assertEq, assertThrows, fixture
       const pin = Buffer.from(first.serverPubKeyPin());
       // The exact server code is intentionally not asserted; the refusal
       // itself is the assertion.
-      const err = await assertThrows(() => ShamirClient.resumeWsBrowser(browserResumeOpts(m, first)));
+      const err = await assertThrows(
+        () => ShamirClient.resumeWsBrowser(browserResumeOpts(m, first)),
+        isServerRefusal,
+        'native TLS ticket over the browser profile must be refused by the server',
+      );
       assert(!leaks(err.message, [ticket, pin]), 'error must not echo ticket or pin');
     } finally {
       await closeQuietly(first);
@@ -573,7 +585,7 @@ module.exports = async function ({ test, assert, assertEq, assertThrows, fixture
         const forged = Buffer.from(ticket);
         forged[forged.length - 1] ^= 0xff;
         forged[0] ^= 0xff;
-        const err = await assertThrows(() => resumeCall(first, forged, pin));
+        const err = await assertThrows(() => resumeCall(first, forged, pin), isServerRefusal, 'forged ticket must be refused');
         assert(!leaks(err.message, [ticket, forged, pin]), 'error must not echo ticket or pin');
       } finally {
         await closeQuietly(first);

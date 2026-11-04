@@ -273,10 +273,11 @@ impl Client {
     /// the ticket is the first frame, and the pinned hash rides on the
     /// resumed session.
     pub async fn resume_plain(opts: ResumeOptions) -> Result<Self, ClientError> {
+        // Take ownership of the ticket first so a refusal below still wipes it.
+        let ticket = ProtectedResumeBuffer(Zeroizing::new(opts.ticket));
         if !opts.addr.ip().to_canonical().is_loopback() {
             return Err(ClientError::handshake("plain TCP is loopback-only"));
         }
-        let ticket = ProtectedResumeBuffer(Zeroizing::new(opts.ticket));
         let mut dialed = dial_tcp_plain(opts.addr, None).await?;
 
         let resumed = resume_wire_exchange_unbound(

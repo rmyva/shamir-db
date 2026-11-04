@@ -210,7 +210,7 @@ test('validation rejects with TypeError, leaks no secret, skips native', async (
     ['connectWsBrowser', { host: 'h', port: 1, serverName: 's', origin: 42, username: 'u', password: SECRET }],
     ['connectWsBrowser', { host: 'h', port: 1, serverName: 's', origin: 'https://app.test', username: 'u', password: SECRET, caPem: 7 }],
     ['resumeWsBrowser', { host: 'h', port: 1, serverName: 's', origin: 'https://app.test', ticket: Buffer.alloc(0), trustedPin: PIN }],
-    ['resumeWsBrowser', { host: 'h', port: 1, serverName: 's', origin: 'https://app.test', ticket: SECRET_BYTES, trustedPin: PIN }],
+    ['resumeWsBrowser', { host: 'h', port: 1, serverName: 's', origin: 'https://app.test', ticket: SECRET_BYTES, trustedPin: Buffer.alloc(31) }],
     ['resumePlain', { host: 'h', port: 1, ticket: SECRET_BYTES, trustedPin: Buffer.alloc(31) }],
     ['resumePlain', { host: 5, port: 1, ticket: SECRET_BYTES, trustedPin: PIN }],
     ['resumeLocal', { addr: 5, ticket: SECRET_BYTES, trustedPin: PIN }],
