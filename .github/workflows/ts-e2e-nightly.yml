@@ -62,7 +62,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: dtolnay/rust-toolchain@eb0a44f258ec94ab9ee0f14f998f4cf332c25d3a  # 1.95.0
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31  # v2
       - name: Build shamir-server release binary
         run: cargo build --release --locked -p shamir-server
       # Export an explicit, verified release-binary path: the TS suites self-skip
@@ -73,7 +73,7 @@ jobs:
         run: |
           test -x "$GITHUB_WORKSPACE/target/release/shamir-server"
           echo "SHAMIR_SERVER_BIN=$GITHUB_WORKSPACE/target/release/shamir-server" >> "$GITHUB_ENV"
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
           node-version: '22'
           cache: npm
@@ -129,7 +129,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: dtolnay/rust-toolchain@eb0a44f258ec94ab9ee0f14f998f4cf332c25d3a  # 1.95.0
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31  # v2
       # No `cache: npm` here (unlike the `ts-e2e` job above): F-68 cluster B
       # root cause — this step used to set `cache: npm` +
       # `cache-dependency-path: tests/e2e/package-lock.json`, but
@@ -147,7 +147,7 @@ jobs:
       # intent above; dropping the cache config here (this job's only
       # per-PR-scale npm work is one `napi build`, not worth chasing a cache
       # for anyway) is the fix that matches the actual policy.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
           node-version: '22'
       # `npm run build` = build:client-ts (`cd ../../crates/shamir-client-ts

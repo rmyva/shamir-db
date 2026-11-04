@@ -95,7 +95,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@eb0a44f258ec94ab9ee0f14f998f4cf332c25d3a  # 1.95.0
         with:
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31  # v2
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba  # v0.0.11
       # Cache workspace-crate compilation across runs (rust-cache keeps only
       # third-party deps); a crate whose inputs did not change is not rebuilt.
@@ -148,7 +148,7 @@ jobs:
           fi
       # Same pinned nextest as the `test` job (see its comment above for the
       # perimeter-guard rationale).
-      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0  # v2.87.22
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32  # v2.88.0
         if: steps.affected.outputs.args != ''
         with:
           tool: nextest@0.9.137
@@ -244,7 +244,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@eb0a44f258ec94ab9ee0f14f998f4cf332c25d3a  # 1.95.0
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31  # v2
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba  # v0.0.11
       # Cache workspace-crate compilation across runs (rust-cache keeps only
       # third-party deps); a crate whose inputs did not change is not rebuilt.
@@ -272,7 +272,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: dtolnay/rust-toolchain@eb0a44f258ec94ab9ee0f14f998f4cf332c25d3a  # 1.95.0
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31  # v2
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba  # v0.0.11
       # Cache workspace-crate compilation across runs (rust-cache keeps only
       # third-party deps); a crate whose inputs did not change is not rebuilt.
@@ -340,7 +340,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@eb0a44f258ec94ab9ee0f14f998f4cf332c25d3a  # 1.95.0
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31  # v2
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba  # v0.0.11
       # Cache workspace-crate compilation across runs (rust-cache keeps only
       # third-party deps); a crate whose inputs did not change is not rebuilt.
@@ -386,7 +386,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@eb0a44f258ec94ab9ee0f14f998f4cf332c25d3a  # 1.95.0
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31  # v2
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba  # v0.0.11
       # Cache workspace-crate compilation across runs (rust-cache keeps only
       # third-party deps); a crate whose inputs did not change is not rebuilt.
@@ -477,13 +477,13 @@ jobs:
       # renaming/removing it and fail-closing ALL test runs. The shorthand
       # `taiki-e/install-action@nextest` form cannot pin a version — the
       # full-form `@v2` + `with: { tool: "nextest@X.Y.Z" }` is required.
-      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0  # v2.87.22
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32  # v2.88.0
         with:
           tool: nextest@0.9.137
       # The lib tests come prebuilt in the archive from `test-build`; the only
       # compile left in this job is the ubuntu doctest below (shamir-engine and
       # its dependency graph), so the caches stay on for ubuntu only.
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31  # v2
         if: matrix.os == 'ubuntu-latest'
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba  # v0.0.11
         if: matrix.os == 'ubuntu-latest'
@@ -494,7 +494,7 @@ jobs:
           echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
           echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
       - name: download test archive
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           name: test-archive-${{ matrix.os }}
           path: ${{ runner.temp }}
@@ -578,10 +578,10 @@ jobs:
       # renaming/removing it and fail-closing ALL test runs. The shorthand
       # `taiki-e/install-action@nextest` form cannot pin a version — the
       # full-form `@v2` + `with: { tool: "nextest@X.Y.Z" }` is required.
-      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0  # v2.87.22
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32  # v2.88.0
         with:
           tool: nextest@0.9.137
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31  # v2
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba  # v0.0.11
       # Cache workspace-crate compilation across runs (rust-cache keeps only
       # third-party deps); a crate whose inputs did not change is not rebuilt.
@@ -641,7 +641,7 @@ jobs:
             fi
           fi
           echo "changed=$changed" >> "$GITHUB_OUTPUT"
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         if: steps.ts_changes.outputs.changed != 'false'
         with:
           # Node 22 = active LTS. `shamir-client-ts/package.json` declares
@@ -741,7 +741,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@eb0a44f258ec94ab9ee0f14f998f4cf332c25d3a  # 1.95.0
         if: steps.deps.outputs.rust == 'true'
       # Prebuilt, version-pinned binary (same install action and pin as nextest).
-      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0  # v2.87.22
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32  # v2.88.0
         if: steps.deps.outputs.rust == 'true'
         with:
           tool: cargo-deny@0.20.2
@@ -794,10 +794,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: dtolnay/rust-toolchain@eb0a44f258ec94ab9ee0f14f998f4cf332c25d3a  # 1.95.0
-      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0  # v2.87.22
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32  # v2.88.0
         with:
           tool: nextest@0.9.137
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31  # v2
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba  # v0.0.11
       # Cache workspace-crate compilation across runs (rust-cache keeps only
       # third-party deps); a crate whose inputs did not change is not rebuilt.
@@ -855,7 +855,7 @@ jobs:
           components: rustfmt, clippy
       # Distinct cache scope so this job's build of the standalone tool does
       # not fight the workspace cache the other jobs share.
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31  # v2
         with:
           workspaces: tools/rust-guard
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba  # v0.0.11
@@ -937,7 +937,7 @@ jobs:
           exit "$first_rc"
       - name: upload suggested deltas
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: rust-guard-suggested-delta
           path: suggested-*.toml
@@ -985,10 +985,10 @@ jobs:
       # baseline in .config/nextest.toml (0.9.137) — same pin as every
       # other nextest job in this file. Both lists MUST come from the
       # same nextest version for the comparison to be meaningful.
-      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0  # v2.87.22
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32  # v2.88.0
         with:
           tool: nextest@0.9.137
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31  # v2
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba  # v0.0.11
       # Cache workspace-crate compilation across runs (rust-cache keeps only
       # third-party deps); a crate whose inputs did not change is not rebuilt.
@@ -1147,7 +1147,7 @@ jobs:
           fi
       - name: upload suggested deltas
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: rust-guard-suggested-delta-${{ matrix.os }}-${{ matrix.config.id }}
           path: suggested-*.toml
@@ -1171,10 +1171,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@eb0a44f258ec94ab9ee0f14f998f4cf332c25d3a  # 1.95.0
         with:
           components: rustfmt, clippy
-      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0  # v2.87.22
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32  # v2.88.0
         with:
           tool: nextest@0.9.137
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31  # v2
         with:
           workspaces: tools/rust-guard
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba  # v0.0.11
@@ -1213,7 +1213,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: dtolnay/rust-toolchain@eb0a44f258ec94ab9ee0f14f998f4cf332c25d3a  # 1.95.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
           # Node 22 = active LTS; satisfies the binding's `>=18` engines
           # floor (same pin as the ts-unit job). npm cache keyed on the
@@ -1235,7 +1235,7 @@ jobs:
       # taken from this artifact when the drift check above fails.
       - name: upload generated files on drift
         if: failure() && steps.napi-drift.outcome == 'failure'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           overwrite: true
           name: napi-generated-files

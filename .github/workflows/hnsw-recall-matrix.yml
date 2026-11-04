@@ -66,10 +66,10 @@ jobs:
       # Same pin as ci.yml's `test` job — see that job's comment for why the
       # version is pinned (the `.cargo/config.toml` perimeter guard gates on
       # the $NEXTEST env var this exact binary sets).
-      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0  # v2.87.22
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32  # v2.88.0
         with:
           tool: nextest@0.9.137
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31  # v2
       # #1232: `recall_sq8_vs_f32_within_two_percent` (SQ8 u8 graph vs f32
       # graph) read 0.844 once on a CI ubuntu runner (floor 0.95, usual
       # 0.97). Runtime SIMD dispatch (avx512f / avx2 / scalar) makes the CPU

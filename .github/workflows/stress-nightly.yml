@@ -53,10 +53,10 @@ jobs:
       # Pinned to the cargo-nextest baseline documented in
       # .config/nextest.toml (0.9.137 — the version whose `--stress-count`
       # support this job relies on). Same pin as ci.yml's two test jobs.
-      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0  # v2.87.22
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32  # v2.88.0
         with:
           tool: nextest@0.9.137
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31  # v2
 
       # Step 1: the Version Oracle area (shamir-tx + shamir-engine, lib +
       # integration) at deliberately ELEVATED parallelism. `[profile.stress]`
