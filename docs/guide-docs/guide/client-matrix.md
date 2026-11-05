@@ -40,15 +40,15 @@
 | # | Рукопожатие × транспорт | Rust `shamir-client` | napi `shamir-client-node` | TS в Node | TS в браузере |
 |---|---|---|---|---|---|
 | 1 | сессия × TCP+TLS | да | да | да (тест: crates/shamir-client-ts/src/__tests__/connection/session/e2e-native-transports.test.ts) | невозможно: нет TCP |
-| 1b | сессия × TCP без TLS (loopback) | да (тест: crates/shamir-client/tests/matrix/session/plain_session.rs) | да (тест: tests/e2e/tests/21-connection-matrix.test.js) | нет | невозможно |
+| 1b | сессия × TCP без TLS (loopback) | да (тест: crates/shamir-client/tests/matrix/session/plain_session.rs) | да (тест: tests/e2e/tests/21-connection-matrix.test.js) | да (тест: crates/shamir-client-ts/src/__tests__/connection/session/e2e-plain-ipc.test.ts) | невозможно |
 | 2 | сессия × WS native (`tls_exporter`) | да (тест: crates/shamir-client/tests/matrix/session/ws_session.rs) | да (тест: tests/e2e/tests/21-connection-matrix.test.js) | да (тест: crates/shamir-client-ts/src/__tests__/connection/session/e2e-native-transports.test.ts) | невозможно: нет exporter |
 | 3 | сессия × WS, браузерный профиль (`tls_no_export`) | да (тест: crates/shamir-client/tests/matrix/browser/ws_browser_session.rs) | нет (T9-8) | да | да |
 | 4 | сессия × IPC | да | да (тест: tests/e2e/tests/21-connection-matrix.test.js) | да (смена пароля по IPC: исправление S4) | невозможно |
 | 6a | resume × TCP+TLS | да | да (тест: tests/e2e/tests/21-connection-matrix.test.js) | да (тест: crates/shamir-client-ts/src/__tests__/connection/session/e2e-native-transports.test.ts) | невозможно |
 | 6b | resume × WS native | да (тест: crates/shamir-client/tests/matrix/session/ws_resume.rs) | да (тест: tests/e2e/tests/21-connection-matrix.test.js) | да (тест: crates/shamir-client-ts/src/__tests__/connection/session/e2e-native-transports.test.ts) | невозможно |
 | 6c | resume × WS, браузерный профиль | да (тест: crates/shamir-client/tests/matrix/browser/ws_browser_resume.rs) | нет (T9-8) | да (без resume_proof) | да (тест: crates/shamir-client-ts/src/__tests__/connection/session/e2e-browser-resume.test.ts) |
-| 6d | resume × TCP без TLS | да (тест: crates/shamir-client/tests/matrix/session/plain_resume.rs) | нет (T9-8) | нет | невозможно |
-| 6e | resume × IPC | да (тест: crates/shamir-client/tests/smoke_local.rs) | нет | нет | невозможно |
+| 6d | resume × TCP без TLS | да (тест: crates/shamir-client/tests/matrix/session/plain_resume.rs) | нет (T9-8) | да (тест: crates/shamir-client-ts/src/__tests__/connection/session/e2e-plain-ipc.test.ts) | невозможно |
+| 6e | resume × IPC | да (тест: crates/shamir-client/tests/smoke_local.rs) | нет | да (тест: crates/shamir-client-ts/src/__tests__/connection/session/e2e-plain-ipc.test.ts) | невозможно |
 | 7 | токен × REST | да (тест: crates/shamir-client/tests/matrix/token/http.rs) | да (тест: tests/e2e/tests/21-connection-matrix.test.js) | да | да |
 | 8 | токен × WS native (`/shamir/v1/ws`) | да (тест: crates/shamir-client/tests/matrix/token/ws.rs) | да (тест: tests/e2e/tests/21-connection-matrix.test.js) | да | невозможно: у WebSocket нет заголовка |
 | 9 | токен × WS браузерный (`/shamir/v1/ws/browser`) | не требуется | не требуется | не требуется | да |
@@ -56,7 +56,7 @@
 
 Примечания:
 - Строка 9: нативному клиенту браузерный маршрут ничего не даёт, у него есть заголовок Authorization.
-- Строки 3, 6c, 6d в столбце napi (Rust-ядро закрыл T9-8a) и строки 6d, 6e в остальных столбцах собраны в задачу T9-8 и пока не запланированы.
+- Строки 3, 6c, 6d, 6e в столбце napi ещё не закрыты (задача T9-8b): Rust-ядро закрыл T9-8a, TS — T9-8c и T9-8d.
 - Ячейка меняет статус на **да** только в PR, где лежит e2e, который её доказывает.
 - Во всех сессиях TS-клиент проверяет личность сервера: подпись `identity_sig` (Ed25519) и пин `SHA256(pub_key)`. Передайте `trustedPin` — пин с прошлого соединения (`client.trustedPin()`); это рекомендованное укрепление. Несовпадение — типизированная ошибка `ServerIdentityChangedError`. Без пина первый сервер принимается (trust-on-first-use, `acceptNewHost`, по умолчанию включён), а его пин возвращается клиентом для хранения. Транспортное доверие (`rejectUnauthorized` по умолчанию true и опция `tls.ca`) остаётся без изменений.
 

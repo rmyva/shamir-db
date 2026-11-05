@@ -10,12 +10,13 @@ import { WsFramer, decode } from '../../framing.js';
 import { runHandshake } from '../../protocol.js';
 import {
   TRANSPORT_KIND_WS,
+  TRANSPORT_KIND_TCP,
   TRANSPORT_KIND_UNIX,
   BINDING_MODE_TLS_NO_EXPORT,
   BINDING_MODE_NONE,
   SUPPORTED_VERSION,
 } from '../../scram.js';
-import { browserWsBinding, ipcBinding } from '../binding.js';
+import { browserWsBinding, ipcBinding, tcpPlainBinding } from '../binding.js';
 
 class FakeSocket implements Socket {
   sent: Uint8Array[] = [];
@@ -104,6 +105,24 @@ describe('channel binding profiles', () => {
   });
 });
 
+describe('tcpPlainBinding()', () => {
+  it('is the TCP / no-binding profile', () => {
+    const b = tcpPlainBinding();
+    expect(b.transportKind).toBe(TRANSPORT_KIND_TCP);
+    expect(b.transportKind).toBe(0x01);
+    expect(b.bindingMode).toBe(BINDING_MODE_NONE);
+    expect(b.bindingMode).toBe(0x00);
+    expect(b.exporter).toEqual(new Uint8Array(32));
+  });
+
+  it('returns a fresh exporter array on every call', () => {
+    const a = tcpPlainBinding();
+    const b = tcpPlainBinding();
+    a.exporter[0] = 0xff;
+    expect(b.exporter[0]).toBe(0);
+  });
+});
+
 describe('runHandshake auth_init per binding profile', () => {
   it('browser profile sends binding_mode 0x02', async () => {
     const init = await captureAuthInit((framer) =>
@@ -119,6 +138,17 @@ describe('runHandshake auth_init per binding profile', () => {
   it('ipc profile sends binding_mode 0x00', async () => {
     const init = await captureAuthInit((framer) =>
       runHandshake(platform, framer, 'alice', 'pw', ipcBinding()),
+    );
+    expect(init.binding_mode).toBe(BINDING_MODE_NONE);
+    expect(init.binding_mode).toBe(0x00);
+    expect(init.user).toBe('alice');
+    expect(init.version).toBe(SUPPORTED_VERSION);
+    expect(init.client_nonce.length).toBe(32);
+  });
+
+  it('tcp-plain profile sends binding_mode 0x00', async () => {
+    const init = await captureAuthInit((framer) =>
+      runHandshake(platform, framer, 'alice', 'pw', tcpPlainBinding()),
     );
     expect(init.binding_mode).toBe(BINDING_MODE_NONE);
     expect(init.binding_mode).toBe(0x00);

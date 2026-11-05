@@ -373,12 +373,28 @@ export interface MultiServerHandle {
   tcpPort: number;
   wsNativePort: number;
   browserPort: number;
+  /** `kind: tcp`, `profile: plain` loopback listener port (T9-8c). */
+  tcpPlainPort: number;
+  /** `kind: unix`, `profile: plain` local-IPC endpoint (T9-8c). */
+  ipcAddr: string;
   caPem: string;
   stop: () => Promise<void>;
   logs: () => string;
 }
 
-export function writeMultiListenerKtavConfig(dir: string, origin: string): string {
+/**
+ * Write the multi-listener ktav config.
+ *
+ * `unixAddr` is the local-IPC endpoint (socket path / named pipe) for the
+ * `kind: unix`, `profile: plain` listener appended alongside the TLS
+ * listeners, plus a `kind: tcp`, `profile: plain` loopback listener (T9-8c:
+ * session + resume over plain TCP and local IPC).
+ */
+export function writeMultiListenerKtavConfig(
+  dir: string,
+  origin: string,
+  unixAddr: string,
+): string {
   const certPath = path.join(dir, 'cert.pem').replace(/\\/g, '/');
   const keyPath = path.join(dir, 'key.pem').replace(/\\/g, '/');
   const cfg = `
@@ -418,6 +434,16 @@ listeners: [
         kind: tcp
         addr: 127.0.0.1:0
         profile: tls_exporter
+    }
+    {
+        kind: tcp
+        addr: 127.0.0.1:0
+        profile: plain
+    }
+    {
+        kind: unix
+        addr: ${unixAddr}
+        profile: plain
     }
 ]
 
@@ -464,7 +490,8 @@ export async function startMultiListenerServer(): Promise<MultiServerHandle> {
     throw new Error('openssl not available — cannot generate self-signed cert');
   }
 
-  const configPath = writeMultiListenerKtavConfig(dataDir, ORIGIN);
+  const unixAddr = ipcAddr(dataDir);
+  const configPath = writeMultiListenerKtavConfig(dataDir, ORIGIN, unixAddr);
   const child = spawn(
     SERVER_BIN,
     ['--config', configPath, '--bootstrap-password', ADMIN_PASSWORD],
@@ -482,15 +509,19 @@ export async function startMultiListenerServer(): Promise<MultiServerHandle> {
   ): BoundListener | undefined =>
     bound.find((l) => l.kind === kind && l.profile === profile);
 
-  let ports: { tcp: number; wsNative: number; browser: number };
+  let ports: { tcp: number; wsNative: number; browser: number; tcpPlain: number };
   try {
-    ports = await new Promise<{ tcp: number; wsNative: number; browser: number }>(
+    ports = await new Promise<{ tcp: number; wsNative: number; browser: number; tcpPlain: number }>(
       (resolve, reject) => {
         let done = false;
         const timer = setTimeout(() => {
           if (!done) {
             done = true;
-            reject(new Error(`Server failed to bind all listeners within 15s.\nLogs:\n${logBuf}`));
+            reject(
+              new Error(
+                `Server failed to bind all five listeners (browser ws, native ws, tcp+tls, tcp plain, unix plain) within 15s.\nLogs:\n${logBuf}`,
+              ),
+            );
           }
         }, 15_000);
 
@@ -500,11 +531,33 @@ export async function startMultiListenerServer(): Promise<MultiServerHandle> {
           const browser = find(bound, 'Ws', 'TlsNoExport');
           const wsNative = find(bound, 'Ws', 'TlsExporter');
           const tcp = find(bound, 'Tcp', 'TlsExporter');
-          if (browser === undefined || wsNative === undefined || tcp === undefined) return;
+          const tcpPlain = find(bound, 'Tcp', 'Plain');
+          // The unix listener's bound line carries the socket/pipe path in
+          // local_addr, which the port regex cannot parse — matching the
+          // raw addr is robust.
+          const plain = logBuf.replace(/\x1b\[[0-9;]*m/g, '');
+          const unixLine = plain
+            .split('\n')
+            .find((l) => /listener bound/i.test(l) && l.includes(unixAddr));
+          if (
+            browser === undefined ||
+            wsNative === undefined ||
+            tcp === undefined ||
+            tcpPlain === undefined ||
+            unixLine === undefined
+          ) {
+            return;
+          }
           done = true;
           clearTimeout(timer);
           setTimeout(
-            () => resolve({ tcp: tcp.port, wsNative: wsNative.port, browser: browser.port }),
+            () =>
+              resolve({
+                tcp: tcp.port,
+                wsNative: wsNative.port,
+                browser: browser.port,
+                tcpPlain: tcpPlain.port,
+              }),
             150,
           );
         }
@@ -533,6 +586,8 @@ export async function startMultiListenerServer(): Promise<MultiServerHandle> {
     tcpPort: ports.tcp,
     wsNativePort: ports.wsNative,
     browserPort: ports.browser,
+    tcpPlainPort: ports.tcpPlain,
+    ipcAddr: unixAddr,
     caPem,
     stop: async () => {
       if (!child.killed) {

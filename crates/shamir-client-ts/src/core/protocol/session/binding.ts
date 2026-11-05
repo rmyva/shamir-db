@@ -10,6 +10,7 @@ import {
   BINDING_MODE_TLS_NO_EXPORT,
   BINDING_MODE_TLS_EXPORTER,
   BINDING_MODE_NONE,
+  TRANSPORT_KIND_TCP,
 } from '../scram.js';
 
 /** Channel-binding description handed to the handshake step (design 2.2). */
@@ -51,6 +52,22 @@ export function browserWsBinding(): ChannelBinding {
 export function ipcBinding(): ChannelBinding {
   return {
     transportKind: TRANSPORT_KIND_UNIX,
+    bindingMode: BINDING_MODE_NONE,
+    exporter: zeroExporter(),
+  };
+}
+
+/**
+ * Binding for the plain-TCP profile (`kind: tcp, profile: plain`, loopback
+ * only — no TLS, `BINDING_MODE_NONE`). Matches the Rust client's
+ * `connect_plain`. Returns a FRESH object with a fresh exporter array on
+ * every call (never share the mutable `Uint8Array`). The exporter is the 32
+ * zero bytes the `auth_message` carries for this profile; it is also the
+ * `channel_binding_at_auth` field of `auth_message_cp` (password change).
+ */
+export function tcpPlainBinding(): ChannelBinding {
+  return {
+    transportKind: TRANSPORT_KIND_TCP,
     bindingMode: BINDING_MODE_NONE,
     exporter: zeroExporter(),
   };

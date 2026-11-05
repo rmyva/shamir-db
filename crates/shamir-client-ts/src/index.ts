@@ -10,7 +10,7 @@ export type { LoginOptions, LoginResult, LoginMetadata, LoginScope } from './log
 
 import { NodePlatform } from './platform/node.js';
 import { NodeSessionPlatform } from './platform/session/native-platform.js';
-import type { ConnectOptions, ConnectLocalOptions, ResumeOptions, NodeConnectOptions, NodeTokenConnectOptions } from './core/types/connection.js';
+import type { ConnectOptions, ConnectLocalOptions, ResumeOptions, ResumeLocalOptions, NodeConnectOptions, NodeTokenConnectOptions } from './core/types/connection.js';
 import { connectTokenNode } from './platform/connect/node-connect.js';
 import type { TokenHttpClient } from './entry/token-client.js';
 import type { TokenWsClient, PublicTokenClient } from './entry/ws/token-client.js';
@@ -52,6 +52,16 @@ export async function connectLocal(opts: ConnectLocalOptions): Promise<ShamirCli
  */
 export async function resume(opts: ResumeOptions): Promise<ShamirClient> {
   return ShamirClient.resume(NodeSessionPlatform, opts);
+}
+
+/**
+ * Fast reconnection over local IPC (Unix domain socket / Windows Named Pipe)
+ * from Node.js using a resumption ticket from a previous session. Skips the
+ * full SCRAM handshake; no server identity proof is exchanged (binding 0x00).
+ * Node-only: NOT exported from `browser.ts`.
+ */
+export async function resumeLocal(opts: ResumeLocalOptions): Promise<ShamirClient> {
+  return ShamirClient.resumeLocal(NodePlatform, opts);
 }
 
 export { ApiToken } from './entry/api-token.js';
@@ -100,7 +110,7 @@ export { SubscriptionRouter } from './core/client/subscription-router.js';
 export type { SubscriptionEvent } from './core/client/subscription-router.js';
 export { SubscriptionHandle } from './core/client/subscription-handle.js';
 export { CursorIterator } from './core/client/cursor-iterator.js';
-export type { ResumeOptions, ConnectLocalOptions };
+export type { ResumeOptions, ResumeLocalOptions, ConnectLocalOptions };
 export type { Db, Tx } from './core/client/db.js';
 export * from './core/builders/index.js';
 export type * from './core/types/index.js';

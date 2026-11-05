@@ -255,6 +255,74 @@ function hostForUrl(host: string): string {
   return host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
 }
 
+/**
+ * True when `host` is an explicit loopback endpoint: `localhost`, an IPv4
+ * literal inside 127.0.0.0/8, `::1`, or an IPv4-mapped IPv6 loopback
+ * (`::ffff:127.x.x.x`). Plain TCP is refused for anything else BEFORE a
+ * socket is opened — the same client-side rule as the Rust `connect_plain`.
+ * A DNS name that would resolve to loopback is NOT accepted (the client
+ * refuses it without resolving).
+ */
+export function isLoopbackHost(host: string): boolean {
+  let h = host.toLowerCase();
+  if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1);
+  if (h === 'localhost') return true;
+  const v4 = parseIpv4(h);
+  if (v4 !== null) return v4[0] === 127;
+  const v6 = parseIpv6(h);
+  if (v6 === null) return false;
+  const loopback = v6.slice(0, 7).every((g) => g === 0) && v6[7] === 1;
+  const mappedLoopback =
+    v6.slice(0, 5).every((g) => g === 0) && v6[5] === 0xffff && (v6[6] >> 8) === 127;
+  return loopback || mappedLoopback;
+}
+
+/** Parse a dotted IPv4 literal (four decimal octets, each 0-255) or null. */
+function parseIpv4(s: string): number[] | null {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
+  if (m === null) return null;
+  const octets = [m[1], m[2], m[3], m[4]].map((o) => Number(o));
+  return octets.every((o) => o >= 0 && o <= 255) ? octets : null;
+}
+
+/** Parse an IPv6 literal (with `::` and an optional trailing IPv4 part) into 8 groups, or null. */
+function parseIpv6(s: string): number[] | null {
+  if (!s.includes(':')) return null;
+  let tail: number[] = [];
+  let body = s;
+  const lastColon = body.lastIndexOf(':');
+  if (body.slice(lastColon + 1).includes('.')) {
+    const v4 = parseIpv4(body.slice(lastColon + 1));
+    if (v4 === null) return null;
+    tail = [(v4[0] << 8) | v4[1], (v4[2] << 8) | v4[3]];
+    body = body.slice(0, lastColon + 1);
+    if (body.endsWith(':') && !body.endsWith('::')) body = body.slice(0, -1);
+  }
+  const halves = body.split('::');
+  if (halves.length > 2) return null;
+  const parse = (part: string): number[] | null => {
+    if (part === '') return [];
+    const groups = part.split(':');
+    const out: number[] = [];
+    for (const g of groups) {
+      if (!/^[0-9a-f]{1,4}$/.test(g)) return null;
+      out.push(parseInt(g, 16));
+    }
+    return out;
+  };
+  const head = parse(halves[0] ?? '');
+  if (head === null) return null;
+  if (halves.length === 1) {
+    const all = [...head, ...tail];
+    return all.length === 8 ? all : null;
+  }
+  const rest = parse(halves[1] ?? '');
+  if (rest === null) return null;
+  const fill = 8 - head.length - rest.length - tail.length;
+  if (fill < 1) return null;
+  return [...head, ...new Array<number>(fill).fill(0), ...rest, ...tail];
+}
+
 /** Map connect/resume options to a transport endpoint. */
 export function endpointFromOptions(opts: EndpointOptions): SessionEndpoint {
   const transport = opts.transport;
@@ -268,6 +336,17 @@ export function endpointFromOptions(opts: EndpointOptions): SessionEndpoint {
       origin: opts.origin ?? `https://${opts.host}`,
       tls: { rejectUnauthorized: opts.tls?.rejectUnauthorized ?? true },
     };
+  }
+  if (transport === 'tcp-plain') {
+    if (opts.tls !== undefined) {
+      throw new Error("tls options are not valid with transport 'tcp-plain' (plain TCP has no TLS)");
+    }
+    if (!isLoopbackHost(opts.host)) {
+      throw new Error(
+        `plain TCP is loopback-only: refusing host '${opts.host}' before any connection attempt`,
+      );
+    }
+    return { kind: 'tcp-plain', host: opts.host, port: opts.port };
   }
   if (transport === 'tcp' || transport === 'ws-native') {
     const tls: SessionTlsOptions = {
@@ -304,10 +383,11 @@ export async function dialEndpoint(
       return { socket, binding: browserWsBinding() };
     }
     case 'tcp':
+    case 'tcp-plain':
     case 'ws-native':
       if (!platform.openNativeLink) {
         throw new Error(
-          `transport '${endpoint.kind === 'tcp' ? 'tcp' : 'ws-native'}': this Platform does not implement openNativeLink (TCP and native WebSocket with the TLS exporter are Node only)`,
+          `transport '${endpoint.kind}': this Platform does not implement openNativeLink (TCP, plain TCP and native WebSocket with the TLS exporter are Node only)`,
         );
       }
       return platform.openNativeLink(endpoint, { connectTimeoutMs });

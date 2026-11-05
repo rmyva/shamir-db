@@ -39,10 +39,15 @@ export interface TokenTlsOptions {
  * Session transport. Default 'ws-browser' = browser-profile WebSocket
  * `/shamir/v1/browser`, unchanged; 'tcp' = TCP+TLS1.3 listener
  * `tcp/tls_exporter`; 'ws-native' = `wss://host:port/shamir/v1`, listener
- * `ws/tls_exporter`, no Origin. 'tcp' and 'ws-native' are Node only and use
- * the real TLS exporter; `origin` is ignored for them.
+ * `ws/tls_exporter`, no Origin. 'tcp-plain' = TCP listener `kind: tcp,
+ * profile: plain` — channel binding `{ TCP, 0x00 }` with the zero exporter,
+ * no TLS (any `tls` option throws), refused client-side for a non-loopback
+ * host before a socket is opened (same rule as the Rust `connect_plain`);
+ * the server binds plain TCP on loopback only. 'tcp', 'tcp-plain' and
+ * 'ws-native' are Node only and (for the first and last) use the real TLS
+ * exporter; `origin` is ignored for them.
  */
-export type SessionTransport = 'ws-browser' | 'tcp' | 'ws-native';
+export type SessionTransport = 'ws-browser' | 'tcp' | 'tcp-plain' | 'ws-native';
 
 /**
  * Options for {@link ShamirClient.resume} — fast reconnection using a
@@ -60,7 +65,7 @@ export interface ResumeOptions {
   /**
    * TLS options. `ca`: PEM CA certificate(s) trusted for the server
    * certificate, used by 'tcp' and 'ws-native' only (setting it with the
-   * browser-profile transport throws). Trust = `rejectUnauthorized`
+   * browser-profile or the 'tcp-plain' transport throws). Trust = `rejectUnauthorized`
    * (default true) plus `ca`; on a tls_exporter resume the server additionally
    * proves its Ed25519 identity before the ticket is sent.
    */
@@ -119,7 +124,7 @@ export interface ConnectOptions {
   /**
    * TLS options. `ca`: PEM CA certificate(s) trusted for the server
    * certificate, used by 'tcp' and 'ws-native' only (setting it with the
-   * browser-profile transport throws). Trust = `rejectUnauthorized`
+   * browser-profile or the 'tcp-plain' transport throws). Trust = `rejectUnauthorized`
    * (default true) plus `ca`; on top of that, every session handshake
    * verifies the server's Ed25519 `identity_sig` and the optional
    * `trustedPin` above — a mismatch throws `ServerIdentityChangedError`.
@@ -167,6 +172,37 @@ export interface ConnectLocalOptions {
   trustedPin?: Uint8Array;
   /** Trust-on-first-use; see {@link ConnectOptions.acceptNewHost}. */
   acceptNewHost?: boolean;
+  /**
+   * Per-request deadline in ms — see {@link ConnectOptions.requestTimeoutMs}.
+   */
+  requestTimeoutMs?: number;
+  /**
+   * Deadline in ms for the initial connection attempt — see
+   * {@link ConnectOptions.connectTimeoutMs}.
+   */
+  connectTimeoutMs?: number;
+}
+
+/**
+ * Options for {@link ShamirClient.resumeLocal} — fast reconnection using a
+ * resumption ticket over the local-IPC transport (Unix domain socket /
+ * Windows Named Pipe, spec TRANSPORT_UNIX.md). The channel binding is
+ * `BINDING_MODE_NONE` (0x00), so — unlike the tls_exporter resume — no
+ * server identity proof is exchanged; the resume frame goes out right after
+ * the dial, mirroring the Rust client's IPC resume. No `host`/`port`/`tls`/
+ * `origin` — the OS-level access boundary (file permissions / DACL,
+ * enforced server-side) replaces transport encryption. Node-only.
+ */
+export interface ResumeLocalOptions {
+  /**
+   * Raw platform endpoint: an absolute Unix socket path or a `\\.\pipe\name`
+   * Windows pipe. Same addressing as {@link ConnectLocalOptions.addr}.
+   */
+  addr: string;
+  /** Resumption ticket bytes obtained from a previous session. */
+  ticket: Uint8Array;
+  /** Server public key pinned from the first connection. */
+  serverPubKey: Uint8Array;
   /**
    * Per-request deadline in ms — see {@link ConnectOptions.requestTimeoutMs}.
    */

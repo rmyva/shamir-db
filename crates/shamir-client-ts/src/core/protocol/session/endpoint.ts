@@ -1,7 +1,7 @@
 /**
  * Transport-neutral endpoint/link descriptions for the session layer.
- * Types only. `ws-native` and `tcp` are Node-only endpoints; their dialers
- * live in `platform/session` (Node-only).
+ * Types only. `ws-native`, `tcp` and `tcp-plain` are Node-only endpoints;
+ * their dialers live in `platform/session` (Node-only).
  *
  * PLATFORM-AGNOSTIC.
  */
@@ -23,11 +23,13 @@ export type SessionEndpoint =
   | { kind: 'ws-browser'; url: string; origin: string; tls?: SessionTlsOptions }
   | { kind: 'ws-native'; url: string; tls?: SessionTlsOptions }
   | { kind: 'tcp'; host: string; port: number; tls?: SessionTlsOptions }
+  | { kind: 'tcp-plain'; host: string; port: number }
   | { kind: 'ipc'; addr: string };
 
 export type TcpSessionEndpoint = Extract<SessionEndpoint, { kind: 'tcp' }>;
+export type TcpPlainSessionEndpoint = Extract<SessionEndpoint, { kind: 'tcp-plain' }>;
 export type WsNativeSessionEndpoint = Extract<SessionEndpoint, { kind: 'ws-native' }>;
-export type NativeSessionEndpoint = TcpSessionEndpoint | WsNativeSessionEndpoint;
+export type NativeSessionEndpoint = TcpSessionEndpoint | WsNativeSessionEndpoint | TcpPlainSessionEndpoint;
 
 export interface SessionLink {
   socket: Socket;

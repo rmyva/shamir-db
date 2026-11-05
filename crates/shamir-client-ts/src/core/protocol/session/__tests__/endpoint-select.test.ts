@@ -4,7 +4,11 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import type { Socket, Platform } from '../../../support/platform.js';
-import { dialEndpoint, endpointFromOptions } from '../open.js';
+import {
+  dialEndpoint,
+  endpointFromOptions,
+  isLoopbackHost,
+} from '../open.js';
 import { tlsExporterBinding } from '../binding.js';
 import type {
   NativeSessionEndpoint,
@@ -109,6 +113,86 @@ describe('endpointFromOptions', () => {
         transport: 'carrier-pigeon' as unknown as 'tcp',
       }),
     ).toThrow(/unknown transport: carrier-pigeon/);
+  });
+});
+
+describe('tcp-plain transport', () => {
+  it('produces a plain tcp-plain endpoint without a tls field', () => {
+    expect(
+      endpointFromOptions({ host: '127.0.0.1', port: 1, transport: 'tcp-plain' }),
+    ).toEqual({ kind: 'tcp-plain', host: '127.0.0.1', port: 1 });
+  });
+
+  it('refuses tls options — plain TCP has no TLS', () => {
+    expect(() =>
+      endpointFromOptions({
+        host: '127.0.0.1',
+        port: 1,
+        transport: 'tcp-plain',
+        tls: { rejectUnauthorized: false },
+      }),
+    ).toThrow(/no TLS/);
+    expect(() =>
+      endpointFromOptions({
+        host: '127.0.0.1',
+        port: 1,
+        transport: 'tcp-plain',
+        tls: { ca: 'PEM' },
+      }),
+    ).toThrow(/no TLS/);
+  });
+
+  it('refuses non-loopback hosts synchronously, before any socket', () => {
+    for (const host of ['10.0.0.1', 'example.com', '192.168.1.5']) {
+      expect(() =>
+        endpointFromOptions({ host, port: 1, transport: 'tcp-plain' }),
+      ).toThrow(/loopback/);
+    }
+  });
+
+  it('accepts loopback hosts', () => {
+    for (const host of ['127.0.0.1', 'localhost', '::1']) {
+      expect(
+        endpointFromOptions({ host, port: 1, transport: 'tcp-plain' }),
+      ).toEqual({ kind: 'tcp-plain', host, port: 1 });
+    }
+  });
+});
+
+describe('isLoopbackHost', () => {
+  it('recognises loopback forms', () => {
+    for (const host of [
+      'localhost',
+      '127.0.0.1',
+      '127.9.9.9',
+      '::1',
+      '[::1]',
+      '0:0:0:0:0:0:0:1',
+      '0000:0000:0000:0000:0000:0000:0000:0001',
+      '::ffff:127.0.0.1',
+      '::ffff:7f00:1',
+    ]) {
+      expect(isLoopbackHost(host)).toBe(true);
+    }
+  });
+
+  it('rejects non-loopback forms', () => {
+    for (const host of [
+      '10.0.0.1',
+      'example.com',
+      '192.168.1.5',
+      '',
+      '127.999.0.1',
+      '127.0.0.256',
+      '127.0.0',
+      '::2',
+      '0:0:0:0:0:0:0:2',
+      '1::1',
+      '::ffff:10.0.0.1',
+      '::ffff:127.0.0.999',
+    ]) {
+      expect(isLoopbackHost(host)).toBe(false);
+    }
   });
 });
 

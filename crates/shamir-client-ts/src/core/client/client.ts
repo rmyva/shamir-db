@@ -14,7 +14,7 @@ import { waitForVisibility } from '../visibility/wait.js';
 import { executeWithReceipts, requestChangesSince, type AliasReceipt, type ChangesSinceResult } from '../receipts/index.js';
 import { responseError } from '../visibility/errors.js';
 import type { Platform } from '../support/platform.js';
-import type { ConnectOptions as ScramConnectOptions, ConnectLocalOptions, ResumeOptions } from '../types/connection.js';
+import type { ConnectOptions as ScramConnectOptions, ConnectLocalOptions, ResumeOptions, ResumeLocalOptions } from '../types/connection.js';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '../types/connection.js';
 import type { BatchResponse, TransactionInfo, IsolationLevel } from '../types/write/batch.js';
 import type { ReadQuery } from '../types/read/query.js';
@@ -34,7 +34,7 @@ import { SubscriptionRouter } from './subscription-router.js';
 import type { PushEnvelope } from '../types/stream/subscribe.js';
 import { InternerCacheRegistry } from '../support/field-map.js';
 import { apiTokenAdmin, getDdlOpStatus } from './client-internals.js';
-import { openScramSession, openLocalSession, resumeSession } from '../protocol/session/index.js';
+import { openScramSession, openLocalSession, resumeSession, resumeLocalSession } from '../protocol/session/index.js';
 import type { SessionOpened, ChannelBinding } from '../protocol/session/index.js';
 import type { ApiTokenAdmin } from '../types/access/token-admin.js';
 import {
@@ -165,6 +165,16 @@ export class ShamirClient {
    */
   static async resume(platform: Platform, opts: ResumeOptions): Promise<ShamirClient> {
     return ShamirClient.fromOpened(platform, await resumeSession(platform, opts),
+      opts.requestTimeoutMs);
+  }
+
+  /**
+   * Fast reconnection over local IPC (Unix socket / Named Pipe) with a
+   * resumption ticket. Node-only, see `resumeLocalSession`; throws (and
+   * closes the socket) if rejected or the response is malformed.
+   */
+  static async resumeLocal(platform: Platform, opts: ResumeLocalOptions): Promise<ShamirClient> {
+    return ShamirClient.fromOpened(platform, await resumeLocalSession(platform, opts),
       opts.requestTimeoutMs);
   }
 

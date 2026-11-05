@@ -68,9 +68,9 @@ await client.close();
 
 ### Native transports (Node only): TCP+TLS and native WebSocket
 
-`connect()` and `resume()` accept `transport?: 'ws-browser' | 'tcp' | 'ws-native'`. The default stays `'ws-browser'` (the browser-profile WebSocket). `'tcp'` connects to a listener `kind: tcp, profile: tls_exporter`; `'ws-native'` connects to `wss://host:port/shamir/v1` (listener `kind: ws, profile: tls_exporter, path: /shamir/v1`, subprotocol `shamir-v1`, no Origin header). The channel binding is the real TLS exporter (label `EXPORTER-ShamirDB-AUTH-v1`). `changePassword` works over these sessions. `tls.ca` (PEM of the CA certificate to trust) is valid only for `'tcp'` and `'ws-native'`; `tls.rejectUnauthorized` defaults to `true`. Not supported in the browser entry.
+`connect()` and `resume()` accept `transport?: 'ws-browser' | 'tcp' | 'ws-native' | 'tcp-plain'`. The default stays `'ws-browser'` (the browser-profile WebSocket). `'tcp'` connects to a listener `kind: tcp, profile: tls_exporter`; `'ws-native'` connects to `wss://host:port/shamir/v1` (listener `kind: ws, profile: tls_exporter, path: /shamir/v1`, subprotocol `shamir-v1`, no Origin header). `'tcp-plain'` connects to a listener `kind: tcp, profile: plain` — plain TCP with no TLS, loopback only. A non-loopback host is refused client-side, before any socket is opened (same rule as the Rust `connect_plain`); `tls` options throw with this transport. The channel binding is `{ TCP, 0x00 }` with the zero exporter. For `'tcp'` and `'ws-native'` the channel binding is the real TLS exporter (label `EXPORTER-ShamirDB-AUTH-v1`). `changePassword` works over these sessions. `tls.ca` (PEM of the CA certificate to trust) is valid only for `'tcp'` and `'ws-native'`; `tls.rejectUnauthorized` defaults to `true`. Not supported in the browser entry.
 
-Trust model: TLS certificate verification (`rejectUnauthorized: true` plus `ca`) plus the server's Ed25519 identity. Every session handshake verifies `identity_sig`; pass `trustedPin` — the pin of a previous connection — to pin the server (recommended hardening); a mismatch throws `ServerIdentityChangedError` before any data flows. Without a pin the first server is accepted (trust-on-first-use, `acceptNewHost`, default `true`) and its pin is exposed for persistence. Resume over a `tls_exporter` transport additionally verifies a server identity proof before the ticket is sent. See the [client matrix](../../../docs/guide-docs/guide/client-matrix.md).
+Trust model: TLS certificate verification (`rejectUnauthorized: true` plus `ca`) plus the server's Ed25519 identity. Every session handshake verifies `identity_sig`; pass `trustedPin` — the pin of a previous connection — to pin the server (recommended hardening); a mismatch throws `ServerIdentityChangedError` before any data flows. Without a pin the first server is accepted (trust-on-first-use, `acceptNewHost`, default `true`) and its pin is exposed for persistence. Resume over a `tls_exporter` transport additionally verifies a server identity proof before the ticket is sent. See the [client matrix](../../../docs/guide-docs/guide/client-matrix.md). Over `'tcp-plain'` and IPC (binding mode `0x00`) no identity proof is exchanged — the ticket is sent right after the dial. A ticket can be resumed on the same or a STRONGER channel binding but never a weaker one (server anti-downgrade rule: plain `0x00` < browser `0x02` < TLS exporter `0x01`): a plain ticket resumes over TLS TCP, a TLS-exporter ticket is refused over plain TCP. See the [client matrix](../../../docs/guide-docs/guide/client-matrix.md).
 
 ```ts
 import { connect, resume } from '@shamir/client';
@@ -115,6 +115,35 @@ const pinned = await connect({
   trustedPin: pin, transport: 'tcp', tls: { ca },
 });
 ```
+
+### Plain TCP (loopback only) and resume over local IPC
+
+```ts
+import { connect, resume, resumeLocal } from '@shamir/client';
+
+// Plain loopback TCP (listener `kind: tcp, profile: plain`): no TLS options.
+const plain = await connect({
+  host: '127.0.0.1', port: 13761,
+  username: 'admin', password: 'correct horse battery staple',
+  transport: 'tcp-plain',
+});
+
+// Resume over plain TCP
+const r1 = await resume({
+  host: '127.0.0.1', port: 13761,
+  ticket: plain.resumptionTicket()!, serverPubKey: plain.serverPubKeyPin(),
+  transport: 'tcp-plain',
+});
+
+// Resume over local IPC (Unix domain socket / Windows Named Pipe)
+const local = await resumeLocal({
+  addr: '/run/shamir/shamir.sock', // Windows: '\\\\.\\pipe\\shamir'
+  ticket: plain.resumptionTicket()!,
+  serverPubKey: plain.serverPubKeyPin(),
+});
+```
+
+`resumeLocal({ addr, ticket, serverPubKey })` is the Node-only IPC counterpart of `resume` — same options as `connectLocal` plus the ticket and pinned key.
 
 ---
 
