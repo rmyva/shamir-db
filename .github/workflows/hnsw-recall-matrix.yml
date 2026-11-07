@@ -92,7 +92,7 @@ jobs:
           N="${{ github.event.inputs.runs_per_os || '20' }}"
           for i in $(seq 1 "$N"); do
             echo "--- run $i/$N ---"
-            NEXTEST=1 cargo nextest run --locked -p shamir-index --lib \
+            NEXTEST=1 cargo nextest run --locked -p shamir-vector --lib \
               -E 'test(recall_sq8_vs_f32_within_two_percent)' \
               --success-output=immediate --no-fail-fast || true
           done
@@ -109,7 +109,7 @@ jobs:
           N="${{ github.event.inputs.runs_per_os || '20' }}"
           for i in $(seq 1 "$N"); do
             echo "--- run $i/$N ---"
-            NEXTEST=1 cargo nextest run --locked -p shamir-index --lib \
+            NEXTEST=1 cargo nextest run --locked -p shamir-vector --lib \
               -E 'test(restart_preserves_recall_at_10_against_brute_force)' \
               --success-output=immediate --no-fail-fast
           done
@@ -121,7 +121,7 @@ jobs:
           N="${{ github.event.inputs.runs_per_os || '20' }}"
           for i in $(seq 1 "$N"); do
             echo "--- run $i/$N ---"
-            NEXTEST=1 cargo nextest run --locked -p shamir-index --lib \
+            NEXTEST=1 cargo nextest run --locked -p shamir-vector --lib \
               -E 'test(recall_at_10_on_1k_vectors)' \
               --success-output=immediate --no-fail-fast
           done
@@ -182,7 +182,7 @@ jobs:
           ) &
           for i in $(seq 1 "$N"); do
             echo "--- probe run $i/$N ---"
-            NEXTEST=1 cargo nextest run --locked -p shamir-index --lib -E 'test(quantized_graph_tests)' --no-fail-fast --success-output=immediate > "probe-$i.log" 2>&1
+            NEXTEST=1 cargo nextest run --locked -p shamir-vector --lib -E 'test(quantized_graph_tests)' --no-fail-fast --success-output=immediate > "probe-$i.log" 2>&1
             rc=$?
             grep -a "recall_sq8_at_10=" "probe-$i.log"
             echo "exit=$rc"
@@ -222,7 +222,7 @@ jobs:
           ) &
           for i in $(seq 1 "$N"); do
             echo "--- probe run $i/$N ---"
-            NEXTEST=1 cargo nextest run --locked -p shamir-index --lib -E 'test(quantized_graph_tests)' --no-fail-fast --success-output=immediate > "probe-$i.log" 2>&1
+            NEXTEST=1 cargo nextest run --locked -p shamir-vector --lib -E 'test(quantized_graph_tests)' --no-fail-fast --success-output=immediate > "probe-$i.log" 2>&1
             rc=$?
             grep -a "recall_sq8_at_10=" "probe-$i.log"
             echo "exit=$rc"

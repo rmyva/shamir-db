@@ -1,6 +1,6 @@
 //! Backend implementations for the index2 system.
 
-pub mod backend;
+pub use shamir_index_core::backend;
 pub mod build_backend;
 pub mod fts_backend;
 pub mod fts_ranked_backend;

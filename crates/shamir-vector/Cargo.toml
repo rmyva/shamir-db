@@ -1,0 +1,73 @@
+[package]
+name = "shamir-vector"
+version = "0.1.0-alpha.1"
+publish = false
+edition = "2021"
+description = "ShamirDB vector index — HNSW / brute-force / SQ8 backends and snapshots."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+shamir-index-core = { path = "../shamir-index-core" }
+shamir-types       = { path = "../shamir-types" }
+shamir-collections = { path = "../shamir-collections" }
+shamir-storage     = { path = "../shamir-storage", default-features = false }
+shamir-tx          = { path = "../shamir-tx" }
+shamir-tunables    = { path = "../shamir-tunables" }
+
+# Async / runtime
+tokio       = { version = "1.49.0", features = ["full"] }
+async-trait = "0.1.81"
+bytes       = "1.11.0"
+futures     = "0.3"
+
+# Data
+serde      = { version = "1.0.217", features = ["derive"] }
+bincode    = "1.3.3"
+smallvec   = { version = "1.11", features = ["serde"] }
+
+# Error handling
+thiserror = "2.0"
+
+# Logging
+log = "0.4"
+
+# Concurrency
+scc      = "3.8"
+arc-swap = "1.7"
+
+# Vector index
+# Pinned to an exact patch: hnsw_rs does NOT guarantee dump-format
+# stability across patches, and phase P2 (snapshots) round-trips dumps
+# through this exact version (`HNSW_RS_VERSION` in `snapshot/load.rs` must
+# move together with this pin). 0.3.5 carries the reverse-edge layer fix that
+# 0.3.4 lacked (#1232). The workspace root `[patch.crates-io]` replaces it with
+# `vendor/hnsw_rs` (still version 0.3.5), which also fixes the concurrent-insert
+# lock-order deadlock (#1262); see vendor/hnsw_rs/VENDORED.md.
+hnsw_rs = "=0.3.5"
+# CRC32 for snapshot integrity (phase P2). Same version the WAL crate uses.
+crc32fast = "1"
+# `tempfile::TempDir` for the snapshot codec's dump/load scratch space
+# (phase P2). The codec lives on the production path (real graph dumps at
+# runtime), so this is a regular — not dev-only — dependency.
+tempfile = "3.10.1"
+
+[dev-dependencies]
+serial_test = "3.3.1"
+shamir-storage = { path = "../shamir-storage" }
+shamir-bench-utils = { path = "../shamir-bench-utils" }
+bench-scale-tool = { workspace = true, features = ["async"] }
+
+# Failure-only flake diagnostics (design: docs/dev-artifacts/design/flake-failure-logs.md)
+# — dev-only crate; adopted by the SQ8-recall and HNSW-recall statistical tests.
+# No `tracing` feature: shamir-vector emits `log` records only.
+shamir-test-diag = { path = "../shamir-test-diag" }
+
+[[bench]]
+name = "sq8_hot_path"
+harness = false
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true

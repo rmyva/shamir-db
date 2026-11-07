@@ -376,7 +376,7 @@ differently — an operator must understand both.
 #### Vector index (HNSW) — soft-delete tombstones, persisted into the snapshot
 
 Vector deletion is a **soft-delete tombstone**, not a removal. The HNSW adapter
-(`crates/shamir-index/src/vector/hnsw_adapter.rs`) documents this in its module
+(`crates/shamir-vector/src/hnsw_adapter/`) documents this in its module
 header (`:7-8` — "Deletion via soft-delete tombstone set; search over-scans ×2
 to compensate"). The `delete` path (`:2689-2725`) inserts a tombstone into the
 `deleted` set and drops the brute-force / quantized side-copies, **but the graph
@@ -388,7 +388,7 @@ node itself stays** — verbatim from the code (`:2708`):
 "Invisible" means **excluded from live query results** — it does **not** mean
 "gone from disk." The tombstoned vector embedding is physically present in the
 HNSW graph and is **persisted into the on-disk index snapshot**: the snapshot
-codec (`crates/shamir-index/src/vector/snapshot.rs`) serialises the graph dump
+codec (`crates/shamir-vector/src/snapshot/`) serialises the graph dump
 (`.hnsw.graph` / `.hnsw.data` chunk files — `:14-20`) which carry **all** nodes
 including tombstoned ones (the graph has no notion of deletion), and the sidecar
 (`:22-24`) explicitly persists the adapter's maps including the `tombstones`

@@ -107,34 +107,6 @@ fn read_and_close_window() -> (usize, usize) {
     (count, bytes)
 }
 
-pub(crate) struct LargestWindow;
-
-impl LargestWindow {
-    pub(crate) fn start() -> Self {
-        assert!(
-            MEASURE_LARGEST
-                .compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok(),
-            "nested process-wide allocation window"
-        );
-        LARGEST.store(0, Ordering::SeqCst);
-        MEASURE_LARGEST.store(1, Ordering::SeqCst);
-        Self
-    }
-
-    /// Stop this process-wide measurement window.
-    pub(crate) fn finish(self) -> usize {
-        MEASURE_LARGEST.store(0, Ordering::SeqCst);
-        LARGEST.load(Ordering::SeqCst)
-    }
-}
-
-impl Drop for LargestWindow {
-    fn drop(&mut self) {
-        MEASURE_LARGEST.store(0, Ordering::SeqCst);
-    }
-}
-
 /// An allocation-measuring window that may span `.await` points. Call
 /// [`Window::finish`] to close it and read `(allocation count, total bytes)`;
 /// dropping the guard without finishing disables counting (unwind safety).

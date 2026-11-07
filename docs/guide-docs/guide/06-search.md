@@ -466,7 +466,7 @@ Windows). Recall@10 ≈ 0.978 — в пределах ≤5% цели.
 Crash-safety (V2.4): любая порча снапшота (truncated chunk → crc mismatch,
 garbage manifest, `hnsw_rs` version mismatch) маршрутизируется в
 warn+rebuild без abort'а open'а. Это проверяется двумя РАЗНЫМИ тестами
-(`crates/shamir-index/src/vector/tests/crash_recovery_tests.rs`, #1070):
+(`crates/shamir-vector/src/tests/lifecycle/crash_recovery_tests.rs`, #1070):
 fidelity — снапшот-дамп и загрузка одного и того же графа возвращают
 ИДЕНТИЧНЫХ соседей и дистанции (детерминированная проверка, нулевой допуск);
 и quality — recall@10 свежепостроенного графа (3K векторов, не 10K) против

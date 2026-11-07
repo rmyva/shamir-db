@@ -21,8 +21,8 @@
 pub mod backends;
 pub mod base_index;
 pub mod fts;
-pub mod model;
-pub mod vector;
+pub use shamir_index_core::model;
+pub use shamir_vector as vector;
 
 pub use backends::backend;
 pub use backends::build_backend;

@@ -485,12 +485,7 @@ pub fn build_tokenizer(kind: &crate::kind::TokenizerKind) -> TokenizerEnum {
 }
 
 /// Canonical IDV2 identity of a token string.
-pub fn token_identity(token: &str) -> Vec<u8> {
-    crate::model::identity::canonical::encode_inner_value(
-        &shamir_types::types::value::InnerValue::Str(token.to_owned()),
-    )
-    .expect("token strings fit the canonical length format")
-}
+pub use shamir_index_core::tokenizer::token_identity;
 
 /// Legacy token hash retained for decoding historical fixtures only.
 pub fn token_hash(token: &str) -> u64 {
