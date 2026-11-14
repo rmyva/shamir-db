@@ -213,6 +213,7 @@ impl Harness {
 /// directory locks from background handles, so the first attempt can observe
 /// `Locked`. That is transient: retry until the release lands.
 async fn launch_through_fjall_release(config: Config) -> ServerHandle {
+    let guard = FlakeGuard::new("http_rest server launch");
     for _ in 0..200 {
         let launched = ServerLauncher {
             config: config.clone(),
@@ -225,11 +226,18 @@ async fn launch_through_fjall_release(config: Config) -> ServerHandle {
         .launch()
         .await;
         match launched {
-            Ok(handle) => return handle,
+            Ok(handle) => {
+                guard.mark("server launched");
+                return handle;
+            }
             Err(e) if format!("{e:?}").contains("Locked") => {
+                guard.mark("launch retry: fjall lock");
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
-            Err(e) => panic!("launch HTTP listener: {e:?}"),
+            Err(e) => {
+                guard.note("launch error", format!("{e:?}"));
+                panic!("launch HTTP listener: {e:?}");
+            }
         }
     }
     panic!("fjall lock was not released within the retry window");

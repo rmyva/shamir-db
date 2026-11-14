@@ -56,6 +56,9 @@ wasm-heavy = { max-threads = 4 }
 # first list named only four modules, and the next Windows failure (PR #308)
 # ran next to three unlisted ones (system_metadata_tests 22-23 s,
 # flush_all_tests 27 s). A new module that opens on-disk Fjall joins the list.
+# Integration binaries follow the same rule: the disk-backed schema_ddl
+# suites joined after the WIN-TEST-RUNTIME investigation
+# (docs/dev-artifacts/perf/win-test-runtime.md).
 fsync-heavy = { max-threads = 1 }
 # Each http_rest e2e test boots a full server (two Argon2 hashes, TLS material,
 # fsync); eight of them next to the other booting tests starved the Windows
@@ -168,6 +171,18 @@ test-group = "fsync-heavy"
 filter = "(package(shamir-server) | package(shamir-sync)) and test(/(boot::server_tests::launcher_|durability::restore_tests::|durability::restore_identity_tests::|durability::backup_tests::)/)"
 test-group = "fsync-heavy"
 
+# The schema_ddl binary's disk-backed suites (57 tests: fk, stamping, and the
+# five basics::*_ddl/_default/_nested_path/_relational modules) open a fresh
+# on-disk Fjall system store per test and reopen it, fsyncing on drop — the
+# same lifecycle as the lib modules above, so they join fsync-heavy. The
+# 40 in-memory suites in the same binary (declarative_schema_e2e,
+# create_index_validation_e2e, describe_table_e2e, retention_ddl) stay
+# ungrouped. WIN-TEST-RUNTIME: serialised per-test times are also the
+# uncontended-floor measurement for the next comparison.
+[[profile.default.overrides]]
+filter = "package(shamir-db) and binary(schema_ddl) and test(/^(fk::|stamping::|basics::(declarative_schema_ddl|declarative_schema_default|declarative_schema_nested_path|declarative_schema_relational))/)"
+test-group = "fsync-heavy"
+
 [[profile.default.overrides]]
 filter = "package(shamir-server) and binary(e2e) and test(/^(http_rest|token_matrix)::/)"
 test-group = "http-rest-e2e"
@@ -190,6 +205,10 @@ test-group = "fsync-heavy"
 
 [[profile.ci.overrides]]
 filter = "(package(shamir-server) | package(shamir-sync)) and test(/(boot::server_tests::launcher_|durability::restore_tests::|durability::restore_identity_tests::|durability::backup_tests::)/)"
+test-group = "fsync-heavy"
+
+[[profile.ci.overrides]]
+filter = "package(shamir-db) and binary(schema_ddl) and test(/^(fk::|stamping::|basics::(declarative_schema_ddl|declarative_schema_default|declarative_schema_nested_path|declarative_schema_relational))/)"
 test-group = "fsync-heavy"
 
 [[profile.ci.overrides]]

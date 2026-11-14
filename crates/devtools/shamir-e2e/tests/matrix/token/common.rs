@@ -356,11 +356,13 @@ pub async fn boot_login(allow_read_write: bool) -> TokenFixture {
 }
 
 async fn boot_with(login: Option<LoginSetup>) -> TokenFixture {
+    let guard = FlakeGuard::new("token matrix server boot");
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let temp = TempDir::new().expect("tempdir");
     let data_dir: PathBuf = temp.path().to_path_buf();
     let (owner, owner_roles) = seed_owner(&data_dir).await;
+    guard.mark("seed done");
     let mut config = make_config(&data_dir);
     if let Some(setup) = login {
         seed_login_user(&data_dir);
@@ -380,10 +382,12 @@ async fn boot_with(login: Option<LoginSetup>) -> TokenFixture {
     .launch()
     .await
     .expect("launcher boot");
+    guard.mark("launcher boot done");
     let tls = handle.bound_addrs[0].expect("TLS listener bound");
     let plain = handle.bound_addrs[1].expect("plain listener bound");
     let native = handle.bound_addrs[2].expect("native listener bound");
     create_items_table(native).await;
+    guard.mark("items table created");
     let cert_pem = std::fs::read(data_dir.join("cert.pem")).expect("generated cert");
 
     let mut fixture = TokenFixture {
@@ -399,6 +403,7 @@ async fn boot_with(login: Option<LoginSetup>) -> TokenFixture {
     };
     fixture.read_write = fixture.issue("matrix-rw", TokenMode::ReadWrite).await;
     fixture.read_only = fixture.issue("matrix-ro", TokenMode::ReadOnly).await;
+    guard.mark("fixture ready");
     fixture
 }
 
