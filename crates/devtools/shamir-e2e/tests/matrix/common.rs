@@ -21,6 +21,7 @@ use shamir_server::config::{
     Config, KdfConfig, ListenerConfig, ListenerKind, LoggingConfig, ProfileKind, TlsConfig,
 };
 use shamir_server::server::{BootstrapMode, ServerHandle, ServerLauncher};
+use shamir_test_diag::FlakeGuard;
 
 pub const USERNAME: &str = "admin";
 pub const PASSWORD: &[u8] = b"correct horse battery staple";
@@ -123,6 +124,7 @@ fn make_config(temp: &TempDir) -> Config {
 }
 
 pub async fn boot() -> Matrix {
+    let guard = FlakeGuard::new("matrix server boot");
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let temp = TempDir::new().expect("tempdir");
@@ -135,11 +137,13 @@ pub async fn boot() -> Matrix {
         },
     };
     let handle = launcher.launch().await.expect("launcher boot");
+    guard.mark("launcher boot done");
     let tcp = handle.bound_addrs[0].expect("listener bound");
     let ws = handle.bound_addrs[1].expect("listener bound");
     let plain = handle.bound_addrs[2].expect("listener bound");
     let ws_browser = handle.bound_addrs[3].expect("listener bound");
     let cert_pem = std::fs::read(temp.path().join("cert.pem")).expect("generated cert");
+    guard.mark("fixture ready");
     Matrix {
         handle,
         tcp,
