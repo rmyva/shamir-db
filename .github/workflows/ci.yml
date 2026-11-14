@@ -603,6 +603,19 @@ jobs:
           ./scripts/test.sh --from-archive "$RUNNER_TEMP/test-archive.tar.zst"
           end=$(date +%s)
           echo "lib tests ran in $((end - start))s" >> "$GITHUB_STEP_SUMMARY"
+      # Per-test durations from the archived lib run (CI-TIMINGS): same
+      # never-fail-a-job rule as the integration job's timing artifacts.
+      - name: upload nextest JUnit report
+        if: always() && needs.affected.outputs.run_lib == 'true'
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: junit-lib-${{ matrix.os }}
+          path: |
+            target/nextest/ci/junit-cargo-tests.xml
+            junit-cargo-tests.xml
+          if-no-files-found: ignore
+          retention-days: 14
       # S5c-X P2 (Round 6): nextest cannot run doctests — enforce the
       # shamir-engine boundary compile-fail gate explicitly (one OS is
       # enough; the fast-tier affected step covers the rest).
@@ -706,12 +719,37 @@ jobs:
         env:
           INTEGRATION_ARGS: ${{ needs.affected.outputs.integration_args }}
           INTEGRATION_FILTER: ${{ needs.affected.outputs.integration_filter }}
+          SHAMIR_CARGO_TIMINGS: '1'
         shell: bash
         run: |
           set -euo pipefail
           if [ -z "$INTEGRATION_FILTER" ]; then echo "::notice::matrix has no matching integration targets"; exit 0; fi
           read -r -a packages <<< "$INTEGRATION_ARGS"
           ./scripts/test.sh --full --locked "${packages[@]}" -E "$INTEGRATION_FILTER" --no-tests=fail
+      # Timing artifacts (CI-TIMINGS): machine-readable build and test
+      # timings, 14-day retention. `if: always()` keeps them on failing
+      # runs, where they matter most; a failed upload must never fail the
+      # job (continue-on-error + if-no-files-found: ignore).
+      - name: upload nextest JUnit report
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: junit-integration-${{ matrix.os }}
+          path: |
+            target/nextest/ci/junit-cargo-tests.xml
+            junit-cargo-tests.xml
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: upload cargo timings report
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: cargo-timings-integration-${{ matrix.os }}
+          path: target/cargo-timings
+          if-no-files-found: ignore
+          retention-days: 14
       - name: integration selection notice
         if: needs.affected.outputs.run_integration != 'true' && needs.affected.outputs.run_pipeline != 'true'
         shell: bash

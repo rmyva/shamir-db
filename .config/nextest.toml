@@ -110,6 +110,14 @@ fail-fast = false
 # driven starting point, not a measured-optimal value.
 test-threads = 4
 
+# JUnit report for CI timing artifacts: written by every run under this
+# profile (nextest resolves the path under target/nextest/ci/). Settings for existing groups,
+# timeouts and overrides below are unchanged.
+[profile.ci.junit]
+path = "junit-cargo-tests.xml"
+store-success-output = false
+store-failure-output = true
+
 # Per-test overrides (extend as we discover legitimately-slow tests).
 #
 # PROFILE OVERRIDE PRECEDENCE — read before adding entries here or in

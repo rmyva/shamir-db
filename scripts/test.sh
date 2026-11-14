@@ -33,6 +33,9 @@
 #   Explicit `-p` args archive just those crates (affected-crate runs).
 #   --from-archive runs archived tests, omitting only --lib and --locked while
 #   forwarding every other argument unchanged; CI auto-selects profile ci.
+#   SHAMIR_CARGO_TIMINGS=1 forwards cargo --timings to the build nextest
+#   drives; the report lands in target/cargo-timings/. Never set for
+#   --from-archive (nothing is built).
 #
 # Available scopes (extend as needed):
 #   @tx       — shamir-tx
@@ -199,6 +202,19 @@ if [[ -n "$archive_to" && -n "$archive_from" ]]; then
     exit 2
 fi
 
+# CI timing capture (SHAMIR_CARGO_TIMINGS=1): forward cargo's --timings to
+# the build inside nextest. JSON timings are nightly-only (-Zunstable-options);
+# the pinned stable toolchain gets the HTML report only. --from-archive never
+# builds, so these args are not passed there.
+cargo_timings_args=()
+if [[ "${SHAMIR_CARGO_TIMINGS:-}" == "1" ]]; then
+    if rustc --version 2>/dev/null | grep -q nightly; then
+        cargo_timings_args=(-Z unstable-options --timings=html,json)
+    else
+        cargo_timings_args=(--timings)
+    fi
+fi
+
 # ---------------------------------------------------------------------------
 # Archive-build mode (CI): only the lib `test` job consumes this archive;
 # `integration` builds in place. Benches are never built by nextest's default
@@ -222,8 +238,10 @@ if [[ -n "$archive_to" ]]; then
         archive_args+=(--lib)
     fi
     archive_args+=(${pkg_args[@]+"${pkg_args[@]}"})
-    echo "» cargo nextest archive ${archive_args[*]} --archive-file $archive_to" >&2
-    exec cargo nextest archive "${archive_args[@]}" --archive-file "$archive_to"
+    echo "» cargo nextest archive ${archive_args[*]} ${cargo_timings_args[*]:-} --archive-file $archive_to" >&2
+    exec cargo nextest archive "${archive_args[@]}" \
+        ${cargo_timings_args[@]+"${cargo_timings_args[@]}"} \
+        --archive-file "$archive_to"
 fi
 
 case "$mode" in
@@ -267,9 +285,11 @@ if [[ -n "$archive_from" ]]; then
     exec cargo nextest run "${run_args[@]}" ${rest[@]+"${rest[@]}"}
 fi
 
-echo "» cargo nextest run ${nextest_args[*]} ${extra_args[*]:-}" >&2
+echo "» cargo nextest run ${nextest_args[*]} ${cargo_timings_args[*]:-} ${extra_args[*]:-}" >&2
 # The cargo-runner guard (.cargo/config.toml) gates on $NEXTEST, which
 # nextest sets itself for every test process it launches — so no
 # project-specific escape flag is needed here. Bare `cargo test` (no
 # $NEXTEST) is refused; this path always passes.
-exec cargo nextest run "${nextest_args[@]}" "${extra_args[@]}"
+exec cargo nextest run "${nextest_args[@]}" \
+    ${cargo_timings_args[@]+"${cargo_timings_args[@]}"} \
+    "${extra_args[@]}"

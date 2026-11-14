@@ -46,6 +46,7 @@ runs:
       env:
         PACKAGES: ${{ inputs.packages }}
         ARCHIVE_PATH: ${{ runner.temp }}/test-archive.tar.zst
+        SHAMIR_CARGO_TIMINGS: '1'
       run: |
         set -euo pipefail
         # Python only validates the selection; the build runs from this bash step so a
@@ -98,3 +99,19 @@ runs:
         path: ${{ runner.temp }}/test-archive.tar.zst
         if-no-files-found: error
         retention-days: 1
+    # Cargo --timings report for the archive build. Not gated on
+    # inputs.upload: cache-warm calls this action too and its weekly full
+    # build is the cleanest timing sample. Name uses runner.os (not the
+    # artifact-name input) so callers that omit the input still stay unique
+    # per OS. Diagnostics only — a
+    # missing report (fully cached build) or a failed upload must never
+    # fail a green build.
+    - name: upload cargo timings
+      if: inputs.packages != ''
+      continue-on-error: true
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+      with:
+        name: cargo-timings-test-archive-${{ runner.os }}
+        path: target/cargo-timings
+        if-no-files-found: ignore
+        retention-days: 14
