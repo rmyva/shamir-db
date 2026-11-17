@@ -1,0 +1,55 @@
+# Reference data-directory fixture generator (release-1 R1b, migration
+# framework design 7.2). It builds the server, runs the fixture generator and
+# uploads the directory as an artifact that is committed as
+# crates/server/shamir-server/tests/misc/fixtures/reference_epoch_1/. It runs
+# on dispatch and on pull requests that change the generator or this file;
+# it is deliberately NOT wired into ci.yml's tier/merge-gate machinery.
+#
+# Re-running this dispatch after a change to
+# scripts/runners/make_reference_datadir.py regenerates the fixture; the
+# shamir-server integration test then compares the fresh run against the
+# committed fixture semantically (fresh-vs-committed check, design 7.2).
+name: reference-datadir
+
+on:
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - scripts/runners/make_reference_datadir.py
+      - .github/workflows/reference-datadir.yml
+
+concurrency:
+  group: reference-datadir-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    name: generate reference_epoch_1
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: dtolnay/rust-toolchain@eb0a44f258ec94ab9ee0f14f998f4cf332c25d3a # 1.95.0
+
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        with:
+          workspaces: |
+            .
+
+      - name: Build the server binary
+        run: cargo build -p shamir-server --release
+
+      - name: Generate the reference data directory
+        run: |
+          python -I scripts/runners/make_reference_datadir.py \
+            --server-binary target/release/shamir-server \
+            --out reference_epoch_1
+
+      - name: Upload the fixture artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: reference-epoch-1
+          path: reference_epoch_1
