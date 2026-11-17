@@ -108,9 +108,12 @@ impl SystemStore {
     /// resolved against the data directory; an absolute one is kept.
     fn resolved_repo_path(&self, stored: &str) -> String {
         match self.base_dir.as_deref() {
-            Some(base) if Path::new(stored).is_relative() => {
-                base.join(stored).to_string_lossy().into_owned()
-            }
+            // Join component by component so the platform separator is used.
+            Some(base) if Path::new(stored).is_relative() => stored
+                .split('/')
+                .fold(base.to_path_buf(), |path, part| path.join(part))
+                .to_string_lossy()
+                .into_owned(),
             _ => stored.to_string(),
         }
     }
