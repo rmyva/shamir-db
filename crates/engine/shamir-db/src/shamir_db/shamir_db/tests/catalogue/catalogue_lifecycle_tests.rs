@@ -667,6 +667,55 @@ async fn rv_db_b26124d9_rename_preserves_schema_catalogue_fields() {
     assert_eq!(saved.get("schema_version"), before_schema_version.as_ref());
 }
 
+/// A data directory moved to another path still opens its own repository
+/// stores: repository paths under it are catalogued relative to it.
+#[tokio::test]
+async fn moved_data_directory_reopens_its_own_repository_stores() {
+    let temp = tempfile::tempdir().unwrap();
+    let original = temp.path().join("data");
+    let moved = temp.path().join("moved");
+    std::fs::create_dir_all(&original).unwrap();
+    {
+        let db = ShamirDb::init(SystemStoreConfig::Fjall(original.join("system.redb")))
+            .await
+            .unwrap();
+        db.create_db("app").await.unwrap();
+        let repo_config =
+            RepoConfig::new("main", BoxRepoFactory::fjall(original.join("main.redb")));
+        db.add_repo("app", repo_config).await.unwrap();
+        db.flush_all_for_test().await.unwrap();
+    }
+    // The dropped stores release their file handles lazily; a rename
+    // refused meanwhile (Windows) is retried.
+    let mut renamed = false;
+    for _ in 0..100 {
+        if std::fs::rename(&original, &moved).is_ok() {
+            renamed = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(renamed, "data directory could not be moved");
+
+    let db = reopen(moved.join("system.redb")).await;
+    let record = db
+        .system_store()
+        .load_repository_record("app", "main")
+        .await
+        .unwrap()
+        .expect("repository row must survive the move");
+    let path = record.get("path").and_then(|v| v.as_str()).unwrap();
+    assert_eq!(
+        std::path::Path::new(path),
+        moved.join("main.redb"),
+        "repository path must resolve under the moved data directory"
+    );
+    assert!(
+        !original.exists(),
+        "reopening must not recreate stores at the old location"
+    );
+}
+
 #[tokio::test]
 async fn rv_db_55b0a5d9_catalogue_only_function_counts_as_existing() {
     let db = ShamirDb::init_memory().await.unwrap();

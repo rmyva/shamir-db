@@ -70,6 +70,10 @@ pub enum SystemStoreConfig {
 #[derive(Clone)]
 pub struct SystemStore {
     db: DbInstance,
+    /// Data directory holding the durable system store (`None` in memory).
+    /// Repository paths under it are catalogued relative to it, so a moved
+    /// or restored data directory still opens its own stores.
+    pub(super) base_dir: Option<std::path::PathBuf>,
     /// Test seam: a 1-indexed countdown — `arm(n)` makes the n-th SUBSEQUENT
     /// gated catalogue write fail (see `catalogue_write_fault_gate`); armed by
     /// catalogue fault-injection tests.
@@ -155,6 +159,10 @@ impl SystemStore {
         policy: DurabilityPolicy,
     ) -> DbResult<Self> {
         let db = DbInstance::new();
+        let base_dir = match &config {
+            SystemStoreConfig::Fjall(path) => path.parent().map(std::path::Path::to_path_buf),
+            SystemStoreConfig::InMemory => None,
+        };
 
         let factory = match config {
             SystemStoreConfig::InMemory => BoxRepoFactory::in_memory(),
@@ -188,6 +196,7 @@ impl SystemStore {
 
         let store = Self {
             db,
+            base_dir,
             catalogue_write_faults: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             durability_tail_faults: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             #[cfg(test)]

@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use crate::{DbError, DbResult};
 use shamir_types::access::ResourceMeta;
 use shamir_types::types::common::new_map;
@@ -82,6 +84,61 @@ impl SystemStore {
             .collect())
     }
 
+    // Repository paths: catalogued relative to the data directory
+
+    /// Catalogue form of a repository path: relative to the data directory
+    /// (`/`-separated) when it lies under it, so a moved or restored data
+    /// directory still opens its own stores; other paths stay as given.
+    fn catalogue_repo_path(&self, path: &str) -> String {
+        let Some(base) = self.base_dir.as_deref() else {
+            return path.to_string();
+        };
+        match Path::new(path).strip_prefix(base) {
+            Ok(rel) if rel.as_os_str().is_empty() => path.to_string(),
+            Ok(rel) => rel
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/"),
+            Err(_) => path.to_string(),
+        }
+    }
+
+    /// Runtime form of a catalogued repository path: a relative path is
+    /// resolved against the data directory; an absolute one is kept.
+    fn resolved_repo_path(&self, stored: &str) -> String {
+        match self.base_dir.as_deref() {
+            Some(base) if Path::new(stored).is_relative() => {
+                base.join(stored).to_string_lossy().into_owned()
+            }
+            _ => stored.to_string(),
+        }
+    }
+
+    /// Repository record with its `path` in catalogue form.
+    fn catalogue_repo_record(&self, record: QueryValue) -> QueryValue {
+        self.map_repo_path(record, |store, path| store.catalogue_repo_path(path))
+    }
+
+    /// Repository record with its `path` in runtime form.
+    fn resolve_repo_record(&self, record: QueryValue) -> QueryValue {
+        self.map_repo_path(record, |store, path| store.resolved_repo_path(path))
+    }
+
+    fn map_repo_path(
+        &self,
+        mut record: QueryValue,
+        convert: impl Fn(&Self, &str) -> String,
+    ) -> QueryValue {
+        if let QueryValue::Map(map) = &mut record {
+            if let Some(QueryValue::Str(path)) = map.get("path") {
+                let converted = convert(self, path);
+                map.insert("path".to_string(), QueryValue::Str(converted));
+            }
+        }
+        record
+    }
+
     // Repository metadata
 
     /// Save repository metadata. Injects `owner`/`group`/`mode` from `meta`
@@ -97,8 +154,14 @@ impl SystemStore {
         durability: Option<&shamir_query_types::durability::DurabilityOverride>,
     ) -> DbResult<()> {
         self.catalogue_write_fault_gate()?;
+        let catalogued = path.map(|path| self.catalogue_repo_path(path));
         let record = crate::shamir_db::repo_durability::repository_record(
-            db_name, repo_name, engine, path, meta, durability,
+            db_name,
+            repo_name,
+            engine,
+            catalogued.as_deref(),
+            meta,
+            durability,
         );
         let table = self.table(TABLE_REPOSITORIES).await?;
         let op = crate::query::write::SetOp {
@@ -161,7 +224,7 @@ impl SystemStore {
         Ok(result
             .records
             .into_iter()
-            .map(|r| r.as_value().into_owned())
+            .map(|r| self.resolve_repo_record(r.as_value().into_owned()))
             .collect())
     }
 
@@ -550,7 +613,7 @@ impl SystemStore {
             .records
             .into_iter()
             .next()
-            .map(|r| r.as_value().into_owned()))
+            .map(|r| self.resolve_repo_record(r.as_value().into_owned())))
     }
 
     /// Load a single table catalogue record by (db, repo, table).
@@ -614,6 +677,7 @@ impl SystemStore {
 
     /// Persist a replacement repository record (for `set_resource_meta`).
     pub async fn save_repository_meta(&self, record: &QueryValue) -> DbResult<()> {
+        let record = &self.catalogue_repo_record(record.clone());
         let db_name = record
             .get("db_name")
             .and_then(|v| v.as_str())
