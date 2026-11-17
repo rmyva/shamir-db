@@ -441,9 +441,12 @@ def prune_and_check(out_dir):
     cache = os.path.join(out_dir, "cache")
     if os.path.isdir(cache):
         shutil.rmtree(cache)
-    token_txt = os.path.join(out_dir, "bootstrap_token.txt")
-    if os.path.exists(token_txt):
-        os.remove(token_txt)
+    # The bootstrap token and the generated TLS key pair are secrets of the
+    # generator run; the server regenerates TLS material when it is absent.
+    for secret in ("bootstrap_token.txt", "key.pem", "cert.pem"):
+        path = os.path.join(out_dir, secret)
+        if os.path.exists(path):
+            os.remove(path)
     total = 0
     biggest = []
     for root, _dirs, files in os.walk(out_dir):

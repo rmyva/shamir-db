@@ -21,5 +21,6 @@ and committed here by the orchestrator. Regenerate, do not patch.
   `reference-epoch-1-user`, read on `default.main`), plus one access
   token for `ref_user`.
 - An unfinished WAL segment (content not yet checkpointed).
-- A valid `format.stamp` at epoch 1. No `cache/`, no TLS material, no
-  logs; tree size <= ~1 MiB.
+- A valid `format.stamp` at epoch 1. No `cache/`, no TLS material (the
+  server generates it on start), no server logs (the audit trail
+  `audit.log` and its checkpoint store are data); tree size <= ~1 MiB.
