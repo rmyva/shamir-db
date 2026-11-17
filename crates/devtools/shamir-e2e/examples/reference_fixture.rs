@@ -67,7 +67,8 @@ async fn run() -> Result<(), String> {
     let args = Args::parse()?;
     let creds = Credentials::read(&args.credentials_file)?;
 
-    let client = Client::connect(ConnectOptions {
+    // The generator's TCP listener is the loopback-only plain profile.
+    let client = Client::connect_plain(ConnectOptions {
         addr: args.addr,
         server_name: "localhost".into(),
         username: creds.username,
