@@ -20,6 +20,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use zeroize::Zeroizing;
 
@@ -93,19 +94,7 @@ async fn run() -> Result<(), String> {
 /// The compatibility test reads `ref_schema_basic` as `ref_user`; prove
 /// the rights allow it before the directory is captured.
 async fn verify_ref_user(addr: SocketAddr) -> Result<(), String> {
-    let client = Client::connect_plain(ConnectOptions {
-        addr,
-        server_name: "localhost".into(),
-        username: REF_USER.into(),
-        password: Zeroizing::new(REF_USER_PASSWORD.as_bytes().to_vec()),
-        accept_new_host: true,
-        trusted_pin: None,
-        connect_timeout: None,
-        handshake_timeout: None,
-        request_timeout: None,
-    })
-    .await
-    .map_err(|e| format!("ref_user connect failed: {e}"))?;
+    let client = connect_ref_user(addr).await?;
     let mut batch = Batch::new();
     batch.id("fixture-ref-user");
     batch.query("read-basic", Query::from(BASIC_TABLE).order_by_asc("n"));
@@ -126,6 +115,40 @@ async fn verify_ref_user(addr: SocketAddr) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// Accept-time rate-limit attempts before the ref_user login is a failure.
+const REF_USER_CONNECT_ATTEMPTS: u32 = 5;
+
+/// Connect as ref_user, retrying while the server drops the connection
+/// before the challenge: the admin session just used the same subnet's
+/// accept budget (rate limiter §8.6), which refills within about a second.
+async fn connect_ref_user(addr: SocketAddr) -> Result<Client, String> {
+    let mut last_error = String::new();
+    for attempt in 1..=REF_USER_CONNECT_ATTEMPTS {
+        match Client::connect_plain(ConnectOptions {
+            addr,
+            server_name: "localhost".into(),
+            username: REF_USER.into(),
+            password: Zeroizing::new(REF_USER_PASSWORD.as_bytes().to_vec()),
+            accept_new_host: true,
+            trusted_pin: None,
+            connect_timeout: None,
+            handshake_timeout: None,
+            request_timeout: None,
+        })
+        .await
+        {
+            Ok(client) => return Ok(client),
+            Err(e) => last_error = e.to_string(),
+        }
+        if attempt < REF_USER_CONNECT_ATTEMPTS {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
+    Err(format!(
+        "ref_user connect failed {REF_USER_CONNECT_ATTEMPTS} times: {last_error}"
+    ))
 }
 
 // ═══════════════════════════════════════════════════════════════════════
