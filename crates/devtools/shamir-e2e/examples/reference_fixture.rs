@@ -366,6 +366,18 @@ async fn apply_admin(client: &Client) -> Result<(), String> {
     let mut batch = Batch::new();
     batch.id("fixture-admin");
 
+    // chmod database default → 0o755 (493): ref_user reads through it.
+    let database = ddl::res::database(DB);
+    batch.chmod(
+        "chmod-db",
+        signed(client, &unsigned_chmod(database.clone(), 493), |tag| {
+            ddl::chmod(database, 493)
+                .hmac(tag)
+                .build()
+                .map_err(|e| e.to_string())
+        })?,
+    );
+
     // chmod store default/main → 0o644 (420).
     let store = ddl::res::store(DB, REPO);
     batch.chmod(
