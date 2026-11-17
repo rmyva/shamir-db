@@ -362,17 +362,37 @@ fn assert_views_equal(committed: &SemanticView, fresh: &SemanticView) {
     assert_eq!(committed.stamp_epoch, fresh.stamp_epoch, "stamp epoch");
 }
 
-/// Drive a SCRAM client through to authentication (same flow as
-/// e2e/core/persistence_e2e.rs).
-async fn login(
-    addr: SocketAddr,
-    username: &str,
-    password: &[u8],
-) -> (
+/// Logged-in session halves and the session id.
+type Session = (
     ReadHalf<tokio_rustls::client::TlsStream<TcpStream>>,
     WriteHalf<tokio_rustls::client::TlsStream<TcpStream>>,
     [u8; 32],
-) {
+);
+
+/// Accept-time rate-limit attempts before a login is a failure.
+const LOGIN_ATTEMPTS: u32 = 5;
+
+/// Log in, retrying while the server drops the connection before the
+/// challenge. The reference directory carries the generator's persisted
+/// per-subnet rate-limit buckets, and the boot warmup (rate limiter §8.6)
+/// throttles that subnet for about a second after start — designed
+/// behaviour, so the test waits it out instead of failing.
+async fn login(addr: SocketAddr, username: &str, password: &[u8]) -> Session {
+    for attempt in 1..=LOGIN_ATTEMPTS {
+        if let Some(session) = login_once(addr, username, password).await {
+            return session;
+        }
+        if attempt < LOGIN_ATTEMPTS {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
+    panic!("login {username}: connection dropped before the challenge {LOGIN_ATTEMPTS} times");
+}
+
+/// Drive a SCRAM client through to authentication (same flow as
+/// e2e/core/persistence_e2e.rs). `None` when the server closes the
+/// connection before sending the challenge (accept-time rate limit).
+async fn login_once(addr: SocketAddr, username: &str, password: &[u8]) -> Option<Session> {
     let user = NormalizedUsername::from_raw(username).expect("username");
     let client_cfg =
         make_client_config_app_authenticated(AppLayerServerAuth::exporter_bound()).unwrap();
@@ -404,9 +424,7 @@ async fn login(
         .await
         .expect("send auth_init");
 
-    let ch_bytes = read_frame(&mut r, MAX_FRAME_SIZE_DEFAULT)
-        .await
-        .expect("read challenge");
+    let ch_bytes = read_frame(&mut r, MAX_FRAME_SIZE_DEFAULT).await.ok()?;
     let ch_wire: WireChallenge = rmp_serde::from_slice(&ch_bytes).unwrap();
     let mut salt = [0u8; 16];
     salt.copy_from_slice(&ch_wire.salt);
@@ -461,7 +479,7 @@ async fn login(
         .process_auth_ok(&auth_ok, &derived, &am, |_pin| {})
         .expect("process auth_ok");
 
-    (r, w, session_id)
+    Some((r, w, session_id))
 }
 
 async fn roundtrip<R, W>(
