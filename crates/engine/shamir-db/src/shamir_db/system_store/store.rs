@@ -56,6 +56,8 @@ pub(super) const TABLE_PUBLICATIONS: &str = "publications";
 /// carries `upstream`/`publication`/`profile`/`state` (386-a). The follower
 /// pull-loop that consumes these is 386-b.
 pub(super) const TABLE_SUBSCRIPTIONS: &str = "subscriptions";
+/// Append-only application schema migration event records.
+pub(super) const TABLE_SCHEMA_MIGRATION_EVENTS: &str = "schema_migration_events";
 
 /// Configuration for the system store.
 #[derive(Clone)]
@@ -70,6 +72,11 @@ pub enum SystemStoreConfig {
 #[derive(Clone)]
 pub struct SystemStore {
     db: DbInstance,
+    durable_journal: bool,
+    /// Shared admin-operation admission for cloned SystemStore handles. This does not serialize
+    /// migrations across databases or processes; the durable per-database CAS control record is
+    /// the fencing authority. Server-wide lifetime admission belongs to step 2b.
+    schema_migration_admin: Arc<tokio::sync::Mutex<()>>,
     /// Test seam: a 1-indexed countdown — `arm(n)` makes the n-th SUBSEQUENT
     /// gated catalogue write fail (see `catalogue_write_fault_gate`); armed by
     /// catalogue fault-injection tests.
@@ -156,6 +163,7 @@ impl SystemStore {
     ) -> DbResult<Self> {
         let db = DbInstance::new();
 
+        let durable_journal = matches!(&config, SystemStoreConfig::Fjall(_));
         let factory = match config {
             SystemStoreConfig::InMemory => BoxRepoFactory::in_memory(),
             #[cfg(feature = "fjall")]
@@ -181,13 +189,27 @@ impl SystemStore {
             .add_table(TableConfig::new(TABLE_FUNCTION_FOLDERS))
             .add_table(TableConfig::new(TABLE_REPLICATION_PROFILES))
             .add_table(TableConfig::new(TABLE_PUBLICATIONS))
-            .add_table(TableConfig::new(TABLE_SUBSCRIPTIONS));
+            .add_table(TableConfig::new(TABLE_SUBSCRIPTIONS))
+            .add_table(TableConfig::new(TABLE_SCHEMA_MIGRATION_EVENTS).with_indexes());
 
         // DbInstance recovers/certifies before exposing the system repo.
         db.add_repo_with_durability(repo_config, policy).await?;
+        let journal = db
+            .get_table(SYSTEM_REPO, TABLE_SCHEMA_MIGRATION_EVENTS)
+            .await?;
+        if !journal
+            .unique_index_exists("schema_migration_record_key")
+            .await
+        {
+            journal
+                .create_unique_index("schema_migration_record_key", &["record_key"])
+                .await?;
+        }
 
         let store = Self {
             db,
+            durable_journal,
+            schema_migration_admin: Arc::new(tokio::sync::Mutex::new(())),
             catalogue_write_faults: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             durability_tail_faults: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             #[cfg(test)]
@@ -525,6 +547,47 @@ impl SystemStore {
             Box::pin(async move {
                 owned_table
                     .execute_set_tx(&owned_op, tx, None, &Actor::System)
+                    .await
+            })
+        })
+        .await
+        .map_err(|e| DbError::Internal(e.to_string()))
+    }
+
+    /// Refuse schema-migration journal writes on an in-memory system store.
+    pub(crate) fn require_durable_schema_migration_store(&self) -> DbResult<()> {
+        if self.durable_journal {
+            Ok(())
+        } else {
+            Err(DbError::Storage(
+                "schema migration journal requires a persistent system store".into(),
+            ))
+        }
+    }
+
+    pub(crate) async fn schema_migration_admin_lock(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.schema_migration_admin.lock().await
+    }
+
+    /// Route a single non-tx UPDATE through the implicit-tx file-WAL
+    /// path. Maps the [`BatchError`] surfaced by the implicit tx onto a [`DbError`].
+    pub(crate) async fn update_via_implicit_tx(
+        &self,
+        table: &TableManager,
+        op: &crate::query::write::UpdateOp,
+    ) -> DbResult<crate::query::write::WriteResult> {
+        let repo = self.system_repo()?;
+        let owned_op = op.clone();
+        let owned_table = table.clone();
+        repo.run_implicit_batch_tx(Actor::System, "", move |tx| {
+            Box::pin(async move {
+                let refs = crate::types::common::new_map();
+                let ctx = owned_table
+                    .info_store_read_view()
+                    .filter_context(&refs)
+                    .await?;
+                owned_table
+                    .execute_update_tx(&owned_op, &ctx, tx, None, &Actor::System)
                     .await
             })
         })

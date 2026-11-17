@@ -8,6 +8,7 @@ use crate::engine::repo::durability_policy::{effective_wal_segment_bytes, resolv
 use crate::engine::repo::RepoConfig;
 use crate::shamir_db::repo_durability::durability_from_record;
 use crate::shamir_db::shamir_db::ReplicationControlGuard;
+use crate::shamir_db::system_store::DatabaseIdentity;
 use crate::types::value::QueryValue;
 use crate::{DbError, DbResult};
 
@@ -97,6 +98,10 @@ impl ShamirDb {
         m.insert(
             "name".to_string(),
             shamir_types::types::value::QueryValue::Str(name.to_string()),
+        );
+        m.insert(
+            "identity".to_string(),
+            QueryValue::Str(DatabaseIdentity::new().to_string()),
         );
         m.insert(
             "created_at".to_string(),

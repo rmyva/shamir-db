@@ -53,7 +53,9 @@ pub(in crate::shamir_db) const SYSTEM_DB_NAME: &str = "__system__";
 use crate::engine::migration::MigrationCoordinator;
 use crate::engine::repo::{BoxRepoFactory, DurabilityPolicy, RepoConfig};
 use crate::shamir_db::execute::ResyncQuarantineCache;
-use crate::shamir_db::system_store::table_config_from_catalogue_record;
+use crate::shamir_db::system_store::{
+    ensure_database_identity, table_config_from_catalogue_record,
+};
 
 use super::super::ports::{PrincipalResolver, UserAdminPort};
 use super::super::repo_durability::durability_from_record;
@@ -396,6 +398,13 @@ impl ShamirDb {
         }
         // Load existing databases from system store
         let db_records = shamir.system_store.load_databases().await?;
+        for record in &db_records {
+            if let Some(name) = record["name"].as_str() {
+                if name != SYSTEM_DB_NAME {
+                    ensure_database_identity(&shamir.system_store, name).await?;
+                }
+            }
+        }
         for record in &db_records {
             if let Some(name) = record["name"].as_str() {
                 if name != SYSTEM_DB_NAME {

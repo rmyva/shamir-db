@@ -1,10 +1,12 @@
 use crate::{DbError, DbResult};
+use futures::StreamExt;
 use shamir_types::access::ResourceMeta;
 use shamir_types::types::common::new_map;
 use shamir_types::types::value::QueryValue;
 
 use crate::access::Actor;
 use crate::engine::repo::RenamePersistOutcome;
+use crate::engine::table::record_cow::RecordCow;
 
 use super::super::store::{qv_map1, qv_map2, TABLE_DATABASES, TABLE_REPOSITORIES, TABLE_TABLES};
 use super::super::SystemStore;
@@ -490,6 +492,95 @@ impl SystemStore {
     // ---------------------------------------------------------------------------
     // Record lookups
     // ---------------------------------------------------------------------------
+
+    /// Read a database catalogue row with its stable primary key and MVCC version.
+    pub(crate) async fn database_row_with_version(
+        &self,
+        name: &str,
+    ) -> DbResult<(
+        Option<QueryValue>,
+        Option<shamir_types::types::record_id::RecordId>,
+        u64,
+    )> {
+        let table = self.table(TABLE_DATABASES).await?;
+        let refs = crate::types::common::new_map();
+        let ctx = table.info_store_read_view().filter_context(&refs).await?;
+        let mut query = crate::query::read::ReadQuery::new(TABLE_DATABASES).filter(
+            crate::query::filter::Filter::Eq {
+                field: vec!["name".to_string()],
+                value: crate::query::filter::FilterValue::String(name.to_string()),
+            },
+        );
+        query.with_version = true;
+        query.select = crate::query::read::Select::fields(["name", "identity"]);
+        let result = table.read(&query, &ctx).await?;
+        if !result.corrupt_records.is_empty() || result.records.len() > 1 {
+            return Err(DbError::Internal(format!(
+                "corrupt database '{name}' catalogue records"
+            )));
+        }
+        let projected = result
+            .records
+            .first()
+            .map(|row| row.as_value().into_owned());
+        let versions = result.versions.as_ref().ok_or_else(|| {
+            DbError::Internal(format!(
+                "database '{name}' catalogue read returned no MVCC versions"
+            ))
+        })?;
+        let version = match versions.as_slice() {
+            [version] if projected.is_some() => *version,
+            [] if projected.is_none() => 0,
+            _ => {
+                return Err(DbError::Internal(format!(
+                    "corrupt database '{name}' catalogue version rows"
+                )))
+            }
+        };
+        let interner = table.info_store_read_view().interner_read_view().await?;
+        let mut stream = Box::pin(table.list_stream(256));
+        while let Some(batch) = stream.next().await {
+            for (record_id, row) in batch? {
+                let value = match row {
+                    RecordCow::Borrowed(bytes) => {
+                        let inner = shamir_types::types::value::InnerValue::from_bytes(bytes)
+                            .map_err(|error| {
+                                DbError::Internal(format!(
+                                    "corrupt database catalogue row {record_id}: {error}"
+                                ))
+                            })?;
+                        interner.inner_to_query_value(&inner).map_err(|error| {
+                            DbError::Internal(format!(
+                                "corrupt database catalogue row {record_id}: {error}"
+                            ))
+                        })?
+                    }
+                    RecordCow::Owned(inner) => {
+                        interner.inner_to_query_value(&inner).map_err(|error| {
+                            DbError::Internal(format!(
+                                "corrupt database catalogue row {record_id}: {error}"
+                            ))
+                        })?
+                    }
+                };
+                if value.get("name").and_then(QueryValue::as_str) != Some(name) {
+                    continue;
+                }
+                if projected.as_ref().and_then(|record| record.get("name")) != value.get("name")
+                    || projected.as_ref().and_then(|record| record.get("identity"))
+                        != value.get("identity")
+                {
+                    return Err(DbError::Validation(format!(
+                        "database '{name}' catalogue row changed during identity lookup"
+                    )));
+                }
+                return Ok((Some(value), Some(record_id), version));
+            }
+        }
+        Err(DbError::Validation(format!(
+            "database '{name}' disappeared during identity lookup"
+        )))
+    }
 
     /// Load a single database record by name.
     pub async fn load_database(&self, name: &str) -> DbResult<Option<QueryValue>> {
