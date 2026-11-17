@@ -50,7 +50,7 @@ without a directory-sync guarantee; power-loss durability remains limited.
   modes, plus explicit ACL items. Their ResourceRef.object is `root_meta` or
   `fn_namespace_meta`; step 1 imposes no separate object namespace validator.
   A real driver/step-1 verifier regression fixture includes both settings.
-* Database creation times, physical paths/store IDs, replication configuration,
+* Database creation times, database identities (node-local), physical paths/store IDs, replication configuration,
   retired users/roles, tokens, counters and native caches are excluded by design.
 
 ## Deliberate fail-closed limitations / follow-up families

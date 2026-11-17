@@ -206,9 +206,11 @@ async fn write_export(
                 }
                 match family {
                     "databases" => {
+                        // `identity` is the node-local database identity; it is
+                        // not exported, the importer assigns a new one.
                         fields(
                             &row,
-                            &["name", "created_at", "owner", "group", "mode"],
+                            &["name", "created_at", "identity", "owner", "group", "mode"],
                             "database",
                         )?;
                         let (owner, group, mode) =
