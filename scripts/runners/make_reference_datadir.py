@@ -496,11 +496,10 @@ def rest_ping(port, token):
     status, payload = http_post(port, "/shamir/v1/ping", token, b"", "GET")
     require(status == 200, f"ping failed: HTTP {status}: "
                            f"{_payload_repr(payload)}")
-    # DbRequest::Ping encodes to the bare msgpack string "ping"; the answer
-    # DbResponse::Pong is likewise the bare string "pong" (internally-tagged
-    # unit variants — db_message.rs:57-59, :349-354).
+    # DbResponse is internally tagged by "kind": the unit variant Pong is the
+    # map {"kind": "pong"} (observed in CI).
     decoded = mp_decode(payload)
-    require(decoded == "pong",
+    require(isinstance(decoded, dict) and decoded.get("kind") == "pong",
             f"ping did not answer pong: {_payload_repr(payload)}")
 
 
