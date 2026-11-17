@@ -214,13 +214,37 @@ async fn apply_ddl(client: &Client) -> Result<(), String> {
             ddl::field(["n"]).int().build(),
         ]),
     );
+    // `create_table` stores the schema at version 0; each `set_table_schema`
+    // bumps it by one. The compatibility test expects basic >= 1, versioned > 1.
     batch.set_table_schema(
-        "bump-versioned",
+        "bump-basic",
+        ddl::set_table_schema(BASIC_TABLE)
+            .repo(REPO)
+            .rules([
+                ddl::field(["k"]).string().required().build(),
+                ddl::field(["n"]).int().build(),
+                ddl::field(["vec"]).list().array_of("f64").build(),
+            ])
+            .expected_version(0),
+    );
+    batch.set_table_schema(
+        "bump-versioned-1",
         ddl::set_table_schema(VERSIONED_TABLE)
             .repo(REPO)
             .rules([
                 ddl::field(["k"]).string().required().build(),
                 ddl::field(["n"]).int().build(),
+            ])
+            .expected_version(0),
+    );
+    batch.set_table_schema(
+        "bump-versioned-2",
+        ddl::set_table_schema(VERSIONED_TABLE)
+            .repo(REPO)
+            .rules([
+                ddl::field(["k"]).string().required().build(),
+                ddl::field(["n"]).int().build(),
+                ddl::field(["note"]).string().build(),
             ])
             .expected_version(1),
     );
