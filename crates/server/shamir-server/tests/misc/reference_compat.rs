@@ -53,6 +53,7 @@ use shamir_sync::format_stamp::{
 };
 
 use crate::common::{make_test_config, spawn_with_password};
+use shamir_test_diag::{try_install_global_tracing_ring, FlakeGuard};
 
 /// Bootstrap password of the fixture's `admin` superuser (see the
 /// fixture README contract).
@@ -618,13 +619,20 @@ fn index_names_of(desc: &QueryValue) -> Vec<String> {
 /// surviving the open prove the WAL was recovered).
 async fn open_and_observe(data_dir: &TempDir) -> SemanticView {
     let mut view = SemanticView::default();
+    // Failure-only evidence: the server's tracing events say why a login
+    // was dropped (the client only sees the connection close).
+    try_install_global_tracing_ring();
+    let guard = FlakeGuard::new("reference_compat open_and_observe");
 
     let handle = spawn_with_password(data_dir, FIXTURE_ADMIN_PASSWORD, "127.0.0.1:0").await;
     let addr = handle.first_tls_exporter_addr().expect("bound addr");
+    guard.mark("server started");
 
     // Admin: rows, schema, indexes, functions, rights tree.
     {
+        guard.mark("admin login");
         let (mut r, mut w, sid) = login(addr, "admin", FIXTURE_ADMIN_PASSWORD).await;
+        guard.mark("admin logged in");
         let resp = execute(read_req("ref_schema_basic"), sid, 1, &mut w, &mut r).await;
         view.basic_rows = rows_of(&resp, "rd");
         let resp = execute(read_req("ref_schema_versioned"), sid, 2, &mut w, &mut r).await;
@@ -658,7 +666,9 @@ async fn open_and_observe(data_dir: &TempDir) -> SemanticView {
 
     // Secondary principal: authentication + rights over the wire.
     {
+        guard.mark("ref_user login");
         let (mut r, mut w, sid) = login(addr, "ref_user", FIXTURE_REF_USER_PASSWORD).await;
+        guard.mark("ref_user logged in");
         let resp = execute(read_req("ref_schema_basic"), sid, 1, &mut w, &mut r).await;
         view.ref_user_rows_ok = rows_of(&resp, "rd") == view.basic_rows;
         let _ = w.shutdown().await;
