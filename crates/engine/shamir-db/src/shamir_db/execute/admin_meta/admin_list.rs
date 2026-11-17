@@ -8,7 +8,7 @@ use crate::types::value::QueryValue;
 use shamir_types::mpack;
 
 use super::admin_dispatch::ShamirAdminExecutor;
-use super::helpers::admin_result;
+use super::helpers::{admin_result, index2_kind};
 
 impl ShamirAdminExecutor {
     pub(super) async fn handle_list(&self, list_op: &ListOp) -> Result<QueryResult, BatchError> {
@@ -149,6 +149,25 @@ impl ShamirAdminExecutor {
                         .map(|arc| arc.to_string())
                         .unwrap_or_else(|| def.name_interned.to_string());
                     indexes.push(mpack!({"name": @(QueryValue::Str(name)), "unique": true}));
+                }
+                for def in tm.sorted_index_definitions() {
+                    let name = names
+                        .get_str(&crate::core::interner::InternerKey::new(def.name_interned))
+                        .map(|arc| arc.to_string())
+                        .unwrap_or_else(|| def.name_interned.to_string());
+                    indexes.push(mpack!({
+                        "name": @(QueryValue::Str(name)),
+                        "unique": false,
+                        "kind": @(QueryValue::Str("sorted".to_owned())),
+                    }));
+                }
+                for desc in tm.index2_descriptors().await {
+                    let (kind, unique) = index2_kind(&desc.kind);
+                    indexes.push(mpack!({
+                        "name": @(QueryValue::Str(desc.name)),
+                        "unique": @(QueryValue::Bool(unique)),
+                        "kind": @(kind),
+                    }));
                 }
 
                 Ok(admin_result(mpack!({

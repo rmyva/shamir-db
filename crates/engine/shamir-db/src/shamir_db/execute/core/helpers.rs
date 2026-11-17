@@ -6,7 +6,19 @@ use crate::query::read::{QueryRecord, QueryResult, QueryStats};
 use crate::query::FilterValue;
 use crate::types::common::TMap;
 use crate::types::value::QueryValue;
+use shamir_engine::index2::kind::IndexKind;
 use shamir_types::types::record_id::RecordId;
+
+/// Kind label and uniqueness of an index2-registry index (DESCRIBE / LIST).
+pub(super) fn index2_kind(kind: &IndexKind) -> (QueryValue, bool) {
+    let (label, unique) = match kind {
+        IndexKind::Btree { unique } => ("btree", *unique),
+        IndexKind::Fts { .. } => ("fulltext", false),
+        IndexKind::Functional(_) => ("functional", false),
+        IndexKind::Vector(_) => ("vector", false),
+    };
+    (QueryValue::Str(label.to_owned()), unique)
+}
 
 /// Construct a `QueryResult` for a successful admin operation.
 pub(super) fn admin_result(data: QueryValue) -> QueryResult {

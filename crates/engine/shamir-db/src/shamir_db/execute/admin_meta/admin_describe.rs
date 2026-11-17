@@ -10,7 +10,7 @@ use shamir_types::core::interner::InternerKey;
 use shamir_types::mpack;
 
 use super::admin_dispatch::ShamirAdminExecutor;
-use super::helpers::{admin_result, dto_from_storage, to_qv};
+use super::helpers::{admin_result, dto_from_storage, index2_kind, to_qv};
 use super::schema_codec::{dto_list_from_catalogue, serialise_rules_flat};
 
 fn err_code(code: &str, msg: impl Into<String>) -> BatchError {
@@ -107,6 +107,25 @@ impl ShamirAdminExecutor {
                 .map(|arc| arc.to_string())
                 .unwrap_or_else(|| def.name_interned.to_string());
             indexes.push(mpack!({"name": @(QueryValue::Str(name)), "unique": true}));
+        }
+        for def in tm.sorted_index_definitions() {
+            let name = interner
+                .get_str(&InternerKey::new(def.name_interned))
+                .map(|arc| arc.to_string())
+                .unwrap_or_else(|| def.name_interned.to_string());
+            indexes.push(mpack!({
+                "name": @(QueryValue::Str(name)),
+                "unique": false,
+                "kind": @(QueryValue::Str("sorted".to_owned())),
+            }));
+        }
+        for desc in tm.index2_descriptors().await {
+            let (kind, unique) = index2_kind(&desc.kind);
+            indexes.push(mpack!({
+                "name": @(QueryValue::Str(desc.name)),
+                "unique": @(QueryValue::Bool(unique)),
+                "kind": @(kind),
+            }));
         }
 
         // ── 3. Validators ────────────────────────────────────────────
