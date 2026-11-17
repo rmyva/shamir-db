@@ -82,6 +82,8 @@ pub struct SystemStore {
     /// catalogue fault-injection tests.
     catalogue_write_faults: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     durability_tail_faults: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Test seam: durable tails that pass before `durability_tail_faults` starts failing.
+    durability_tail_skips: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     #[cfg(test)]
     table_catalogue_reads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     #[cfg(test)]
@@ -131,7 +133,30 @@ impl SystemStore {
             .store(n, std::sync::atomic::Ordering::SeqCst);
     }
 
+    /// Let the next `skip` durable tails pass, then fail the following `n` of them.
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    pub fn arm_durability_tail_faults_after(&self, skip: usize, n: usize) {
+        self.durability_tail_skips
+            .store(skip, std::sync::atomic::Ordering::SeqCst);
+        self.arm_durability_tail_faults(n);
+    }
+
     fn durability_tail_fault_gate(&self) -> DbResult<()> {
+        let mut skips = self
+            .durability_tail_skips
+            .load(std::sync::atomic::Ordering::SeqCst);
+        while skips != 0 {
+            match self.durability_tail_skips.compare_exchange(
+                skips,
+                skips - 1,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            ) {
+                Ok(_) => return Ok(()),
+                Err(actual) => skips = actual,
+            }
+        }
         let mut remaining = self
             .durability_tail_faults
             .load(std::sync::atomic::Ordering::SeqCst);
@@ -212,6 +237,7 @@ impl SystemStore {
             schema_migration_admin: Arc::new(tokio::sync::Mutex::new(())),
             catalogue_write_faults: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             durability_tail_faults: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            durability_tail_skips: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             #[cfg(test)]
             table_catalogue_reads: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             #[cfg(test)]

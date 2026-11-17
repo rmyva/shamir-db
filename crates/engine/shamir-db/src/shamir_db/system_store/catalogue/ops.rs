@@ -12,6 +12,15 @@ use super::super::store::{qv_map1, qv_map2, TABLE_DATABASES, TABLE_REPOSITORIES,
 use super::super::SystemStore;
 use super::rename_key::TableRenameKey;
 
+/// The `identity` field of a database row, or `None` when absent. A legacy row
+/// has no identity: a projection may report it as Null while the full row omits
+/// the field — both mean "absent".
+fn present_identity(record: Option<&QueryValue>) -> Option<&QueryValue> {
+    record
+        .and_then(|record| record.get("identity"))
+        .filter(|identity| !matches!(identity, QueryValue::Null))
+}
+
 fn table_catalogue_key(db_name: &str, repo_name: &str, table_name: &str) -> QueryValue {
     let mut key = new_map();
     key.insert("db_name".into(), QueryValue::Str(db_name.into()));
@@ -567,8 +576,7 @@ impl SystemStore {
                     continue;
                 }
                 if projected.as_ref().and_then(|record| record.get("name")) != value.get("name")
-                    || projected.as_ref().and_then(|record| record.get("identity"))
-                        != value.get("identity")
+                    || present_identity(projected.as_ref()) != present_identity(Some(&value))
                 {
                     return Err(DbError::Validation(format!(
                         "database '{name}' catalogue row changed during identity lookup"

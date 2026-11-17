@@ -266,9 +266,9 @@ fn durable_tail_failure_does_not_acknowledge_started_migration() {
             .unwrap();
         let migration = body("alpha-001", 1);
         // Acquire performs one read-tail flush before its transaction and a
-        // second tail flush after commit. Arm the 2nd gate to model the
-        // uncertain post-commit durability window, not the preflight flush.
-        db.system_store().arm_durability_tail_faults(2);
+        // second tail flush after commit. Let the preflight pass and fail only
+        // the post-commit tail: the uncertain durability window.
+        db.system_store().arm_durability_tail_faults_after(1, 1);
         let result = db
             .system_store()
             .acquire_schema_migration_fence(
