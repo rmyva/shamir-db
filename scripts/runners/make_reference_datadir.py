@@ -442,6 +442,18 @@ def wait_ready(port):
                        f"within {READY_TIMEOUT_SECS}s")
 
 
+def _payload_repr(payload):
+    """Truncated repr of a server payload for error messages; hex fallback
+    when the bytes are not valid msgpack."""
+    if not payload:
+        return "<empty body>"
+    try:
+        text = repr(mp_decode(payload))
+    except (FixtureError, IndexError, UnicodeDecodeError, struct.error):
+        return "hex " + payload[:32].hex()
+    return text[:300]
+
+
 # ---------------------------------------------------------------------------
 # HTTP REST client
 # ---------------------------------------------------------------------------
@@ -460,6 +472,10 @@ def http_post(port, path, token, body, method="POST"):
 
 
 def rest_execute(port, token, batch):
+    # Wire shape: DbRequest::Execute — an internally-tagged ("op", snake_case)
+    # serde enum (db_message.rs:52-58). Response is DbResponse, internally
+    # tagged ("kind", snake_case): Batch success is {"kind": "batch",
+    # "response": BatchResponse} (db_message.rs:349-372).
     request = {
         "op": "execute",
         "query_version": QUERY_VERSION,
@@ -469,17 +485,23 @@ def rest_execute(port, token, batch):
     status, payload = http_post(port, "/shamir/v1/request", token,
                                 mp_encode(request))
     require(status == 200, f"REST request failed: HTTP {status}: "
-                           f"{mp_decode(payload) if payload else ''}")
+                           f"{_payload_repr(payload)}")
     decoded = mp_decode(payload)
-    require(isinstance(decoded, dict) and decoded.get("op") == "batch",
-            f"unexpected REST response: {decoded}")
+    require(isinstance(decoded, dict) and decoded.get("kind") == "batch",
+            f"unexpected REST response: {_payload_repr(payload)}")
     return decoded["response"]
 
 
 def rest_ping(port, token):
     status, payload = http_post(port, "/shamir/v1/ping", token, b"", "GET")
-    require(status == 200, f"ping failed: HTTP {status}")
-    require(mp_decode(payload).get("op") == "pong", "ping did not answer pong")
+    require(status == 200, f"ping failed: HTTP {status}: "
+                           f"{_payload_repr(payload)}")
+    # DbRequest::Ping encodes to the bare msgpack string "ping"; the answer
+    # DbResponse::Pong is likewise the bare string "pong" (internally-tagged
+    # unit variants — db_message.rs:57-59, :349-354).
+    decoded = mp_decode(payload)
+    require(decoded == "pong",
+            f"ping did not answer pong: {_payload_repr(payload)}")
 
 
 def run_batch(port, token, alias, op, expect_records=None):
@@ -487,13 +509,14 @@ def run_batch(port, token, alias, op, expect_records=None):
              "return_all": True}
     response = rest_execute(port, token, batch)
     results = response.get("results", {})
-    require(alias in results, f"batch '{alias}' missing result: {response}")
+    require(alias in results, f"batch '{alias}' missing result: "
+                              f"{_payload_repr(mp_encode(response))}")
     result = results[alias]
     if expect_records is not None:
         records = result.get("records", [])
         require(len(records) == expect_records,
                 f"batch '{alias}': expected {expect_records} records, "
-                f"got {len(records)}")
+                f"got {len(records)}: {_payload_repr(mp_encode(result))}")
     return result
 
 
@@ -578,49 +601,78 @@ class TokenWs:
             head += bytes([0x80 | 127]) + struct.pack(">Q", n)
         self.sock.sendall(head + mask + masked)
 
-    def request(self, request, signed_canonical=None):
-        body = mp_encode(request)
-        if signed_canonical is not None:
+    def request(self, request, canonical=None):
+        # Per-frame envelope: RequestEnvelope { sid: bin(32), rid: Option<u32>,
+        # req: bin(DbRequest) } (shamir-connect envelope.rs:21-38). The HMAC
+        # tag rides INSIDE the DbRequest variant as its `hmac` hex field —
+        # e.g. CreateScramUser { name, password, roles, hmac } — never on the
+        # envelope (db_message.rs:82-107).
+        if canonical is not None:
             request = dict(request)
-            request["hmac"] = tag_hex(self.key, signed_canonical)
-            body = mp_encode(request)
+            request["hmac"] = tag_hex(self.key, canonical)
         self.rid += 1
         rid = self.rid
-        envelope = {"sid": self.sid, "rid": rid, "req": body}
+        envelope = {"sid": self.sid, "rid": rid,
+                    "req": mp_encode(request)}
         self._send_frame(0x2, mp_encode(envelope))
-        response = mp_decode(self._next_frame())
+        raw = self._next_frame()
+        response = mp_decode(raw)
         require(isinstance(response, dict) and response.get("rid") == rid,
-                f"WS envelope mismatch: {response}")
+                f"WS envelope mismatch: {_payload_repr(raw)}")
         require("error" not in response, f"WS request error: {response}")
-        decoded = mp_decode(response["res"])
+        inner = response.get("res")
+        require(isinstance(inner, bytes),
+                f"WS response without res bin: {_payload_repr(raw)}")
+        decoded = mp_decode(inner)
+        # DbResponse is internally tagged ("kind", snake_case); a DB failure
+        # is a normal reply {"kind": "error", "code", "message"}
+        # (db_message.rs:349-354, :412-449).
         require(isinstance(decoded, dict),
-                f"unexpected WS response payload: {decoded}")
-        require(decoded.get("op") != "error",
-                f"WS request failed: {decoded}")
+                f"unexpected WS response payload: {_payload_repr(inner)}")
+        require(decoded.get("kind") != "error",
+                f"WS request failed: {_payload_repr(inner)}")
         return decoded
 
     def ws_execute(self, alias, op, canonical=None):
+        # BatchRequest { id: QueryValue, queries: {alias: BatchOp},
+        # return_all } — batch_request.rs:55-100; the response Batch variant
+        # carries the full BatchResponse whose `results` map is keyed by
+        # alias (batch_response.rs:52-58).
+        if canonical is not None:
+            op = dict(op)
+            op["hmac"] = tag_hex(self.key, canonical)
         batch = {"id": f"fixture-{alias}", "queries": {alias: op},
                  "return_all": True}
         request = {"op": "execute", "query_version": QUERY_VERSION,
                    "db": "default", "batch": batch}
-        response = self.request(request, signed_canonical=canonical)
-        require(response.get("op") == "batch",
-                f"WS execute '{alias}' unexpected response: {response}")
+        response = self.request(request)
+        require(response.get("kind") == "batch",
+                f"WS execute '{alias}' unexpected response: "
+                f"{response}")
         results = response["response"].get("results", {})
-        require(alias in results, f"WS execute '{alias}' missing result")
+        require(alias in results, f"WS execute '{alias}' missing result: "
+                                  f"{response}")
         return results[alias]
 
     def create_scram_user(self, name, password, roles):
+        # DbRequest::CreateScramUser { name, password, roles, hmac }
+        # (db_message.rs:82-107); HMAC canonical v2 grammar: tag 0x0019 +
+        # str(name) + list(roles) (hmac.rs:691-697), keyed by
+        # SHA256("shamir-db hmac key v1\0" || sid) (hmac.rs:793-803).
         canonical = canonical_bytes(TAG_CREATE_SCRAM_USER)
         canonical += _canon_str(name)
         canonical += _canon_list(roles)
         request = {"op": "create_scram_user", "name": name,
                    "password": password, "roles": roles}
-        response = self.request(request, signed_canonical=canonical)
-        require(response.get("op") == "user_created",
+        response = self.request(request, canonical=canonical)
+        # Success: DbResponse::UserCreated { name, user_id: bin(16) }
+        # (db_message.rs:373-380).
+        require(response.get("kind") == "user_created",
                 f"create_scram_user unexpected response: {response}")
-        return response["user_id"]
+        user_id = response["user_id"]
+        require(isinstance(user_id, bytes) and len(user_id) == 16,
+                f"user_id not 16 bytes: {response}")
+        return user_id
 
     def close(self):
         try:
@@ -631,6 +683,10 @@ class TokenWs:
 
 
 def gated_op(alias, op_map, tag, fields):
+    # HMAC-gated batch ops (ChmodOp / ChownOp / CreateGroupOp /
+    # AddGroupMemberOp, admin/access.rs:88-210): the hex tag rides inside the
+    # op map as its `hmac` field (added by ws_execute); the canonical bytes
+    # are prefix + u16 tag + the op's own canonical encoding (hmac.rs).
     canonical = canonical_bytes(tag) + fields
     return alias, op_map, canonical
 
