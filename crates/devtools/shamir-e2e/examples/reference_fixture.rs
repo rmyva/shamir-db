@@ -687,7 +687,7 @@ fn wasm_name(name: &str, out: &mut Vec<u8>) {
 fn ref_wasm_fn_bytes() -> Vec<u8> {
     // types: 0 = (i32) -> i32, 1 = (i32, i32) -> i64
     let types: Vec<u8> = [
-        vec![0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f],
+        vec![0x02, 0x60, 0x01, 0x7f, 0x01, 0x7f],
         vec![0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7e],
     ]
     .concat();
@@ -710,10 +710,10 @@ fn ref_wasm_fn_bytes() -> Vec<u8> {
         vec![0x20, 0x01, 0x0b],
     ]
     .concat();
-    // shamir_call body: echo the decoded i64 payload back.
-    let mut body1: Vec<u8> = vec![0xc0, 0x20, 0x00, 0x42];
+    // shamir_call body: (i64(ptr) << 32) | i64(len), echoing the input buffer.
+    let mut body1: Vec<u8> = vec![0x20, 0x00, 0xad, 0x42];
     leb_s(32, &mut body1);
-    body1.extend_from_slice(&[0x86, 0xc0, 0x20, 0x01, 0x85, 0x0b]);
+    body1.extend_from_slice(&[0x86, 0x20, 0x01, 0xad, 0x84, 0x0b]);
     let code0: Vec<u8> = [vec![0x01, 0x01, 0x7f], body0].concat(); // 1 local group: 1 x i32
     let mut code1: Vec<u8> = vec![0x00];
     code1.extend_from_slice(&body1);
