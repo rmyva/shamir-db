@@ -85,8 +85,46 @@ async fn run() -> Result<(), String> {
     apply_ddl(&client).await?;
     apply_admin(&client).await?;
     verify(&client).await?;
-
     client.close().await;
+
+    verify_ref_user(args.addr).await
+}
+
+/// The compatibility test reads `ref_schema_basic` as `ref_user`; prove
+/// the rights allow it before the directory is captured.
+async fn verify_ref_user(addr: SocketAddr) -> Result<(), String> {
+    let client = Client::connect_plain(ConnectOptions {
+        addr,
+        server_name: "localhost".into(),
+        username: REF_USER.into(),
+        password: Zeroizing::new(REF_USER_PASSWORD.as_bytes().to_vec()),
+        accept_new_host: true,
+        trusted_pin: None,
+        connect_timeout: None,
+        handshake_timeout: None,
+        request_timeout: None,
+    })
+    .await
+    .map_err(|e| format!("ref_user connect failed: {e}"))?;
+    let mut batch = Batch::new();
+    batch.id("fixture-ref-user");
+    batch.query("read-basic", Query::from(BASIC_TABLE).order_by_asc("n"));
+    let resp = client
+        .execute(DB, batch.build())
+        .await
+        .map_err(|e| format!("ref_user read of {BASIC_TABLE} failed: {e}"))?;
+    let rows = resp
+        .results
+        .get("read-basic")
+        .map(|result| result.records.len())
+        .unwrap_or(0);
+    client.close().await;
+    if rows != BASIC_ROWS.len() {
+        return Err(format!(
+            "ref_user read {rows} rows of {BASIC_TABLE}, expected {}",
+            BASIC_ROWS.len()
+        ));
+    }
     Ok(())
 }
 
@@ -378,12 +416,24 @@ async fn apply_admin(client: &Client) -> Result<(), String> {
         })?,
     );
 
-    // chmod store default/main → 0o644 (420).
+    // chmod store default/main → 0o755 (493): read and traverse for others.
     let store = ddl::res::store(DB, REPO);
     batch.chmod(
         "chmod-store",
-        signed(client, &unsigned_chmod(store.clone(), 420), |tag| {
-            ddl::chmod(store, 420)
+        signed(client, &unsigned_chmod(store.clone(), 493), |tag| {
+            ddl::chmod(store, 493)
+                .hmac(tag)
+                .build()
+                .map_err(|e| e.to_string())
+        })?,
+    );
+
+    // chmod table ref_schema_basic → 0o755 (493): ref_user reads it.
+    let basic = ddl::res::table(DB, REPO, BASIC_TABLE);
+    batch.chmod(
+        "chmod-basic",
+        signed(client, &unsigned_chmod(basic.clone(), 493), |tag| {
+            ddl::chmod(basic, 493)
                 .hmac(tag)
                 .build()
                 .map_err(|e| e.to_string())
