@@ -1,5 +1,6 @@
 # Reference data-directory fixture generator (release-1 R1b, migration
-# framework design 7.2). It builds the server, runs the fixture generator and
+# framework design 7.2). It builds the server and the reference_fixture
+# helper, runs the fixture generator and
 # uploads the directory as an artifact that is committed as
 # crates/server/shamir-server/tests/misc/fixtures/reference_epoch_1/. It runs
 # on dispatch and on pull requests that change the generator or this file;
@@ -42,10 +43,14 @@ jobs:
       - name: Build the server binary
         run: cargo build -p shamir-server --release
 
+      - name: Build the reference_fixture helper
+        run: cargo build -p shamir-e2e --release --example reference_fixture
+
       - name: Generate the reference data directory
         run: |
           python -I scripts/runners/make_reference_datadir.py \
             --server-binary target/release/shamir-server \
+            --fixture-helper target/release/examples/reference_fixture \
             --out reference_epoch_1
 
       - name: Upload the fixture artifact

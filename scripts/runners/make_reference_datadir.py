@@ -5,11 +5,15 @@ Placement note: the migration design names `scripts/release/`, but `scripts/`
 already holds 7 entries; this script lives under `scripts/runners/` (5 -> 6
 entries) to keep every folder at or below the 7-entry layout limit.
 
-Runs the release server binary against an empty data directory, applies a
-FIXED scenario over the documented HTTP REST / native-token-WebSocket
-surface (msgpack wire, stdlib only), stops the server cleanly, prunes
-`cache/`, enforces the ~1 MiB size cap and records the generating binary
-version. Stdlib only; run with `python -I`.
+Runs the release server binary against an empty data directory and lets the
+Rust helper `crates/devtools/shamir-e2e/examples/reference_fixture.rs` apply
+the FIXED DDL + data scenario over the native plain-TCP loopback listener
+(built with `cargo build -p shamir-e2e --example reference_fixture`). This
+script drives the phases: boot/ready/stop, offline token minting, invoking
+the helper, and verifying the applied scenario over the HTTP REST surface
+(msgpack wire, stdlib only). It then prunes `cache/`, enforces the ~1 MiB
+size cap and records the generating binary version. Stdlib only; run with
+`python -I`.
 
 Scenario contract (crates/server/shamir-server/tests/misc/reference_compat.rs
 and fixtures/reference_epoch_1/README.md): db `default`, repo `main`; tables
@@ -33,9 +37,6 @@ The generated `GENERATED_BY.txt` inside the output directory records the
 """
 
 import argparse
-import base64
-import hashlib
-import hmac as hmac_mod
 import http.client
 import os
 import shutil
@@ -49,42 +50,11 @@ import time
 
 QUERY_VERSION = 4
 DEFAULT_PORT = 17691
+DEFAULT_TCP_PORT = 17692
 BOOTSTRAP_PASSWORD = "reference-epoch-1-admin"
-REF_USER_PASSWORD = "reference-epoch-1-user"
 TOKEN_LABEL = "reference-epoch-1"
 SIZE_CAP_BYTES = 1024 * 1024
 READY_TIMEOUT_SECS = 60
-
-# Echo WASM module: memory(2) + bump global + shamir_alloc/shamir_call exports
-# (byte-equivalent to ECHO_WAT in the server's create-function gating tests).
-
-# Canonical HMAC grammar (shamir-query-types/src/security/hmac.rs, v2).
-HMAC_PREFIX = b"shamir-db hmac canonical v2\0"
-TAG_CHMOD = 0x000B
-TAG_CHOWN = 0x000C
-TAG_CREATE_GROUP = 0x0011
-TAG_ADD_GROUP_MEMBER = 0x0014
-TAG_CREATE_SCRAM_USER = 0x0019
-
-BASIC_SCHEMA = [
-    {"path": ["k"], "type": "string"},
-    {"path": ["n"], "type": "int"},
-    {"path": ["vec"], "type": "list", "array_of": "float"},
-]
-VERSIONED_SCHEMA = [
-    {"path": ["k"], "type": "string"},
-    {"path": ["n"], "type": "int"},
-]
-BASIC_ROWS = [
-    {"k": "r1", "n": 10, "vec": [0.5, 0.25, 0.125, 0.0625]},
-    {"k": "r2", "n": 20, "vec": [0.1, 0.2, 0.3, 0.4]},
-    {"k": "r3", "n": 30, "vec": [1.0, 0.75, 0.5, 0.25]},
-]
-VERSIONED_ROWS = [
-    {"k": "v1", "n": 7},
-    {"k": "v2", "n": 8},
-]
-LANG_FN_SOURCE = "@entry scalar ref_lang_fn(x: i64) -> i64 { return x + 1; }"
 
 
 class FixtureError(Exception):
@@ -270,107 +240,15 @@ def mp_decode(data):
 
 
 # ---------------------------------------------------------------------------
-# Canonical HMAC v2 encoders + session key derivation
-# ---------------------------------------------------------------------------
-
-def _canon_str(s):
-    raw = s.encode("utf-8")
-    return struct.pack(">I", len(raw)) + raw
-
-
-def _canon_list(items):
-    out = struct.pack(">I", len(items))
-    return out + b"".join(_canon_str(s) for s in items)
-
-
-def canonical_bytes(tag):
-    return bytearray(HMAC_PREFIX + struct.pack(">H", tag))
-
-
-def session_hmac_key(sid):
-    return hashlib.sha256(b"shamir-db hmac key v1\0" + sid).digest()
-
-
-def tag_hex(key, canonical):
-    return hmac_mod.new(key, bytes(canonical), hashlib.sha256).hexdigest()
-
-
-def principal64(user_id_bytes):
-    require(len(user_id_bytes) == 16, "user_id must be 16 bytes")
-    value = struct.unpack(">Q", user_id_bytes[:8])[0]
-    return value & 0x7FFFFFFFFFFFFFFF
-
-
-# ---------------------------------------------------------------------------
-# Minimal WASM encoder for the ref_wasm_fn module
-# ---------------------------------------------------------------------------
-
-def _leb_u(n):
-    out = bytearray()
-    while True:
-        b = n & 0x7F
-        n >>= 7
-        if n:
-            out.append(b | 0x80)
-        else:
-            out.append(b)
-            return bytes(out)
-
-
-def _leb_s(n):
-    out = bytearray()
-    more = True
-    while more:
-        b = n & 0x7F
-        n >>= 7
-        if (n == 0 and not (b & 0x40)) or (n == -1 and (b & 0x40)):
-            more = False
-        else:
-            b |= 0x80
-        out.append(b)
-    return bytes(out)
-
-
-def _section(section_id, payload):
-    return bytes([section_id]) + _leb_u(len(payload)) + payload
-
-
-def _name(s):
-    raw = s.encode("utf-8")
-    return _leb_u(len(raw)) + raw
-
-
-def ref_wasm_fn_bytes():
-    # types: 0=(i32)->i32, 1=(i32,i32)->i64
-    types = bytes([0x01, 0x60, 0x01, 0x7F, 0x01, 0x7F,
-                   0x60, 0x02, 0x7F, 0x7F, 0x01, 0x7E])
-    funcs = bytes([0x02, 0x00, 0x01])
-    memories = bytes([0x01, 0x00, 0x02])
-    globals_ = (bytes([0x01, 0x7F, 0x01]) + bytes([0x41]) + _leb_s(1024) +
-                bytes([0x0B]))
-    exports = (bytes([0x03]) + _name("memory") + bytes([0x02, 0x00]) +
-               _name("shamir_alloc") + bytes([0x00, 0x00]) +
-               _name("shamir_call") + bytes([0x00, 0x01]))
-    # shamir_alloc body
-    body0 = (bytes([0x23, 0x00, 0x21, 0x01]) +      # ptr = global.get $bump
-             bytes([0x23, 0x00, 0x20, 0x00, 0x6A, 0x24, 0x00]) +  # bump += len
-             bytes([0x20, 0x01, 0x0B]))             # return ptr
-    # shamir_call body
-    body1 = (bytes([0xC0, 0x20, 0x00, 0x42]) + _leb_s(32) + bytes([0x86]) +
-             bytes([0xC0, 0x20, 0x01, 0x85, 0x0B]))
-    code0 = bytes([0x01, 0x01, 0x7F]) + body0       # 1 local group: 1 x i32
-    code1 = bytes([0x00]) + body1
-    codes = _leb_u(2) + _leb_u(len(code0)) + code0 + _leb_u(len(code1)) + code1
-    return (b"\x00asm\x01\x00\x00\x00" +
-            _section(1, types) + _section(3, funcs) + _section(5, memories) +
-            _section(6, globals_) + _section(7, exports) + _section(10, codes))
-
-
-# ---------------------------------------------------------------------------
 # Server process control
 # ---------------------------------------------------------------------------
 
-def write_config(path, data_dir, port):
+def write_config(path, data_dir, port, tcp_port):
+    # Listener syntax per crates/server/shamir-server/src/boot/config.rs:
+    # `kind: http` requires the flat `tls` key; native TCP uses
+    # `kind: tcp` + `profile: plain`, which validate() accepts only on
+    # loopback (TRANSPORT_TCP §2.2). The top-level `tls:` block has no
+    # serde default in Config, so it must stay.
     tls_cert = os.path.join(data_dir, "cert.pem")
     tls_key = os.path.join(data_dir, "key.pem")
     config = (
@@ -391,9 +269,14 @@ def write_config(path, data_dir, port):
         "\n"
         "listeners: [\n"
         "    {\n"
-        f"        kind: http\n"
+        "        kind: http\n"
         f"        addr: 127.0.0.1:{port}\n"
         "        tls: false\n"
+        "    }\n"
+        "    {\n"
+        "        kind: tcp\n"
+        f"        addr: 127.0.0.1:{tcp_port}\n"
+        "        profile: plain\n"
         "    }\n"
         "]\n"
         "\n"
@@ -439,6 +322,18 @@ def wait_ready(port):
             pass
         time.sleep(0.2)
     raise FixtureError(f"server not ready on 127.0.0.1:{port} "
+                       f"within {READY_TIMEOUT_SECS}s")
+
+
+def wait_tcp_acceptable(port):
+    deadline = time.monotonic() + READY_TIMEOUT_SECS
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=5):
+                return
+        except OSError:
+            time.sleep(0.2)
+    raise FixtureError(f"TCP listener on 127.0.0.1:{port} not accepting "
                        f"within {READY_TIMEOUT_SECS}s")
 
 
@@ -519,306 +414,39 @@ def run_batch(port, token, alias, op, expect_records=None):
     return result
 
 
-# ---------------------------------------------------------------------------
-# Native token WebSocket client
-# ---------------------------------------------------------------------------
-
-class TokenWs:
-    def __init__(self, port, token):
-        self.sock = socket.create_connection(("127.0.0.1", port), timeout=30)
-        key = base64.b64encode(os.urandom(16)).decode()
-        head = (
-            f"GET /shamir/v1/ws HTTP/1.1\r\n"
-            f"Host: 127.0.0.1:{port}\r\n"
-            f"Upgrade: websocket\r\n"
-            f"Connection: Upgrade\r\n"
-            f"Sec-WebSocket-Version: 13\r\n"
-            f"Sec-WebSocket-Key: {key}\r\n"
-            f"Sec-WebSocket-Protocol: shamir-v1\r\n"
-            f"Authorization: Bearer {token}\r\n\r\n"
-        )
-        self.sock.sendall(head.encode())
-        response = b""
-        while b"\r\n\r\n" not in response:
-            chunk = self.sock.recv(4096)
-            require(chunk, "WS upgrade: connection closed during handshake")
-            response += chunk
-        head_text, _, rest = response.partition(b"\r\n\r\n")
-        require(b" 101 " in b" " + head_text.split(b"\r\n")[0] + b" ",
-                f"WS upgrade rejected: {head_text.decode(errors='replace')}")
-        self.buf = bytearray(rest)
-        binding = mp_decode(self._next_frame())
-        require(isinstance(binding, dict) and binding.get("ok") is True,
-                f"WS binding not ok: {binding}")
-        self.sid = binding["sid"]
-        require(isinstance(self.sid, bytes) and len(self.sid) == 32,
-                f"WS binding sid invalid: {binding}")
-        self.key = session_hmac_key(self.sid)
-        self.rid = 0
-
-    def _read_exact(self, n):
-        while len(self.buf) < n:
-            chunk = self.sock.recv(65536)
-            require(chunk, "WS connection closed unexpectedly")
-            self.buf.extend(chunk)
-        out = bytes(self.buf[:n])
-        del self.buf[:n]
-        return out
-
-    def _next_frame(self):
-        while True:
-            head = self._read_exact(2)
-            opcode = head[0] & 0x0F
-            masked = head[1] & 0x80
-            length = head[1] & 0x7F
-            if length == 126:
-                length = struct.unpack(">H", self._read_exact(2))[0]
-            elif length == 127:
-                length = struct.unpack(">Q", self._read_exact(8))[0]
-            mask = self._read_exact(4) if masked else None
-            payload = self._read_exact(length)
-            if mask:
-                payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
-            if opcode == 0x9:  # ping -> pong
-                self._send_frame(0xA, payload)
-                continue
-            if opcode == 0xA:  # pong
-                continue
-            require(opcode in (0x1, 0x2), f"unexpected WS opcode {opcode}")
-            return payload
-
-    def _send_frame(self, opcode, payload):
-        mask = os.urandom(4)
-        masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
-        head = bytes([0x80 | opcode])
-        n = len(payload)
-        if n < 126:
-            head += bytes([0x80 | n])
-        elif n < 0x10000:
-            head += bytes([0x80 | 126]) + struct.pack(">H", n)
-        else:
-            head += bytes([0x80 | 127]) + struct.pack(">Q", n)
-        self.sock.sendall(head + mask + masked)
-
-    def request(self, request, canonical=None):
-        # Per-frame envelope: RequestEnvelope { sid: bin(32), rid: Option<u32>,
-        # req: bin(DbRequest) } (shamir-connect envelope.rs:21-38). The HMAC
-        # tag rides INSIDE the DbRequest variant as its `hmac` hex field —
-        # e.g. CreateScramUser { name, password, roles, hmac } — never on the
-        # envelope (db_message.rs:82-107).
-        if canonical is not None:
-            request = dict(request)
-            request["hmac"] = tag_hex(self.key, canonical)
-        self.rid += 1
-        rid = self.rid
-        envelope = {"sid": self.sid, "rid": rid,
-                    "req": mp_encode(request)}
-        self._send_frame(0x2, mp_encode(envelope))
-        raw = self._next_frame()
-        response = mp_decode(raw)
-        require(isinstance(response, dict) and response.get("rid") == rid,
-                f"WS envelope mismatch: {_payload_repr(raw)}")
-        require("error" not in response, f"WS request error: {response}")
-        inner = response.get("res")
-        require(isinstance(inner, bytes),
-                f"WS response without res bin: {_payload_repr(raw)}")
-        decoded = mp_decode(inner)
-        # DbResponse is internally tagged ("kind", snake_case); a DB failure
-        # is a normal reply {"kind": "error", "code", "message"}
-        # (db_message.rs:349-354, :412-449).
-        require(isinstance(decoded, dict),
-                f"unexpected WS response payload: {_payload_repr(inner)}")
-        require(decoded.get("kind") != "error",
-                f"WS request failed: {_payload_repr(inner)}")
-        return decoded
-
-    def ws_execute(self, alias, op, canonical=None):
-        # BatchRequest { id: QueryValue, queries: {alias: BatchOp},
-        # return_all } — batch_request.rs:55-100; the response Batch variant
-        # carries the full BatchResponse whose `results` map is keyed by
-        # alias (batch_response.rs:52-58).
-        if canonical is not None:
-            op = dict(op)
-            op["hmac"] = tag_hex(self.key, canonical)
-        batch = {"id": f"fixture-{alias}", "queries": {alias: op},
-                 "return_all": True}
-        request = {"op": "execute", "query_version": QUERY_VERSION,
-                   "db": "default", "batch": batch}
-        response = self.request(request)
-        require(response.get("kind") == "batch",
-                f"WS execute '{alias}' unexpected response: "
-                f"{response}")
-        results = response["response"].get("results", {})
-        require(alias in results, f"WS execute '{alias}' missing result: "
-                                  f"{response}")
-        return results[alias]
-
-    def create_scram_user(self, name, password, roles):
-        # DbRequest::CreateScramUser { name, password, roles, hmac }
-        # (db_message.rs:82-107); HMAC canonical v2 grammar: tag 0x0019 +
-        # str(name) + list(roles) (hmac.rs:691-697), keyed by
-        # SHA256("shamir-db hmac key v1\0" || sid) (hmac.rs:793-803).
-        canonical = canonical_bytes(TAG_CREATE_SCRAM_USER)
-        canonical += _canon_str(name)
-        canonical += _canon_list(roles)
-        request = {"op": "create_scram_user", "name": name,
-                   "password": password, "roles": roles}
-        response = self.request(request, canonical=canonical)
-        # Success: DbResponse::UserCreated { name, user_id: bin(16) }
-        # (db_message.rs:373-380).
-        require(response.get("kind") == "user_created",
-                f"create_scram_user unexpected response: {response}")
-        user_id = response["user_id"]
-        require(isinstance(user_id, bytes) and len(user_id) == 16,
-                f"user_id not 16 bytes: {response}")
-        return user_id
-
-    def close(self):
-        try:
-            self._send_frame(0x8, struct.pack(">H", 1000))
-            self.sock.close()
-        except OSError:
-            pass
-
-
-def gated_op(alias, op_map, tag, fields):
-    # HMAC-gated batch ops (ChmodOp / ChownOp / CreateGroupOp /
-    # AddGroupMemberOp, admin/access.rs:88-210): the hex tag rides inside the
-    # op map as its `hmac` field (added by ws_execute); the canonical bytes
-    # are prefix + u16 tag + the op's own canonical encoding (hmac.rs).
-    canonical = canonical_bytes(tag) + fields
-    return alias, op_map, canonical
+def verify_scenario(port, token):
+    # Post-helper verification over the HTTP REST surface with the admin
+    # driver token: the helper reports REFERENCE_FIXTURE_OK, this re-checks
+    # the contract-critical reads independently.
+    rest_ping(port, token)
+    run_batch(port, token, "verify_read_basic", {"from": "ref_schema_basic"},
+              expect_records=3)
+    run_batch(port, token, "verify_read_versioned",
+              {"from": "ref_schema_versioned"}, expect_records=2)
+    call_result = run_batch(port, token, "verify_call_lang_fn", {
+        "call": "ref_lang_fn", "params": [41], "repo": "main",
+    })
+    require(call_result.get("value") == 42,
+            f"stored call ref_lang_fn(41) did not return 42: "
+            f"{_payload_repr(mp_encode(call_result))}")
 
 
 # ---------------------------------------------------------------------------
-# Fixed scenario
+# Fixture helper invocation
 # ---------------------------------------------------------------------------
 
-def apply_scenario(port, token):
-    ws = TokenWs(port, token)
-    try:
-        rest_ping(port, token)
-
-        # 1. Tables: basic (schema_version 1 suffices, contract: >= 1) and
-        #    versioned (bumped via set_table_schema to 2, contract: > 1).
-        run_batch(port, token, "create_basic", {
-            "create_table": "ref_schema_basic", "repo": "main",
-            "schema": BASIC_SCHEMA,
-        })
-        run_batch(port, token, "create_versioned", {
-            "create_table": "ref_schema_versioned", "repo": "main",
-            "schema": VERSIONED_SCHEMA,
-        })
-        run_batch(port, token, "bump_versioned_schema", {
-            "set_table_schema": "ref_schema_versioned", "repo": "main",
-            "schema": VERSIONED_SCHEMA, "expected_version": 1,
-        })
-
-        # 2. One index of every kind on ref_schema_basic, exact names from
-        #    the contract. Vector uses the float-list column `vec`.
-        run_batch(port, token, "idx_hash", {
-            "create_index": "ref_hash_idx", "table": "ref_schema_basic",
-            "fields": [["k"]], "repo": "main",
-        })
-        run_batch(port, token, "idx_sorted", {
-            "create_index": "ref_sorted_idx", "table": "ref_schema_basic",
-            "fields": [["n"]], "sorted": True, "repo": "main",
-        })
-        run_batch(port, token, "idx_vector", {
-            "create_index": "ref_vector_idx", "table": "ref_schema_basic",
-            "fields": [["vec"]], "index_type": "vector",
-            "vector_dim": 4, "vector_metric": "cosine", "repo": "main",
-        })
-        run_batch(port, token, "idx_fts", {
-            "create_index": "ref_fulltext_idx", "table": "ref_schema_basic",
-            "fields": [["k"]], "index_type": "fts", "repo": "main",
-        })
-
-        # 3. Functions: shamir-source scalar (call_signature persisted) and
-        #    a compiled WASM module.
-        run_batch(port, token, "fn_lang", {
-            "create_function": "ref_lang_fn", "source": LANG_FN_SOURCE,
-            "lang": "shamir",
-        })
-        run_batch(port, token, "fn_wasm", {
-            "create_function": "ref_wasm_fn",
-            "wasm": base64.b64encode(ref_wasm_fn_bytes()).decode("ascii"),
-            "lang": "wasm",
-        })
-
-        # 4. Rows (fixed literals only).
-        run_batch(port, token, "insert_basic",
-                  {"insert_into": "ref_schema_basic", "values": BASIC_ROWS},
-                  expect_records=len(BASIC_ROWS))
-        run_batch(port, token, "insert_versioned",
-                  {"insert_into": "ref_schema_versioned",
-                   "values": VERSIONED_ROWS},
-                  expect_records=len(VERSIONED_ROWS))
-
-        # 5. Principals, group, rights (HMAC-gated ops go over the WS
-        #    session). ref_user is a SCRAM user with the reader role; the
-        #    store-level chmod grants read on default.main.
-        ref_user_id = ws.create_scram_user("ref_user", REF_USER_PASSWORD,
-                                           ["reader"])
-        ref_pid = principal64(ref_user_id)
-        alias, op, canonical = gated_op(
-            "create_group",
-            {"create_group": "ref_group"},
-            TAG_CREATE_GROUP,
-            _canon_str("ref_group"),
+def run_fixture_helper(helper, tcp_port, credentials_file):
+    proc = subprocess.run(
+        [helper, "--addr", f"127.0.0.1:{tcp_port}",
+         "--credentials-file", credentials_file],
+        capture_output=True, text=True, check=False,
+    )
+    if proc.returncode != 0 or "REFERENCE_FIXTURE_OK" not in proc.stdout:
+        tail = "\n".join((proc.stdout + proc.stderr).splitlines()[-20:])
+        raise FixtureError(
+            f"reference_fixture helper failed (exit {proc.returncode}, "
+            f"no REFERENCE_FIXTURE_OK):\n{tail}"
         )
-        ws.ws_execute(alias, op, canonical)
-        alias, op, canonical = gated_op(
-            "add_group_member",
-            {"add_group_member": {"name": "ref_group"}, "user": ref_pid},
-            TAG_ADD_GROUP_MEMBER,
-            (bytes([0x00]) + _canon_str("ref_group")) +
-            struct.pack(">Q", ref_pid),
-        )
-        ws.ws_execute(alias, op, canonical)
-        store_resource = bytes([0x01]) + _canon_str("default") + \
-            _canon_str("main")
-        alias, op, canonical = gated_op(
-            "chmod_store",
-            {"chmod": {"store": ["default", "main"]}, "mode": 420},
-            TAG_CHMOD,
-            store_resource + struct.pack(">H", 420),
-        )
-        ws.ws_execute(alias, op, canonical)
-        table_resource = bytes([0x02]) + _canon_str("default") + \
-            _canon_str("main") + _canon_str("ref_schema_versioned")
-        alias, op, canonical = gated_op(
-            "chmod_versioned",
-            {"chmod": {"table": ["default", "main",
-                                "ref_schema_versioned"]}, "mode": 448},
-            TAG_CHMOD,
-            table_resource + struct.pack(">H", 448),
-        )
-        ws.ws_execute(alias, op, canonical)
-        alias, op, canonical = gated_op(
-            "chown_versioned",
-            {"chown": {"table": ["default", "main",
-                                "ref_schema_versioned"]},
-             "owner": ref_pid},
-            TAG_CHOWN,
-            table_resource + struct.pack(">Q", ref_pid),
-        )
-        ws.ws_execute(alias, op, canonical)
-
-        # 6. Verify reads and the stored call through the same surface.
-        run_batch(port, token, "read_basic", {"from": "ref_schema_basic"},
-                  expect_records=len(BASIC_ROWS))
-        run_batch(port, token, "read_versioned",
-                  {"from": "ref_schema_versioned"},
-                  expect_records=len(VERSIONED_ROWS))
-        call_result = run_batch(port, token, "call_lang_fn", {
-            "call": "ref_lang_fn", "params": [41], "repo": "main",
-        })
-        require(call_result.get("value") == 42,
-                f"stored call ref_lang_fn(41) did not return 42: "
-                f"{call_result}")
-    finally:
-        ws.close()
 
 
 # ---------------------------------------------------------------------------
@@ -885,21 +513,30 @@ def main(argv=None):
         description="Generate the reference data directory fixture.")
     parser.add_argument("--server-binary", required=True,
                         help="path to the shamir-server binary")
+    parser.add_argument("--fixture-helper", required=True,
+                        help="path to the reference_fixture example binary "
+                             "(cargo build -p shamir-e2e "
+                             "--example reference_fixture)")
     parser.add_argument("--out", required=True,
                         help="output data directory (must not exist or be empty)")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT,
                         help="loopback HTTP port for the fixture server")
+    parser.add_argument("--tcp-port", type=int, default=DEFAULT_TCP_PORT,
+                        help="loopback native TCP (profile plain) port for "
+                             "the fixture helper")
     args = parser.parse_args(argv)
 
     binary = os.path.abspath(args.server_binary)
     require(os.path.isfile(binary), f"server binary not found: {binary}")
+    helper = os.path.abspath(args.fixture_helper)
+    require(os.path.isfile(helper), f"fixture helper not found: {helper}")
     out_dir = os.path.abspath(args.out)
     if os.path.isdir(out_dir):
         require(not os.listdir(out_dir), f"output dir not empty: {out_dir}")
     else:
         os.makedirs(out_dir)
     config_path = out_dir + ".ktav"
-    write_config(config_path, out_dir, args.port)
+    write_config(config_path, out_dir, args.port, args.tcp_port)
 
     version = binary_version(binary)
 
@@ -913,11 +550,21 @@ def main(argv=None):
     # Phase B: offline mint of an ephemeral admin token (scenario driver).
     token = mint_offline_token(binary, config_path, "admin")
 
-    # Phase C: second boot, fixed scenario over REST + token WebSocket.
+    # Phase C: second boot; the Rust helper applies the DDL + data scenario
+    # over the plain-TCP loopback listener, then REST re-verifies the reads.
+    # The credentials file lives in a throwaway temp dir, never inside the
+    # fixture tree, and is removed with it.
     server = ServerProcess(binary, config_path)
     try:
         wait_ready(args.port)
-        apply_scenario(args.port, token)
+        wait_tcp_acceptable(args.tcp_port)
+        with tempfile.TemporaryDirectory(prefix="shamir-ref-creds") as tmp:
+            creds_file = os.path.join(tmp, "credentials.txt")
+            with open(creds_file, "w", encoding="utf-8") as handle:
+                handle.write(f"username=admin\n"
+                             f"password={BOOTSTRAP_PASSWORD}\n")
+            run_fixture_helper(helper, args.tcp_port, creds_file)
+        verify_scenario(args.port, token)
     finally:
         server.stop_cleanly()
 
