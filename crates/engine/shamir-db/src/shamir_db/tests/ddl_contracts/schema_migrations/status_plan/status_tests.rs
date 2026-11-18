@@ -123,6 +123,9 @@ async fn status_of_an_empty_journal_reports_not_checked() {
     assert_eq!(str_field(&value, "checksum_validation"), "not_checked");
     assert!(value.get("in_flight").is_none());
     assert!(value.get("error").is_none());
+    // R1c step 3a: an empty journal expects generation 0 and lists nothing.
+    assert_eq!(field(&value, "fence_generation").as_i64(), Some(0));
+    assert!(value.get("applied").is_none());
 }
 
 #[tokio::test]
@@ -141,6 +144,19 @@ async fn status_after_applied_events_reports_last_applied_and_valid_checksum() {
     assert_eq!(str_field(&value, "checksum_validation"), "valid");
     assert!(value.get("in_flight").is_none());
     assert!(value.get("error").is_none());
+    // R1c step 3a: the release left generation 2 (the next fresh apply's
+    // expected generation) and the whole applied prefix is listed.
+    assert_eq!(field(&value, "fence_generation").as_i64(), Some(2));
+    let QueryValue::List(entries) = field(&value, "applied") else {
+        panic!("applied is not a list");
+    };
+    assert_eq!(entries.len(), 1);
+    assert_eq!(str_field(&entries[0], "id"), "alpha-001");
+    assert_eq!(field(&entries[0], "ordinal").as_i64(), Some(1));
+    assert_eq!(
+        field(&entries[0], "checksum"),
+        &QueryValue::Bin(digest.to_vec())
+    );
 }
 
 #[tokio::test]
@@ -163,6 +179,7 @@ async fn status_with_an_owned_fence_reports_the_in_flight_owner() {
     assert_eq!(field(in_flight, "fence_generation").as_i64(), Some(1));
     assert_eq!(str_field(in_flight, "status"), "started");
     assert_eq!(str_field(&value, "error"), "schema_migration_in_doubt");
+    assert_eq!(field(&value, "fence_generation").as_i64(), Some(1));
 }
 
 #[tokio::test]

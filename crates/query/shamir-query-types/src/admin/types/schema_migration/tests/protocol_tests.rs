@@ -151,6 +151,12 @@ fn requests_reject_unknown_fields_and_results_accept_additive_fields() {
             status: "started".to_owned(),
         }),
         error: None,
+        fence_generation: 2,
+        applied: vec![SchemaMigrationAppliedEntry {
+            id: "alpha-001".to_owned(),
+            ordinal: 1,
+            checksum: [9; 32],
+        }],
     };
     let encoded_result = serde_json::to_vec(&status_result).unwrap();
     let mut decoded_result: SchemaMigrationStatusResult =

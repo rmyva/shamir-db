@@ -29,6 +29,14 @@ pub struct SchemaMigrationStatusRequest {
     pub target: SchemaMigrationTarget,
 }
 
+/// One applied migration as recorded in the journal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SchemaMigrationAppliedEntry {
+    pub id: String,
+    pub ordinal: u64,
+    pub checksum: [u8; 32],
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SchemaMigrationStatusResult {
     pub protocol_version: u16,
@@ -43,4 +51,13 @@ pub struct SchemaMigrationStatusResult {
     pub in_flight: Option<SchemaMigrationInFlight>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<super::SchemaMigrationErrorCode>,
+    /// Highest durable fence generation of the journal (`0` when the journal
+    /// holds no event): the `expected_fence_generation` of the next fresh
+    /// apply. Absent from servers older than R1c step 3a.
+    #[serde(default)]
+    pub fence_generation: u64,
+    /// Every applied migration in ordinal order, so a client can verify its
+    /// whole local prefix. Absent from servers older than R1c step 3a.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applied: Vec<SchemaMigrationAppliedEntry>,
 }

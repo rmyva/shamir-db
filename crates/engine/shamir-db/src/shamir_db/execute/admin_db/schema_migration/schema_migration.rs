@@ -200,7 +200,58 @@ fn status_value(outcome: &StatusOutcome<'_>) -> QueryValue {
             QueryValue::Str(error_code_str(error).to_string()),
         );
     }
+    // R1c step 3a: the durable fence generation (the next fresh apply's
+    // expected generation) and the whole applied prefix, so a client can
+    // verify its local set and start the next migration without guessing.
+    // Additive: older clients ignore both keys.
+    let (fence_generation, applied) = match outcome.history {
+        Some(history) => (durable_fence_generation(history), applied_entries(history)),
+        None => (0, Vec::new()),
+    };
+    value.insert(
+        "fence_generation".to_string(),
+        QueryValue::Int(fence_generation as i64),
+    );
+    if !applied.is_empty() {
+        value.insert("applied".to_string(), QueryValue::List(applied));
+    }
     QueryValue::Map(value)
+}
+
+/// The highest fence generation any journal event carries: the durable control
+/// generation (a release bumps it, so after an applied migration it is the
+/// generation the next fresh apply must expect). `0` for an empty journal.
+fn durable_fence_generation(history: &MigrationHistory) -> u64 {
+    history
+        .events
+        .iter()
+        .map(|event| event.fence_generation)
+        .max()
+        .unwrap_or(0)
+}
+
+/// Every applied migration in ordinal order: id, ordinal, checksum.
+fn applied_entries(history: &MigrationHistory) -> Vec<QueryValue> {
+    history
+        .applied
+        .iter()
+        .map(|event| {
+            let mut map = new_map();
+            map.insert(
+                "id".to_string(),
+                QueryValue::Str(event.migration.id.clone()),
+            );
+            map.insert(
+                "ordinal".to_string(),
+                QueryValue::Int(event.migration.ordinal as i64),
+            );
+            map.insert(
+                "checksum".to_string(),
+                QueryValue::Bin(event.checksum.to_vec()),
+            );
+            QueryValue::Map(map)
+        })
+        .collect()
 }
 
 /// Derive last-applied and in-flight fields from the durable history.

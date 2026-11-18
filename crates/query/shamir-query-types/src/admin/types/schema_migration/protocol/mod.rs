@@ -14,6 +14,6 @@ pub use plan::{
 };
 pub use request::{SchemaMigrationPredecessor, SchemaMigrationSubmission, SchemaMigrationTarget};
 pub use status::{
-    SchemaMigrationChecksumValidation, SchemaMigrationInFlight, SchemaMigrationStatusRequest,
-    SchemaMigrationStatusResult,
+    SchemaMigrationAppliedEntry, SchemaMigrationChecksumValidation, SchemaMigrationInFlight,
+    SchemaMigrationStatusRequest, SchemaMigrationStatusResult,
 };
