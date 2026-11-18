@@ -1,0 +1,438 @@
+{
+  "version": 1,
+  "domain_separator_hex": "7368616d69722d646220736368656d61206d6967726174696f6e00",
+  "cases": [
+    {
+      "name": "all-nineteen-operation-kinds",
+      "description": "One migration body containing every admitted operation kind across table, index, schema, function and validator families in authored order. Each operation carries language-neutral structured args (DTO field names and exact values, including exact source bytes) that the client tests must reproduce from its typed builders; the expected bytes and checksum pin the whole canonical encoding.",
+      "migrations": [
+        {
+          "id": "id",
+          "ordinal": 1,
+          "display_name": "n",
+          "function_dependencies": [],
+          "operations": [
+            {
+              "family": "table",
+              "variant": "create_table",
+              "description": "create table t in repo main without if_not_exists, retention or schema",
+              "args": {
+                "create_table": "t",
+                "repo": "main"
+              }
+            },
+            {
+              "family": "table",
+              "variant": "drop_table",
+              "description": "drop table t with if_exists true, cascade false, repo main; hmac tag excluded from canonical bytes",
+              "args": {
+                "drop_table": "t",
+                "repo": "main",
+                "if_exists": true
+              }
+            },
+            {
+              "family": "table",
+              "variant": "rename_table",
+              "description": "rename table t to u in repo main",
+              "args": {
+                "rename_table": "t",
+                "to": "u",
+                "repo": "main"
+              }
+            },
+            {
+              "family": "index",
+              "variant": "create_index",
+              "description": "create fts index ix on table t over field path [a] with whitespace tokenizer, unique and sorted false, repo main, no include paths",
+              "args": {
+                "create_index": "ix",
+                "table": "t",
+                "fields": [
+                  [
+                    "a"
+                  ]
+                ],
+                "repo": "main",
+                "index_type": "fts",
+                "fts_tokenizer": "whitespace"
+              }
+            },
+            {
+              "family": "index",
+              "variant": "drop_index",
+              "description": "drop index ix on table t with if_exists true, repo main; hmac and request id excluded",
+              "args": {
+                "drop_index": "ix",
+                "repo": "main",
+                "table": "t",
+                "if_exists": true
+              }
+            },
+            {
+              "family": "index",
+              "variant": "rename_index",
+              "description": "rename index ix to iy on table t, if_exists false, repo main",
+              "args": {
+                "rename_index": "ix",
+                "to": "iy",
+                "table": "t",
+                "repo": "main"
+              }
+            },
+            {
+              "family": "schema",
+              "variant": "set_table_schema",
+              "description": "replace schema of table t with an empty rule list, no expected version, repo main",
+              "args": {
+                "set_table_schema": "t",
+                "repo": "main"
+              }
+            },
+            {
+              "family": "schema",
+              "variant": "add_schema_rule",
+              "description": "add rule for path [a] of type f64 with f64 bounds min 1.0 and max negative zero, repo main",
+              "args": {
+                "add_schema_rule": "t",
+                "repo": "main",
+                "rule_path": [
+                  "a"
+                ],
+                "rule_type": "f64",
+                "rule_min": 1.0,
+                "rule_max": -0.0
+              }
+            },
+            {
+              "family": "schema",
+              "variant": "remove_schema_rule",
+              "description": "remove rule at path [a] of table t, repo main",
+              "args": {
+                "remove_schema_rule": "t",
+                "repo": "main",
+                "path": [
+                  "a"
+                ]
+              }
+            },
+            {
+              "family": "function",
+              "variant": "create_function",
+              "description": "register function f from exact source \"fn f() {}\", replace false, defaults resolved to invoker security, rust language, auto optimization; hmac excluded",
+              "args": {
+                "create_function": "f",
+                "source": "fn f() {}"
+              }
+            },
+            {
+              "family": "function",
+              "variant": "drop_function",
+              "description": "drop function f with if_exists true",
+              "args": {
+                "drop_function": "f",
+                "if_exists": true
+              }
+            },
+            {
+              "family": "function",
+              "variant": "rename_function",
+              "description": "rename function f to g",
+              "args": {
+                "rename_function": "f",
+                "to": "g"
+              }
+            },
+            {
+              "family": "function",
+              "variant": "check_function",
+              "description": "admission check of exact source \"fn f() {}\" without storing; language and optimization resolved to defaults rust and auto",
+              "args": {
+                "check_source": "fn f() {}"
+              }
+            },
+            {
+              "family": "function",
+              "variant": "alter_function",
+              "description": "change optimization mode of function f to never",
+              "args": {
+                "alter_function": "f",
+                "optimize": "never"
+              }
+            },
+            {
+              "family": "validator",
+              "variant": "create_validator",
+              "description": "register validator v from exact source \"fn validate() {}\", replace false; hmac excluded",
+              "args": {
+                "create_validator": "v",
+                "source": "fn validate() {}"
+              }
+            },
+            {
+              "family": "validator",
+              "variant": "drop_validator",
+              "description": "drop validator v with if_exists true",
+              "args": {
+                "drop_validator": "v",
+                "if_exists": true
+              }
+            },
+            {
+              "family": "validator",
+              "variant": "rename_validator",
+              "description": "rename validator v to w",
+              "args": {
+                "rename_validator": "v",
+                "to": "w"
+              }
+            },
+            {
+              "family": "validator",
+              "variant": "bind_validator",
+              "description": "bind validator v to table t of db main-repo for insert and update operations at priority 1500",
+              "args": {
+                "bind_validator": "v",
+                "db": "db",
+                "table": "t",
+                "repo": "main",
+                "ops": [
+                  "insert",
+                  "update"
+                ],
+                "priority": 1500
+              }
+            },
+            {
+              "family": "validator",
+              "variant": "unbind_validator",
+              "description": "unbind validator v from table t of db, repo main",
+              "args": {
+                "unbind_validator": "v",
+                "db": "db",
+                "table": "t",
+                "repo": "main"
+              }
+            }
+          ],
+          "expected_canonical_bytes_hex": "0000000269640000000000000001000000016e0000000000000013000000337368616d69722d646220736368656d61206d6967726174696f6e206f702076310000010000000174000000046d61696e000000000000317368616d69722d646220686d61632063616e6f6e6963616c20763200000300000000000000046d61696e00000001740001000000357368616d69722d646220736368656d61206d6967726174696f6e206f7020763100000300000001740000000175000000046d61696e000000677368616d69722d646220736368656d61206d6967726174696f6e206f702076310000040000000269780000000174000000010000000100000001610000000000046d61696e0100000003667473010000000a776869746573706163650000000000000000000000000000367368616d69722d646220686d61632063616e6f6e6963616c20763200000400000000000000046d61696e0000000174000000026978010000003d7368616d69722d646220736368656d61206d6967726174696f6e206f702076310000060000000269780000000269790000000174000000046d61696e00000000357368616d69722d646220736368656d61206d6967726174696f6e206f702076310000070000000174000000046d61696e0000000000000000627368616d69722d646220736368656d61206d6967726174696f6e206f702076310000080000000174000000046d61696e0000000100000001610000000366363400000001013ff0000000000000010180000000000000000000000000000000000000000000397368616d69722d646220736368656d61206d6967726174696f6e206f702076310000090000000174000000046d61696e000000010000000161000000797368616d69722d646220686d61632063616e6f6e6963616c20763200001600000001660000000007696e766f6b6572000000000000000000016a8ff5ba6c1b7bbcf2cbebb9d38c826db877408a94c8478709e72a200a51db81000000000472757374000000046175746f0100000009666e20662829207b7d00000000247368616d69722d646220686d61632063616e6f6e6963616c20763200001a0000000166010000002d7368616d69722d646220736368656d61206d6967726174696f6e206f7020763100000c00000001660000000167000000427368616d69722d646220736368656d61206d6967726174696f6e206f7020763100000d0000000472757374000100000009666e20662829207b7d000000046175746f000000317368616d69722d646220736368656d61206d6967726174696f6e206f7020763100000e0000000166000000056e657665720000005c7368616d69722d646220686d61632063616e6f6e6963616c20763200001c00000001760001e3b8e9bc630de5a4716da69007d4e55109181bd0cfa53cca201be93acd6fed5a000100000010666e2076616c69646174652829207b7d00000000247368616d69722d646220686d61632063616e6f6e6963616c20763200001b0000000176010000002d7368616d69722d646220736368656d61206d6967726174696f6e206f7020763100001100000001760000000177000000437368616d69722d646220736368656d61206d6967726174696f6e206f702076310000120000000176000000026462000000046d61696e000000017400000002000105dc0000003b7368616d69722d646220736368656d61206d6967726174696f6e206f702076310000130000000176000000026462000000046d61696e0000000174",
+          "expected_checksum_hex": "fcfcbe95d320ddcde662c4fb23d505e2e8db0d33121b747a14c96c9ba7ef913a"
+        }
+      ]
+    },
+    {
+      "name": "function-dependency-ordering-is-canonical",
+      "description": "Dependency rows are authored out of order and each name list is unsorted; canonical encoding must sort rows by function bytes and each name list likewise, independent of authoring order.",
+      "migrations": [
+        {
+          "id": "dep-order",
+          "ordinal": 1,
+          "display_name": "dependency sort",
+          "function_dependencies": [
+            {
+              "function": "zeta_fn",
+              "depends_on": [
+                "b_dep",
+                "a_dep"
+              ],
+              "description": "zeta_fn is replaced by this migration, so its callees b_dep and a_dep must be rechecked during planning"
+            },
+            {
+              "function": "alpha_fn",
+              "depends_on": [
+                "solo"
+              ],
+              "description": "alpha_fn registration is introduced by this migration and is planned against its own dependency solo"
+            }
+          ],
+          "operations": [
+            {
+              "family": "function",
+              "variant": "create_function",
+              "description": "register function zeta_fn from exact source \"fn zeta_fn() {}\"",
+              "args": {
+                "create_function": "zeta_fn",
+                "source": "fn zeta_fn() {}"
+              }
+            },
+            {
+              "family": "validator",
+              "variant": "create_validator",
+              "description": "register validator alpha_v from exact source \"fn alpha_v() {}\"",
+              "args": {
+                "create_validator": "alpha_v",
+                "source": "fn alpha_v() {}"
+              }
+            }
+          ],
+          "expected_canonical_bytes_hex": "000000096465702d6f7264657200000000000000010000000f646570656e64656e637920736f72740000000200000008616c7068615f666e0000000100000004736f6c6f000000077a6574615f666e0000000200000005615f64657000000005625f64657000000002000000857368616d69722d646220686d61632063616e6f6e6963616c207632000016000000077a6574615f666e0000000007696e766f6b657200000000000000000001be4400c240f965291f8169df0cfd938bb574b079b70ceca60a749338b44c6b66000000000472757374000000046175746f010000000f666e207a6574615f666e2829207b7d00000000617368616d69722d646220686d61632063616e6f6e6963616c20763200001c00000007616c7068615f7600013ebad248153337aeb4d96e213e49a5cddd9267ade1d6c5c85150ee1d5d05cfea00010000000f666e20616c7068615f762829207b7d00",
+          "expected_checksum_hex": "0ed3e8d46b65c639740c361e24eae5e40ab30ea43d5a5dc2eb8c0d29785fe4b3"
+        }
+      ]
+    },
+    {
+      "name": "optional-fields-change-canonical-bytes",
+      "description": "Optional fields set explicitly: if_not_exists, retention triple, replace with visibility and optimization overrides, expected schema version, non-default bind operations and priority, drop without if_exists. Every present optional value must change the canonical bytes.",
+      "migrations": [
+        {
+          "id": "optional-fields",
+          "ordinal": 1,
+          "display_name": "optional fields",
+          "function_dependencies": [],
+          "operations": [
+            {
+              "family": "table",
+              "variant": "create_table",
+              "description": "create table opts_t with if_not_exists true and retention of 3600 second age cap plus minimum count 10, repo main",
+              "args": {
+                "create_table": "opts_t",
+                "repo": "main",
+                "if_not_exists": true,
+                "retention": {
+                  "max_age_secs": 3600,
+                  "min_count": 10
+                }
+              }
+            },
+            {
+              "family": "function",
+              "variant": "create_function",
+              "description": "register function opts_f from exact source \"fn opts_f() {}\" with replace true, public visibility and now optimization; hmac excluded",
+              "args": {
+                "create_function": "opts_f",
+                "source": "fn opts_f() {}",
+                "replace": true,
+                "visibility": "public",
+                "optimize": "now"
+              }
+            },
+            {
+              "family": "schema",
+              "variant": "set_table_schema",
+              "description": "replace schema of table opts_t with expected schema version 7, repo main",
+              "args": {
+                "set_table_schema": "opts_t",
+                "repo": "main",
+                "expected_version": 7
+              }
+            },
+            {
+              "family": "validator",
+              "variant": "bind_validator",
+              "description": "bind validator opts_v to table opts_t of db for delete and upsert operations at priority 2000, repo main",
+              "args": {
+                "bind_validator": "opts_v",
+                "db": "db",
+                "table": "opts_t",
+                "repo": "main",
+                "ops": [
+                  "delete",
+                  "upsert"
+                ],
+                "priority": 2000
+              }
+            },
+            {
+              "family": "table",
+              "variant": "drop_table",
+              "description": "drop table opts_t with if_exists and cascade false, repo main; hmac excluded",
+              "args": {
+                "drop_table": "opts_t",
+                "repo": "main"
+              }
+            }
+          ],
+          "expected_canonical_bytes_hex": "0000000f6f7074696f6e616c2d6669656c647300000000000000010000000f6f7074696f6e616c206669656c647300000000000000050000004b7368616d69722d646220736368656d61206d6967726174696f6e206f70207631000001000000066f7074735f74000000046d61696e0101010000000000000e100001000000000000000a000000008c7368616d69722d646220686d61632063616e6f6e6963616c207632000016000000066f7074735f660100000007696e766f6b657201000000067075626c6963000000000000000001adfd2c25d8d736e976ffac323818cae1193d59db7c27bfa4b2f5ba7e72a8e2e6000000000472757374000000036e6f77010000000e666e206f7074735f662829207b7d00000000427368616d69722d646220736368656d61206d6967726174696f6e206f70207631000007000000066f7074735f74000000046d61696e000000000100000000000000070000004d7368616d69722d646220736368656d61206d6967726174696f6e206f70207631000012000000066f7074735f76000000026462000000046d61696e000000066f7074735f7400000002030207d0000000367368616d69722d646220686d61632063616e6f6e6963616c20763200000300000000000000046d61696e000000066f7074735f740000",
+          "expected_checksum_hex": "b2968119a401717867a115075c3e4c10ac25f0c39b7563fa58cad07d0d4f25b6"
+        }
+      ]
+    },
+    {
+      "name": "operation-order-and-ordinal-pin-set",
+      "description": "A two-migration set with contiguous ordinals; the same three operation kinds appear in opposite authored order across the two bodies, pinning operation order and ordinal identity in the canonical bytes.",
+      "migrations": [
+        {
+          "id": "order-a",
+          "ordinal": 1,
+          "display_name": "order first",
+          "function_dependencies": [],
+          "operations": [
+            {
+              "family": "table",
+              "variant": "rename_table",
+              "description": "rename table oa to ob, repo main",
+              "args": {
+                "rename_table": "oa",
+                "to": "ob",
+                "repo": "main"
+              }
+            },
+            {
+              "family": "function",
+              "variant": "rename_function",
+              "description": "rename function oa_f to oa_g",
+              "args": {
+                "rename_function": "oa_f",
+                "to": "oa_g"
+              }
+            },
+            {
+              "family": "validator",
+              "variant": "unbind_validator",
+              "description": "unbind validator oa_v from table oa_t of db, repo main",
+              "args": {
+                "unbind_validator": "oa_v",
+                "db": "db",
+                "table": "oa_t",
+                "repo": "main"
+              }
+            }
+          ],
+          "expected_canonical_bytes_hex": "000000076f726465722d6100000000000000010000000b6f726465722066697273740000000000000003000000377368616d69722d646220736368656d61206d6967726174696f6e206f70207631000003000000026f61000000026f62000000046d61696e000000337368616d69722d646220736368656d61206d6967726174696f6e206f7020763100000c000000046f615f66000000046f615f67000000417368616d69722d646220736368656d61206d6967726174696f6e206f70207631000013000000046f615f76000000026462000000046d61696e000000046f615f74",
+          "expected_checksum_hex": "67d2f010ee63482657da3d826b22e3b9936c191ba5760745ece0fdc3a89f5115"
+        },
+        {
+          "id": "order-b",
+          "ordinal": 2,
+          "display_name": "order second",
+          "function_dependencies": [],
+          "operations": [
+            {
+              "family": "validator",
+              "variant": "unbind_validator",
+              "description": "unbind validator ob_v from table ob_t of db, repo main",
+              "args": {
+                "unbind_validator": "ob_v",
+                "db": "db",
+                "table": "ob_t",
+                "repo": "main"
+              }
+            },
+            {
+              "family": "function",
+              "variant": "rename_function",
+              "description": "rename function ob_f to ob_g",
+              "args": {
+                "rename_function": "ob_f",
+                "to": "ob_g"
+              }
+            },
+            {
+              "family": "table",
+              "variant": "rename_table",
+              "description": "rename table ob to oc, repo main",
+              "args": {
+                "rename_table": "ob",
+                "to": "oc",
+                "repo": "main"
+              }
+            }
+          ],
+          "expected_canonical_bytes_hex": "000000076f726465722d6200000000000000020000000c6f72646572207365636f6e640000000000000003000000417368616d69722d646220736368656d61206d6967726174696f6e206f70207631000013000000046f625f76000000026462000000046d61696e000000046f625f74000000337368616d69722d646220736368656d61206d6967726174696f6e206f7020763100000c000000046f625f66000000046f625f67000000377368616d69722d646220736368656d61206d6967726174696f6e206f70207631000003000000026f62000000026f63000000046d61696e",
+          "expected_checksum_hex": "183f792b9fced8dd569084486157152d32f907313213d33d227b2ccb13535dfc"
+        }
+      ]
+    }
+  ],
+  "notes": "Cross-client canonical vectors for schema-migration body v1: migration identity, language-neutral structured operation args (DTO serde field names with exact values, exact source bytes and bit-exact rule bounds including negative zero; absent args mean the DTO default), per-operation prose descriptions, and expected canonical bytes plus SHA-256 checksums. Bytes were derived independently from the grammar documented in shamir-query-types canonical/body.rs, canonical/ddl.rs, canonical/function.rs and security/hmac.rs; the first case reproduces the committed golden vector of test-vectors/schema_migration_v1.json byte for byte. The TypeScript step consumes this same file; the Rust test rebuilds every case from the typed DDL builders and rejects drift by asserting both the operation variant sequence and every structured arg against the built operations."
+}

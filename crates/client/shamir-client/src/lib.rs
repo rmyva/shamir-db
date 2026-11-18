@@ -37,6 +37,11 @@ mod error;
 pub mod interner_cache;
 mod receipts;
 
+// Topical home under `receipts/` (outcome resolution); declared at the
+// crate root via `#[path]` — no dependency on `receipts` internals.
+#[path = "receipts/schema_migration/mod.rs"]
+pub mod schema_migration;
+
 #[cfg(test)]
 mod tests;
 
@@ -56,6 +61,10 @@ pub mod visibility;
 pub use error::{ClientError, CloseCause};
 pub use interner_cache::{FieldMap, InternerCacheRegistry};
 pub use receipts::{extract_receipts, reconcile_receipts, AliasReceipt, RepoObservation};
+pub use schema_migration::{
+    ApplicationMigrationSet, MigrationError, MigrationStatus, PrefixCoverage, UnknownApply,
+    UnknownApplyResolution,
+};
 pub use shamir_query_types::admin::ChangesSinceResponse;
 pub use visibility::{
     CommitResult, TransactionInfo, VisibilityPendingReason, VisibilityState, VisibilityWait,

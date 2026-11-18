@@ -4,5 +4,7 @@ pub mod interner;
 pub mod receipts;
 #[path = "visibility/repo_admin/mod.rs"]
 pub mod repo_admin;
+#[path = "visibility/schema_migration/mod.rs"]
+pub mod schema_migration;
 pub mod visibility;
 pub mod wire;

@@ -3,4 +3,5 @@
 //! back in `shamir-client`).
 
 mod auth_identity_tests;
+mod rust_migration_tests;
 mod v2_passthrough_tests;

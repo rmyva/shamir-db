@@ -1512,6 +1512,208 @@ scrape_configs:
 * **Logging — non-blocking.** Никогда не блокирует горячий путь. Overflow
   — lossy (лучше потерять лог, чем запрос).
 
+## Application schema migrations (Rust client)
+
+Schema changes ship as an **ordered, checksummed migration set compiled into
+your application**, applied through `shamir_client::schema_migration`. There
+is **no down or rollback API** and **no automatic retry**: after any uncertain
+apply you ask the server what happened instead of resending. Bodies are built
+**only** from the typed DDL builders (`shamir-query-builder`) — hand-written
+wire JSON has no canonical form and no checksum the server can verify.
+Version 1 admits **DDL only — no DML**.
+
+```rust
+use shamir_client::builder::{ddl, SchemaMigration};
+use shamir_client::schema_migration::{
+    ApplicationMigrationSet, MigrationError, PrefixCoverage, SchemaMigrationTarget,
+    UnknownApplyResolution,
+};
+
+let m1 = SchemaMigration::new("add-audit-table", 1, "add audit table")
+    .op(ddl::create_table("audit").repo("app").build())? // build() yields a typed BatchOp
+    .build()?; // validates against the admitted DDL subset
+let m2 = SchemaMigration::new("add-audit-archive", 2, "add audit archive")
+    .op(ddl::create_table("audit_archive").repo("app").if_not_exists().build())?
+    .build()?;
+let set = ApplicationMigrationSet::new(vec![m1, m2])?;
+```
+
+`ApplicationMigrationSet::new` validates the set **before anything can be
+sent**: ordinals contiguous from exactly 1, unique ids, typed errors. A gap or
+malformed body is a **local** rejection — zero requests. Each body has
+versioned canonical bytes and a SHA-256 checksum (cached by the set); the
+server **recomputes** the checksum from the submitted typed body, so an
+authored raw-JSON body or a client-reported checksum is never proof. A body
+is immutable once applied: changing it changes its checksum — drift, refused
+before any apply. Correct a released migration with a new forward migration,
+never by editing the old body.
+
+### Target identity and permissions
+
+`SchemaMigrationTarget { database_identity }` carries the **known stable
+database identity**, supplied separately from the connection name;
+`MigrationStatus::reported_target` echoes the serving identity on
+`schema_migration_identity_mismatch`, which is the supported discovery path
+for a wrong identity. Permissions (design §5.2): all three operations need
+`Read` on the database — the preflight read before a write — while `plan` and
+`apply` additionally need `Manage`, and apply still passes every underlying
+operation's normal DDL authorization (that server-side `Manage` separation is
+the server's, not the client's). The journal, fence generation and stored
+bodies live in the server's durable system catalogue and survive restart;
+`status` and `plan` perform **no migration journal or DDL changes** — they
+are read-only with respect to migrations (the server's own legacy identity
+backfill/persistence tail may run, but it never migrates anything on their
+behalf).
+
+### `status`, `plan`, `apply_next`
+
+```rust
+let target = SchemaMigrationTarget { database_identity };
+client.status(db, target, &set).await?;      // by-value target, borrowed set
+client.plan(db, target, &set).await?;        // read-only with respect to migrations
+client.apply_next(db, target, &set).await?;  // applies exactly one next ordinal
+```
+
+`status` compares the **entire ordered applied prefix** against your local
+set: the server's status wire reports every applied migration in ordinal
+order (`applied`: `id` / `ordinal` / `checksum` per entry) plus the durable
+`fence_generation`, so a client can prove its full local prefix, not just
+the head. `plan` verifies the submitted set on the server against the same
+journal.
+
+`apply_next` itself reads `status` first and refuses **before sending the
+APPLY** when the journal drifts from your set, when your set is shorter
+than the applied journal, when the applied ordinals have a gap, when the
+prefix is unverified, or when nothing is left to apply. The only zero
+network round trip is a locally invalid set construction — every journal
+refusal costs one read-only `status`. Otherwise it submits exactly **one**
+next ordinal with the expected predecessor id and the fence generation taken
+**directly from `status`'s `fence_generation` field** — never derived or
+guessed. Concretely: on an empty journal the status reports
+`fence_generation: 0`, the apply acquires generation **1**, and after the
+fence is released the next status reports `fence_generation: 2` — the
+expected generation of the next fresh apply. The generation an apply
+acquired is not reused as the next expectation — the next expectation is
+always the fresh `fence_generation` of the following status, a distinct
+number read from the wire, not inferred from ordinals. When the set is
+already fully applied, a repeat call applies nothing and returns
+`NothingToApply`.
+
+### Lost response: resolve, never resend
+
+A transport error or timeout **after** an apply was sent returns
+`MigrationError::UnknownOutcome { attempt, .. }` — the client never resends
+on its own. The opaque `UnknownApply` token binds the database, the target
+identity and the exact id / ordinal / canonical checksum of the in-flight
+body; the resolver correlates the returned status against your set locally —
+it does not ask the server "by id". Reconnect, then resolve through the
+targeted status helper:
+
+```rust
+// `reconnected_client: &Client` — an already connected client to the SAME
+// server and database as the original apply.
+match client.apply_next(db, target, &set).await {
+    Err(MigrationError::UnknownOutcome { attempt, .. }) => {
+        // one read-only status query; the apply is never resent
+        let resolution = reconnected_client
+            .resolve_unknown_apply(&attempt, &set)
+            .await?;
+        match resolution {
+            // journal proves the attempt applied with the same
+            // id/ordinal/checksum — anywhere in the verified reported
+            // `applied` list, even when a LATER migration already applied:
+            // success, never resend
+            UnknownApplyResolution::Applied { .. } => {}
+            // attempt IS the unresolved head: operator reconciliation or
+            // the identical-body resume below; the server's reason is in
+            // `reason`
+            UnknownApplyResolution::InDoubt { .. } => {}
+            // absence AND the predecessor are both established: safe to
+            // call `apply_next` again
+            UnknownApplyResolution::ReadyToApply => {}
+            // head overtook the attempt without proving it, or an
+            // unresolved event for a DIFFERENT migration: no false
+            // success; reconcile out of band
+            UnknownApplyResolution::EvidenceUnavailable { .. }
+            | UnknownApplyResolution::UnmatchedUnresolved { .. } => {}
+        }
+    }
+    Err(MigrationError::UnsupportedServer { .. }) => { /* upgrade the server */ }
+    other => { /* §5.3 stable codes mapped onto MigrationError, message kept */ }
+}
+```
+
+The server's stable codes (`schema_migration_in_progress`, `_in_doubt`,
+`_checksum_mismatch`, `_gap`, `_predecessor_mismatch`, `_follower_read_only`,
+`_durability_unavailable`, `_postcondition_failed`, `_identity_mismatch`,
+`schema_migration_operation_deferred:`) map onto typed variants without
+losing the server message.
+
+`resolve_unknown_apply` checks the attempted id / ordinal / canonical
+checksum against the **whole verified reported `applied` list**, not only
+the head: the proof survives even when a later migration has already
+applied past the attempt. The safe-to-reapply verdict (`ReadyToApply`) is
+issued **only** when both the absence of the attempt and its predecessor
+are established — a proven, drift-free prefix at the attempt's predecessor,
+no unresolved event, and the attempt's ordinal being the set's next local
+ordinal. All correlation happens locally against your compiled set; the
+apply is never replayed on the strength of a status answer alone.
+
+**Resume after in-doubt** uses the *same* `apply_next`: the identical stored
+body, expected predecessor, and the fence generation reported for the
+unresolved migration in `status` (the unresolved entry's own generation) —
+the server refuses to take over a still-running owner, then acquires a new
+generation when it fences the old owner and reconciles. The server
+re-checks the checksum of the submitted body and concurrent contention.
+An in-doubt diagnostic alone does not prove the outcome, and the client
+cannot confirm an in-flight local attempt from its own side — only the
+server's answer can. Do **not** assume a refused apply has succeeded. Recovery is an operator decision after reading the diagnostics,
+or a restore from backup — never a body edit or hand-run DDL, which would
+break checksum identity and make every later apply refuse.
+
+### Status wire and old peers
+
+The public status result carries two additive fields (shared contract
+`crates/query/shamir-query-types/src/admin/types/schema_migration/protocol/status.rs`):
+
+* `fence_generation: u64` — the highest durable fence generation of the
+  journal (`0` when the journal holds no event): the
+  `expected_fence_generation` of the next fresh apply.
+* `applied: Vec<SchemaMigrationAppliedEntry>` — every applied migration in
+  ordinal order, each with `id`, `ordinal` and the 32-byte canonical
+  `checksum`.
+
+The existing fields (`last_applied_id`/`_ordinal`/`_checksum`,
+`checksum_validation`, the unresolved `in_flight` entry with its
+`in_doubt_reason` evidence) are unchanged; a typed wire error surface stays
+separate from the public `MigrationStatus::server_error`.
+On the client, `PrefixCoverage` now reports full-prefix coverage:
+`PrefixCoverage::Verified` when every reported entry matches your set by
+ordered id / ordinal / checksum, and `PrefixCoverage::Drift` when any entry
+differs; the existing variants for an empty journal and for a set shorter
+than the applied journal remain, with new coverage for an unverifiable
+ordinal (`Unverified { ordinal }`) and a reported gap
+(`Gap { expected, actual }`).
+
+A peer old enough to answer `status` but omit `applied` and
+`fence_generation` while the journal head is non-empty is not silently
+treated as an empty journal: the client returns
+`MigrationError::UnsupportedServer` — upgrade the server. There is no
+guessing of fence generations, no per-id server lookup, and **no fallback
+to unjournaled DDL on any path**.
+
+```rust
+// Sequential applies: each call reads status again before applying.
+let s0 = client.status(db, target, &set).await?;
+assert_eq!(s0.coverage, PrefixCoverage::Empty);        // empty journal, fence 0
+client.apply_next(db, target, &set).await?;            // acquires generation 1, releases it
+let s1 = client.status(db, target, &set).await?;
+assert_eq!(s1.coverage, PrefixCoverage::Verified { ordinal: 1 });
+assert_eq!(s1.fence_generation, 2);                    // next expected
+client.apply_next(db, target, &set).await?;            // acquires generation 3
+// Fully applied: a repeat call applies nothing and returns NothingToApply.
+```
+
 ## Куда дальше
 
 ||| Упёрся в… | Поднимайся на |
