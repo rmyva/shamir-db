@@ -139,6 +139,7 @@ pub async fn dispatch_request<H: RequestHandler + ?Sized, F: Fn(&[u8; 16]) -> u6
     // Post-auth per-session request-rate gate — same choke point the
     // view path enforces; owned dispatch must not bypass it.
     if session.check_post_auth_rate_limit(now_ns).is_some() {
+        store.record_post_auth_rejection();
         return Ok(DispatchOutcome::Error(ErrorEnvelope::new(
             envelope.request_id,
             "rate_limited",
@@ -202,6 +203,7 @@ pub async fn dispatch_request_view<H: RequestHandler + ?Sized, F: Fn(&[u8; 16]) 
     // Post-auth per-session request-rate gate (task #608). Single choke
     // point covering every transport that routes through this function.
     if session.check_post_auth_rate_limit(now_ns).is_some() {
+        store.record_post_auth_rejection();
         return Ok(DispatchOutcome::Error(ErrorEnvelope::new(
             view.request_id,
             "rate_limited",

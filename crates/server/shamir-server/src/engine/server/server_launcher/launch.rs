@@ -54,6 +54,7 @@ use super::helpers::{
 };
 use super::http::BootGuard;
 use super::listeners::{spawn_listeners, ListenerEnv, SpawnedListeners};
+use super::load_metrics::bind_load_source;
 
 /// Launcher: build the server runtime from a [`Config`] + bootstrap policy.
 pub struct ServerLauncher {
@@ -725,6 +726,7 @@ impl ServerLauncher {
         //       of `launch()` — `shutdown()` cancels it once and every accept
         //       loop observes the cancel on its next `select!` poll.
         let SpawnedListeners {
+            conn_limiter,
             bound_addrs,
             bound_ipc_paths,
             listener_tasks,
@@ -808,23 +810,21 @@ impl ServerLauncher {
                     .upgrade()
                     .map_or_else(Default::default, |handler| handler.activity_counts())
             }));
+            bind_load_source(
+                &state,
+                conn_limiter,
+                &session_store,
+                token_service.counters(),
+            );
             // Record what the data-path bound to — `/info` surfaces this.
             state.set_bound_addrs(bound_addrs.iter().filter_map(|a| *a).collect());
-            // The Prometheus recorder is global per-process. In integration
-            // tests where multiple servers spawn back-to-back the second
-            // launcher would error on `set_global_recorder`. We swallow
-            // that specific failure (recorder already installed = OK,
-            // we use the existing one) and continue without an exporter
-            // handle in that case.
+            // A duplicate global recorder must not stop boot; the fallback
+            // starts the observability listener without a Prometheus handle.
             // M-tier audit M5: `allow_public_metrics` comes straight from
             // the parsed config (`ObservabilityConfig::allow_public_metrics`,
             // default `false`). A non-loopback `addr` is rejected up-front
             // unless the operator has explicitly opted in.
             let allow_public_metrics = config.observability.allow_public_metrics;
-            // F-29 (#822): thread the same `ByteBudget` used by the request
-            // handler into the observability poller so
-            // `shamir_inflight_response_bytes_used`/`_cap` reflect the real
-            // RI-15 budget this server booted with, not a detached instance.
             let handle = match crate::observability::spawn_with_byte_budget(
                 addr,
                 state.clone(),

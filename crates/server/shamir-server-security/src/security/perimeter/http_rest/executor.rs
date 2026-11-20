@@ -262,7 +262,10 @@ impl RestExecutor<Verified> for RestHandler {
                 .session_for(grant, (self.username)(&record.owner_user_id), now_ns)
             {
                 Ok(pair) => pair,
-                Err(BucketError::RateLimited(retry)) => return Self::rate_limited(retry),
+                Err(BucketError::RateLimited(retry)) => {
+                    self.service.counters().record_post_auth_rejection();
+                    return Self::rate_limited(retry);
+                }
                 Err(BucketError::Unavailable) => {
                     return Self::error("server_busy", ExecStatus::Unavailable)
                 }

@@ -77,8 +77,9 @@ pub(super) struct ListenerEnv<'a> {
     pub(super) read_only: bool,
 }
 
-/// What [`spawn_listeners`] produced, in listener order.
+/// Listener results (in listener order) and their shared connection limiter.
 pub(super) struct SpawnedListeners {
+    pub(super) conn_limiter: ConnLimiter,
     pub(super) bound_addrs: Vec<Option<SocketAddr>>,
     pub(super) bound_ipc_paths: Vec<Option<String>>,
     pub(super) listener_tasks: Vec<JoinHandle<()>>,
@@ -426,6 +427,7 @@ pub(super) async fn spawn_listeners(
     }
 
     Ok(SpawnedListeners {
+        conn_limiter,
         bound_addrs,
         bound_ipc_paths,
         listener_tasks,

@@ -263,6 +263,7 @@ async fn metrics_handler_samples_replication_without_a_database() {
         state: ObservabilityState::new(),
         prom: Some(handle),
         db: None,
+        byte_budget: None,
     };
     let response = metrics::with_local_recorder(&recorder, || {
         register_functions_metrics();

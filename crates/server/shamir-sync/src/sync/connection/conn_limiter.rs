@@ -16,7 +16,7 @@
 //! retries see the same RST until the cap clears.
 
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -39,6 +39,7 @@ pub struct ConnLimiter {
 #[derive(Debug, Default)]
 struct LiveConnections {
     count: AtomicUsize,
+    rejected: AtomicU64,
     idle: Notify,
 }
 
@@ -75,6 +76,7 @@ impl ConnLimiter {
         let prev = self.active.fetch_add(1, Ordering::Relaxed);
         if prev >= self.cap {
             self.active.fetch_sub(1, Ordering::Relaxed);
+            self.live.rejected.fetch_add(1, Ordering::Relaxed);
             None
         } else {
             self.live.count.fetch_add(1, Ordering::AcqRel);
@@ -98,6 +100,11 @@ impl ConnLimiter {
     /// Connections currently holding a guard, regardless of the cap.
     pub fn live(&self) -> usize {
         self.live.count.load(Ordering::Acquire)
+    }
+
+    /// Total acquisitions refused by this limiter's global cap, shared across clones.
+    pub fn rejected_total(&self) -> u64 {
+        self.live.rejected.load(Ordering::Relaxed)
     }
 
     /// Resolve once no connection holds a guard. Used by shutdown, after the

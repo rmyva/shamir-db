@@ -70,17 +70,18 @@ async fn rv_dispatch_8ad46452_owned_path_enforces_post_auth_rate_limit() {
         assert!(live.check_post_auth_rate_limit(now_ns).is_none());
     }
     assert!(live.check_post_auth_rate_limit(now_ns).is_some());
+    assert_eq!(store.post_auth_rejected_total(), 0);
 
     // Owned dispatch must gate on the same depleted bucket.
     let env = RequestEnvelope::new(sid, Some(9), b"hello".to_vec());
-    let out = dispatch_request(
-        &env,
-        &store,
-        |_| 0,
-        &Echo,
-        &ConnectionServices::without_push(0),
+    let conn = ConnectionServices::without_push(0);
+    let deadline = std::time::Duration::from_secs(120);
+    let out = tokio::time::timeout(
+        deadline,
+        Box::pin(dispatch_request(&env, &store, |_| 0, &Echo, &conn)),
     )
     .await
+    .expect("owned dispatch timed out")
     .unwrap();
 
     match out {
@@ -92,6 +93,19 @@ async fn rv_dispatch_8ad46452_owned_path_enforces_post_auth_rate_limit() {
             panic!("owned dispatch must enforce the post-auth rate limit")
         }
     }
+    assert_eq!(store.post_auth_rejected_total(), 1);
+
+    let wire = env.to_msgpack().unwrap();
+    let view = RequestEnvelopeView::from_msgpack(&wire).unwrap();
+    let out = tokio::time::timeout(
+        deadline,
+        Box::pin(dispatch_request_view(&view, &store, |_| 0, &Echo, &conn)),
+    )
+    .await
+    .expect("view dispatch timed out")
+    .unwrap();
+    assert!(matches!(out, DispatchOutcome::Error(e) if e.error == "rate_limited"));
+    assert_eq!(store.post_auth_rejected_total(), 2);
 }
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -274,6 +288,7 @@ async fn r4b_default_handle_with_request_id_delegates_to_handle() {
         }
         DispatchOutcome::Error(_) => panic!("default delegation must reach Echo"),
     }
+    assert_eq!(store.post_auth_rejected_total(), 0);
 
     let wire = env.to_msgpack().unwrap();
     let view = RequestEnvelopeView::from_msgpack(&wire).unwrap();
@@ -293,6 +308,7 @@ async fn r4b_default_handle_with_request_id_delegates_to_handle() {
         }
         DispatchOutcome::Error(_) => panic!("default delegation must reach Echo"),
     }
+    assert_eq!(store.post_auth_rejected_total(), 0);
 }
 
 /// R4b-1: a nested dispatch inside a rid-aware handler receives its own rid
@@ -407,6 +423,7 @@ async fn rv_connect_2a423d73_handler_err_collapses_to_application_error() {
             panic!("failing handler must produce an error envelope")
         }
     }
+    assert_eq!(store.post_auth_rejected_total(), 0);
 
     // Same boundary on the borrowed-view path.
     let wire = env.to_msgpack().unwrap();
@@ -424,4 +441,5 @@ async fn rv_connect_2a423d73_handler_err_collapses_to_application_error() {
         DispatchOutcome::Error(e) => assert_eq!(e.error, "application_error"),
         DispatchOutcome::Response(_) => panic!("view path must collapse handler errors too"),
     }
+    assert_eq!(store.post_auth_rejected_total(), 0);
 }

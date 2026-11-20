@@ -247,6 +247,8 @@ async fn real_token_loop_handles_requests_limits_rate_and_cleans_up() {
         matches!(rmp_serde::from_slice::<DbResponse>(&denied.res).expect("decode denial body"), DbResponse::Error { code, .. } if code == "token_read_only")
     );
 
+    assert_eq!(service.counters().post_auth_rejected_total(), 0);
+
     // Advance only the bucket watermark so the test does not rely on wall-clock time to drain it.
     let watermark = u64::MAX;
     let mut rejected = false;
@@ -279,6 +281,7 @@ async fn real_token_loop_handles_requests_limits_rate_and_cleans_up() {
     let limited: RateReply = rmp_serde::from_slice(&bytes).expect("decode rate reply");
     assert_eq!(limited.rid, 3);
     assert_eq!(limited.error, "rate_limited");
+    assert_eq!(service.counters().post_auth_rejected_total(), 1);
 
     let rendered = handle.render();
     assert!(

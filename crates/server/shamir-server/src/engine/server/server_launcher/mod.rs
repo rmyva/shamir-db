@@ -15,6 +15,8 @@ mod helpers;
 mod http;
 mod launch;
 mod listeners;
+#[path = "support/load_metrics.rs"]
+mod load_metrics;
 #[path = "support/meta_port.rs"]
 mod meta_port;
 

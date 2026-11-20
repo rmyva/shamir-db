@@ -80,10 +80,11 @@ pub use crate::security::backup_metrics::{install_backup_metrics_source, BackupM
 /// per-state source installed via
 /// [`ObservabilityState::set_activity_source`].
 pub use export::activity::ActivityMetricsSnapshot;
+pub use export::activity::LoadMetricsSnapshot;
 
 use crate::security::backup_metrics::{record_backup_metrics, register_backup_metrics};
 use durability_export::{record_durability_metrics, register_durability_metrics};
-use export::activity::{render_activity_series, ActivitySource};
+use export::activity::{render_activity_series, render_load_series, ActivitySource, LoadSource};
 use export::functions::{record_functions_metrics, register_functions_metrics};
 use export::replication::{record_replication_metrics, register_replication_metrics};
 use export::{
@@ -111,6 +112,7 @@ pub struct ObservabilityState {
     /// handler via `Weak`, so this state cannot keep the handler alive
     /// past shutdown and never reports a dropped server's mirrors.
     activity_source: ArcSwapOption<ActivitySource>,
+    load_source: ArcSwapOption<LoadSource>,
 }
 
 impl ObservabilityState {
@@ -120,6 +122,7 @@ impl ObservabilityState {
             started_at: std::time::Instant::now(),
             bound_addrs: ArcSwap::from_pointee(Vec::new()),
             activity_source: ArcSwapOption::empty(),
+            load_source: ArcSwapOption::empty(),
         })
     }
 
@@ -141,6 +144,18 @@ impl ObservabilityState {
         self.activity_source
             .load_full()
             .map_or_else(Default::default, |source| source.sample())
+    }
+
+    /// Bind this boot's connection and post-auth rate-limit measurements.
+    /// A scrape calls the source once; while unset, those series are omitted.
+    /// A later call replaces the source.
+    pub fn set_load_source(&self, source: Arc<dyn Fn() -> LoadMetricsSnapshot + Send + Sync>) {
+        self.load_source
+            .store(Some(Arc::new(LoadSource::new(source))));
+    }
+
+    fn load_snapshot(&self) -> Option<LoadMetricsSnapshot> {
+        self.load_source.load_full().map(|source| source.sample())
     }
 
     pub fn mark_ready(&self) {
@@ -279,15 +294,6 @@ pub enum ObservabilityError {
 /// when no RepoTxGate is running yet; the gauges are still registered at
 /// zero so Prometheus scrapers see them from the first scrape.
 ///
-/// `byte_budget` — F-29 (#822): optional RI-15 global in-flight
-/// response-byte budget to bridge into Prometheus gauges
-/// (`shamir_inflight_response_bytes_used`/`_cap`), snapshotted every 5 s
-/// in the same background poller alongside `tx_metrics`. Pass `None` in
-/// contexts that don't construct a `ByteBudget` (e.g. tests that call
-/// `spawn` directly without a full server boot) — the gauges are still
-/// registered at zero so Prometheus scrapers see them from the first
-/// scrape.
-///
 /// `shamir_db` — #984: optional `Arc<ShamirDb>` used to compute the
 /// `shamir_degraded_indexes_total` gauge (count of indexes stuck in
 /// `Building` state across all open tables). Snapshotted every 5 s in
@@ -335,8 +341,11 @@ pub async fn spawn(
     .await
 }
 
-/// Same as [`spawn`], plus an optional [`ByteBudget`] to bridge into the
-/// `shamir_inflight_response_bytes_used`/`_cap` gauges (F-29, #822), and an
+/// Same as [`spawn`], plus an optional [`ByteBudget`] sampled on each
+/// `/metrics` scrape. The existing `shamir_inflight_response_bytes_used` and
+/// `shamir_inflight_response_bytes_cap` names are preserved, alongside
+/// `shamir_response_budget_waiters`. Absent or unbounded budgets report
+/// zero used bytes, a cap of -1 and zero waiters. Also accepts an
 /// optional `Arc<shamir_db::ShamirDb>` to bridge into the
 /// `shamir_degraded_indexes_total` gauge (#984). Split out so `spawn`'s
 /// existing call sites/signature (already used directly by
@@ -448,26 +457,6 @@ pub async fn spawn_with_byte_budget(
         "GC entries deleted"
     );
 
-    // RI-15 / F-29 (#822) — global in-flight response-byte budget gauges.
-    // `used()`/`cap()` are cheap `AtomicUsize` loads (see `byte_budget.rs`);
-    // snapshotted every poller cycle below alongside the tx/gc gauges.
-    metrics::describe_gauge!(
-        "shamir_inflight_response_bytes_used",
-        metrics::Unit::Bytes,
-        "Bytes currently reserved against the RI-15 global in-flight \
-         response-byte budget (sum across every concurrently-executing \
-         batch/connection)"
-    );
-    metrics::describe_gauge!(
-        "shamir_inflight_response_bytes_cap",
-        metrics::Unit::Bytes,
-        "Configured cap (bytes) on the RI-15 global in-flight \
-         response-byte budget. -1 means the budget is unbounded (operator \
-         explicitly opted out via `max_inflight_response_bytes: null`) — \
-         distinguishable from a legitimate cap because a real cap can \
-         never be negative"
-    );
-
     // #984 — degraded (non-Ready) index count gauge. O(number of
     // indexes across ALREADY-OPEN tables), in-memory only, zero store
     // reads. Does NOT force-open closed tables — so the gauge reflects
@@ -492,14 +481,6 @@ pub async fn spawn_with_byte_budget(
     metrics::gauge!("shamir_tx_aborted_storage_total").set(0.0);
     metrics::gauge!("shamir_gc_runs_total").set(0.0);
     metrics::gauge!("shamir_gc_entries_deleted_total").set(0.0);
-    metrics::gauge!("shamir_inflight_response_bytes_used").set(0.0);
-    metrics::gauge!("shamir_inflight_response_bytes_cap").set(
-        byte_budget
-            .as_ref()
-            .and_then(ByteBudget::cap)
-            .map(|c| c as f64)
-            .unwrap_or(-1.0),
-    );
     metrics::gauge!("shamir_degraded_indexes_total").set(0.0);
 
     // VIS-4c: visibility acknowledgement/reconciliation family, zero-touch.
@@ -531,7 +512,6 @@ pub async fn spawn_with_byte_budget(
     let shutdown = CancellationToken::new();
     let shutdown_for_poller = shutdown.clone();
     let tx_metrics_clone = tx_metrics;
-    let byte_budget_clone = byte_budget;
     let shamir_db_clone = shamir_db.clone();
     let poller_task = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(5));
@@ -554,12 +534,6 @@ pub async fn spawn_with_byte_budget(
                         metrics::gauge!("shamir_gc_runs_total").set(snap.gc_runs as f64);
                         metrics::gauge!("shamir_gc_entries_deleted_total").set(snap.gc_entries_deleted as f64);
                     }
-                    // RI-15 / F-29 (#822): `used()` moves every request, so it
-                    // (unlike `cap()`, fixed at boot and already set once at
-                    // registration above) needs a fresh snapshot every cycle.
-                    if let Some(ref bb) = byte_budget_clone {
-                        metrics::gauge!("shamir_inflight_response_bytes_used").set(bb.used() as f64);
-                    }
                     // #984: degraded-index count — O(indexes) in-memory walk,
                     // zero store reads.
                     if let Some(ref db) = shamir_db_clone {
@@ -577,6 +551,7 @@ pub async fn spawn_with_byte_budget(
         state: state.clone(),
         prom: prom_handle,
         db: shamir_db,
+        byte_budget,
     };
     let app = Router::new()
         .route("/healthz", get(healthz))
@@ -634,6 +609,7 @@ struct AppState {
     /// `None` when `install_recorder = false` AND no prior install
     /// happened — `/metrics` then returns `503`.
     prom: Option<PrometheusHandle>,
+    byte_budget: Option<ByteBudget>,
     db: Option<Arc<shamir_db::ShamirDb>>,
 }
 
@@ -670,7 +646,14 @@ async fn metrics_handler(State(s): State<AppState>) -> Response {
             // shared recorder, so a concurrent scrape of another server
             // in the same process cannot return those counts here.
             let activity_series = render_activity_series(&s.state.activity_snapshot());
-            (StatusCode::OK, format!("{}{}", h.render(), activity_series)).into_response()
+            let mut rendered = h.render();
+            rendered.push_str(&activity_series);
+            render_load_series(
+                &mut rendered,
+                s.state.load_snapshot(),
+                s.byte_budget.as_ref(),
+            );
+            (StatusCode::OK, rendered).into_response()
         }
         None => (
             StatusCode::SERVICE_UNAVAILABLE,

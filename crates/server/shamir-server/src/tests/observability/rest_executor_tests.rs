@@ -159,6 +159,30 @@ async fn executor_ping_returns_pong_and_malformed_bytes_are_400() {
 }
 
 #[tokio::test]
+async fn executor_counts_only_post_auth_bucket_rejections() {
+    tokio::time::timeout(std::time::Duration::from_secs(120), async {
+        // Keep the clock fixed so the bucket cannot refill between requests.
+        let (_temp, service, executor, grant, _budget) =
+            fixture(TokenMode::ReadOnly, None, Arc::new(|| Some(NOW))).await;
+        let ping = request(&shamir_query_types::wire::DbRequest::Ping);
+        for _ in 0..shamir_tunables::instance_defaults::POST_AUTH_RATE_LIMIT_PER_SEC {
+            let outcome = Box::pin(executor.execute(&grant, ping.clone())).await;
+            assert!(matches!(outcome.status, ExecStatus::Ok));
+        }
+        assert_eq!(service.counters().post_auth_rejected_total(), 0);
+
+        for expected in 1..=2 {
+            let outcome = Box::pin(executor.execute(&grant, ping.clone())).await;
+            assert!(matches!(outcome.status, ExecStatus::RateLimited));
+            assert!(outcome.retry_after_secs.is_some_and(|secs| secs > 0));
+            assert_eq!(service.counters().post_auth_rejected_total(), expected);
+        }
+    })
+    .await
+    .expect("post-auth bucket scenario bounded");
+}
+
+#[tokio::test]
 async fn executor_visibility_and_ddl_status_engine_errors_remain_http_200() {
     let (_temp, _service, executor, grant, _budget) =
         fixture(TokenMode::ReadWrite, None, Arc::new(|| Some(NOW))).await;

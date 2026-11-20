@@ -574,25 +574,20 @@ pub(super) fn new_activity_projection() -> ActivityProjection {
 /// Active sessions indexed by session ID (routing) plus a per-user
 /// membership index (cap accounting).
 pub struct SessionStore {
-    /// Routing index: bearer sid -> session. Contention model: per-shard
-    /// DashMap locks keyed by sid hash; guards are short-lived, never held
-    /// across `.await`, and never two at once.
+    /// Bearer sid -> session. Short-lived sid-hash shard guards never span
+    /// an `.await` or coexist with another routing guard.
     by_sid: DashMap<Sid, Arc<Session>, SessionIdHasher>,
-    /// Per-user membership: user -> [(sid, session)]. Contention model: one
-    /// shard guard per user hash — ALL cap decisions and slot mutation for a
-    /// user happen under this guard with O(cap) work (never an O(all-sessions)
-    /// scan; replaces the old global cap mutex, RV-CONNECT-D8C2825A).
-    /// Lock order: `admit` takes the `by_user` guard FIRST, then a single
-    /// `by_sid` guard under it — never the reverse (see `admit`'s doc).
+    /// User -> [(sid, session)]. Cap decisions and slot mutations hold one
+    /// user-hash shard guard and cost O(cap), not O(all sessions).
+    /// Lock order: `by_user` before a single `by_sid` guard (see `admit`).
     by_user: UserSlotMap,
     /// Replacement rollback restores the predecessor instead of removing —
     /// also no counter change. See `admit`/`remove`/`gc_expired`.
     activity_len: AtomicUsize,
-    /// Lock-free projection of `by_sid` for the activity view: sharded
-    /// `ArcSwap` RCU slabs keyed by sid hash (see [`projection_update`] /
-    /// [`projection_snapshot`]). Publishes are rebuilt under the `by_sid`
-    /// shard write guard; removals are rebuilt right after their guard is
-    /// released (ptr_eq keeps that safe — see `projection_update`).
+    post_auth_rejections: AtomicU64,
+    /// Lock-free `by_sid` activity projection, sharded by sid hash. Rebuilds
+    /// publish under the routing write guard; removals follow guard release
+    /// and use pointer identity (see [`projection_update`]).
     activity_projection: ActivityProjection,
 }
 
@@ -609,8 +604,19 @@ impl SessionStore {
             by_sid: DashMap::with_hasher(SessionIdHasher::default()),
             by_user: DashMap::with_hasher(SessionIdHasher::default()),
             activity_len: AtomicUsize::new(0),
+            post_auth_rejections: AtomicU64::new(0),
             activity_projection: new_activity_projection(),
         }
+    }
+
+    /// Record one native dispatch refusal (not a shared bucket decision).
+    pub(crate) fn record_post_auth_rejection(&self) {
+        self.post_auth_rejections.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Snapshot of native post-auth rate refusals since store creation.
+    pub fn post_auth_rejected_total(&self) -> u64 {
+        self.post_auth_rejections.load(Ordering::Relaxed)
     }
 
     /// Test-fixture insertion ONLY: [`SessionStore::admit`] with the cap
@@ -969,16 +975,10 @@ impl SessionStore {
             .unwrap_or_default()
     }
 
-    /// Copy-only activity snapshot of all live sessions (R4b-1, D1/D3):
-    /// one `Arc<Session>` per live generation, carrying the minted handle.
-    ///
-    /// LOCK-FREE: served from the sharded `ArcSwap` projection — only
-    /// atomic loads and `Arc` clones; no `by_sid` guard is taken. The
-    /// projection converges with the primary once in-flight mutations
-    /// quiesce (see `projection_update` for the publish/removal timing and
-    /// the ptr_eq argument); a snapshot may be torn ACROSS shards (D4).
-    /// Gauge balance: every push is paired with exactly one ptr_eq-guarded
-    /// drop, so after quiescence `activity_snapshot().len() == len()`.
+    /// Lock-free snapshot of live generations and their minted handles:
+    /// atomic projection loads and `Arc` clones, no `by_sid` guard.
+    /// May be torn across shards; after quiescence its length equals `len()`
+    /// (see [`projection_update`] for pointer-identity guarded removal).
     pub fn activity_snapshot(&self) -> Vec<Arc<Session>> {
         projection_snapshot(&self.activity_projection)
     }

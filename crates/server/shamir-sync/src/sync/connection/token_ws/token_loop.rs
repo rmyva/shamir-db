@@ -333,6 +333,7 @@ pub async fn run_token_halves<R, W>(
                     return;
                 }
                 if session.check_post_auth_rate_limit(now).is_some() {
+                    service.counters().record_post_auth_rejection();
                     let Some(message) = error_message(request_id, "rate_limited") else {
                         return;
                     };

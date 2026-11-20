@@ -7,6 +7,7 @@ pub struct TokenCounters {
     revoked: std::sync::atomic::AtomicU64,
     verified_ok: std::sync::atomic::AtomicU64,
     verified_failed: std::sync::atomic::AtomicU64,
+    post_auth_rejected: std::sync::atomic::AtomicU64,
 }
 
 impl TokenCounters {
@@ -29,6 +30,18 @@ impl TokenCounters {
     pub fn verified_failed(&self) -> u64 {
         self.verified_failed
             .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Number of authenticated token requests rejected by the REST or WS request bucket.
+    pub fn post_auth_rejected_total(&self) -> u64 {
+        self.post_auth_rejected
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Records one post-auth request-bucket rejection, regardless of reply delivery.
+    pub fn record_post_auth_rejection(&self) {
+        self.post_auth_rejected
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub(crate) fn count_created(&self) {

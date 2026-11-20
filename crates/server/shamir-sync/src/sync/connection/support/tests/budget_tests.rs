@@ -1,10 +1,11 @@
-//! HIGH-1 pre-auth frame ceilings + the spec §8 handshake budget formula.
+//! Connection admission budgets: pre-auth frame ceilings, handshake time, and connection caps.
 
 use std::time::Duration;
 
 use shamir_connect::common::types::limits::MAX_PRE_AUTH_FRAME;
 use shamir_transport_tcp::framing::MAX_FRAME_SIZE_DEFAULT;
 
+use crate::conn_limiter::ConnLimiter;
 use crate::connection::handshake_budget;
 
 // HIGH-1 compile-time invariants: pin the pre-auth frame ceiling at
@@ -51,4 +52,48 @@ fn handshake_budget_is_max_of_15s_and_kdf_time_times_5() {
     assert_eq!(handshake_budget(0), Duration::from_secs(15));
     assert_eq!(handshake_budget(8), Duration::from_secs(40));
     assert_eq!(handshake_budget(5), Duration::from_secs(25));
+}
+
+#[test]
+fn capped_connection_samples_count_each_refusal_across_clones() {
+    let limiter = ConnLimiter::new(1);
+    let clone = limiter.clone();
+    assert_eq!(limiter.cap(), 1);
+    assert_eq!(limiter.live(), 0);
+    assert_eq!(limiter.rejected_total(), 0);
+
+    let guard = limiter.try_acquire().expect("first connection fits");
+    assert_eq!(limiter.live(), 1);
+    assert_eq!(limiter.rejected_total(), 0);
+
+    assert!(clone.try_acquire().is_none());
+    assert_eq!(limiter.rejected_total(), 1);
+    assert!(limiter.try_acquire().is_none());
+    assert_eq!(clone.rejected_total(), 2);
+    assert_eq!(limiter.live(), 1);
+
+    let other = ConnLimiter::new(1);
+    assert_eq!(other.rejected_total(), 0);
+
+    drop(guard);
+    assert_eq!(limiter.live(), 0);
+    assert_eq!(limiter.rejected_total(), 2);
+}
+
+#[test]
+fn unlimited_connection_samples_track_live_without_refusals() {
+    let limiter = ConnLimiter::new(0);
+    assert_eq!(limiter.cap(), 0);
+    assert_eq!(limiter.live(), 0);
+    assert_eq!(limiter.rejected_total(), 0);
+
+    let first = limiter.try_acquire().expect("first unlimited connection");
+    let second = limiter.try_acquire().expect("second unlimited connection");
+    assert_eq!(limiter.live(), 2);
+    assert_eq!(limiter.rejected_total(), 0);
+
+    drop(first);
+    drop(second);
+    assert_eq!(limiter.live(), 0);
+    assert_eq!(limiter.rejected_total(), 0);
 }
