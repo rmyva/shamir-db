@@ -1,0 +1,14 @@
+{
+  "populated": {
+    "list_activity": true,
+    "scope": "all",
+    "kind": "requests",
+    "limit": 50,
+    "continuation": "tok"
+  },
+  "omitted": {
+    "list_activity": true,
+    "scope": "own",
+    "kind": "all"
+  }
+}

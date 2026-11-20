@@ -29,6 +29,13 @@ flags = ["ts"]
 reason = "four TypeScript parity suites consume shared Rust builder byte fixtures"
 
 [[edge]]
+paths = ["crates/query/shamir-query-builder/src/wire/tests/fixtures/list_activity.json", "crates/query/shamir-query-builder/src/wire/tests/activity_admin_tests.rs"]
+crates = []
+propagate = "tests"
+flags = ["ts"]
+reason = "TypeScript ListActivity wire tests read the JSON vector transcribed from the Rust builder golden"
+
+[[edge]]
 paths = ["crates/query/shamir-query-types/test-vectors/**"]
 crates = []
 propagate = "tests"

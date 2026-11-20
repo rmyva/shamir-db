@@ -13,6 +13,10 @@ import { commitTransaction } from '../visibility/commit.js';
 import { waitForVisibility } from '../visibility/wait.js';
 import { executeWithReceipts, requestChangesSince, type AliasReceipt, type ChangesSinceResult } from '../receipts/index.js';
 import { responseError } from '../visibility/errors.js';
+import { decodeActivityPage } from '../builders/admin/activity/decode.js';
+import { ActivityProtocolError } from '../builders/admin/activity/error.js';
+import type { ActivityPage, ListActivityRequest } from '../builders/admin/activity/model.js';
+import { activityRequest } from '../builders/admin/activity/wire.js';
 import type { Platform } from '../support/platform.js';
 import type { ConnectOptions as ScramConnectOptions, ConnectLocalOptions, ResumeOptions, ResumeLocalOptions } from '../types/connection.js';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '../types/connection.js';
@@ -58,6 +62,7 @@ export type { TxOpened, ScramUserCreated, SuperuserSet, ReplicatorSet } from './
 interface PendingRequest {
   resolve: (v: Record<string, unknown>) => void;
   reject: (e: Error) => void;
+  expectedResponse?: 'activity_page';
   /**
    * Per-request timeout handle (Finding 2.2). Cleared when the response
    * arrives / the request is rejected. `undefined` when timeouts are disabled
@@ -315,6 +320,11 @@ export class ShamirClient {
               );
               continue;
             }
+            if (waiter.expectedResponse !== undefined &&
+                dbResponse?.kind !== waiter.expectedResponse && dbResponse?.kind !== 'error') {
+              waiter.reject(new ActivityProtocolError('unexpected_response', 'Expected an activity page response'));
+              continue;
+            }
             if (dbResponse.kind === 'error' || dbResponse.kind === 'as_of_visibility_timeout') {
               // Finding 2.1: surface a typed ShamirDbError carrying the
               // server's `code` + a `retryable` classification, instead of an
@@ -379,12 +389,12 @@ export class ShamirClient {
    * On send failure the pending slot is removed immediately and the returned
    * promise rejects with the send error.
    */
-  private sendDbRequest(req: object): Promise<Record<string, unknown>> {
+  private sendDbRequest(req: object, expectedResponse?: PendingRequest['expectedResponse']): Promise<Record<string, unknown>> {
     const rid = this.nextRequestId++;
 
     return new Promise<Record<string, unknown>>((resolve, reject) => {
       // Register BEFORE sending to avoid missing a fast response.
-      const slot: PendingRequest = { resolve, reject };
+      const slot: PendingRequest = { resolve, reject, expectedResponse };
       this.pending.set(rid, slot);
 
       // Finding 2.2: arm a per-request deadline. Without this a Ping /
@@ -637,6 +647,11 @@ export class ShamirClient {
     if (r.kind !== 'tx_rolled_back') {
       throw new Error(`unexpected DbResponse kind for tx_rollback: ${r.kind}`);
     }
+  }
+
+  async listActivity(db: string, request: ListActivityRequest): Promise<ActivityPage> {
+    const response = await this.sendDbRequest(activityRequest(db, request), 'activity_page');
+    return decodeActivityPage(response.page);
   }
 
   // ── SCRAM user provisioning ───────────────────────────────────────

@@ -565,6 +565,41 @@ admin.grantRole('reader', 'alice')
 admin.revokeRole('reader', 'alice')
 ```
 
+### Activity view
+
+Use a SCRAM-authenticated client to list live activity. `scope: 'own'` returns
+only the authenticated user's rows across their sessions; `scope: 'all'` requires
+`ActivityView:Manage`. Token and REST clients do not expose `listActivity`;
+the server rejects API-token requests for this operation with `token_request_denied`.
+
+```ts
+import { listAllActivity, type ActivityPage } from '@shamir/client';
+
+const sessions: ActivityPage = await client.listActivity('default', {
+  scope: 'own', kind: 'sessions',
+});
+
+let requestCount = 0;
+for await (const page of listAllActivity(client, 'default', {
+  scope: 'own', kind: 'requests', limit: 50,
+}, 10)) {
+  requestCount += page.rows.length;
+}
+```
+
+The server defaults to 256 rows per page, caps larger limits at 256, and rejects
+`limit: 0`. To resume manually, pass the opaque optional `continuation` string
+back unchanged with the same scope and kind. The iterator stops on an absent or
+empty continuation or when it reaches `maxPages` (an integer from 1 to 1000).
+The last yielded page can still have a continuation if the budget ran out.
+Pages show live activity, not an atomic snapshot.
+
+Rows use snake_case. Unsigned 64-bit values (handles, IDs, and nanosecond times)
+are `bigint`; counts are `number`. Optional fields can be absent (for example,
+`session_handle` on a request row). Activity rows contain metadata only: no
+bearer tokens or prefixes, credentials, request filter values or literals,
+database row contents, or message bodies.
+
 ---
 
 ## Interactive transactions

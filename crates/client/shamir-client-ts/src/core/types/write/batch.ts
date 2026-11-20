@@ -24,6 +24,7 @@
  * PLATFORM-AGNOSTIC.
  */
 
+import type { ListActivityOp } from '../../builders/admin/activity/model.js';
 import type { VisibilityWait, VisibilityState } from '../../visibility/types.js';
 import type { WireValue } from './write.js';
 import type { ReadQuery, ExplainPlan } from '../read/query.js';
@@ -79,6 +80,7 @@ export type BatchOpInput =
   | ForEachOp
   | SubscribeOp
   | UnsubscribeOp
+  | ListActivityOp
   /**
    * Application-schema migration admin ops (R1c step 3b) — the three-key
    * `{ application_schema: true, operation, payload }` map emitted by
