@@ -3,11 +3,8 @@
 //! `chrono` directly so the asserts do not duplicate hand-computed constants.
 
 use crate::datetime;
-use crate::registry::{arg_i64, arg_str, v_bool, v_int, v_str, ScalarRegistry};
-use chrono::format::{Item, StrftimeItems};
-use chrono::{
-    DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc, Weekday,
-};
+use crate::registry::{v_bool, v_int, v_str, ScalarRegistry};
+use chrono::{DateTime, NaiveDate, TimeZone, Timelike, Utc};
 use shamir_types::types::value::QueryValue;
 
 fn reg() -> ScalarRegistry {
@@ -433,158 +430,8 @@ fn format_parse_roundtrip() {
     assert_eq!(reparsed, v_int(WED_MS));
 }
 
-// Self-contained copy of the pre-migration chrono implementation, kept only
-// for differential tests. Do not call production helpers from this oracle.
 fn chrono_reference(name: &str, args: &[QueryValue]) -> Result<QueryValue, String> {
-    let dt = |index| -> Result<DateTime<Utc>, String> {
-        match Utc.timestamp_millis_opt(arg_i64(args, index).map_err(|e| e.code)?) {
-            chrono::LocalResult::Single(value) => Ok(value),
-            _ => Err("out_of_range".into()),
-        }
-    };
-    let parse_pattern = |input: &str, pattern: &str| -> Result<NaiveDateTime, String> {
-        if StrftimeItems::new(pattern).any(|item| matches!(item, Item::Error)) {
-            return Err("parse".into());
-        }
-        NaiveDateTime::parse_from_str(input, pattern)
-            .or_else(|_| {
-                NaiveDate::parse_from_str(input, pattern)
-                    .map(|date| date.and_hms_opt(0, 0, 0).unwrap())
-            })
-            .map_err(|_| "parse".into())
-    };
-    let start_day = |value: DateTime<Utc>| -> Result<i64, String> {
-        value
-            .with_hour(0)
-            .and_then(|x| x.with_minute(0))
-            .and_then(|x| x.with_second(0))
-            .and_then(|x| x.with_nanosecond(0))
-            .map(|x| x.timestamp_millis())
-            .ok_or_else(|| "out_of_range".into())
-    };
-    match name {
-        "now" => Ok(v_int(Utc::now().timestamp_millis())),
-        "age" => {
-            let elapsed = Utc::now()
-                .timestamp_millis()
-                .checked_sub(arg_i64(args, 0).map_err(|e| e.code)?)
-                .ok_or("out_of_range")?;
-            Ok(v_int(elapsed / 1000))
-        }
-        "to_epoch_s" => Ok(v_int(
-            arg_i64(args, 0).map_err(|e| e.code)?.div_euclid(1000),
-        )),
-        "to_epoch_ms" | "from_epoch_ms" => Ok(v_int(arg_i64(args, 0).map_err(|e| e.code)?)),
-        "from_epoch_s" => arg_i64(args, 0)
-            .map_err(|e| e.code)?
-            .checked_mul(1000)
-            .map(v_int)
-            .ok_or_else(|| "out_of_range".into()),
-        "add_secs" | "add_days" => {
-            let value = dt(0)?;
-            let amount = arg_i64(args, 1).map_err(|e| e.code)?;
-            let delta = if name == "add_secs" {
-                Duration::try_seconds(amount)
-            } else {
-                Duration::try_days(amount)
-            }
-            .ok_or("out_of_range")?;
-            value
-                .checked_add_signed(delta)
-                .map(|result| v_int(result.timestamp_millis()))
-                .ok_or_else(|| "out_of_range".into())
-        }
-        "diff_secs" => {
-            let difference = arg_i64(args, 0)
-                .map_err(|e| e.code)?
-                .checked_sub(arg_i64(args, 1).map_err(|e| e.code)?)
-                .ok_or("out_of_range")?;
-            Ok(v_int(difference.div_euclid(1000)))
-        }
-        "year" => Ok(v_int(dt(0)?.year() as i64)),
-        "month" => Ok(v_int(dt(0)?.month() as i64)),
-        "day" => Ok(v_int(dt(0)?.day() as i64)),
-        "hour" => Ok(v_int(dt(0)?.hour() as i64)),
-        "minute" => Ok(v_int(dt(0)?.minute() as i64)),
-        "second" => Ok(v_int(dt(0)?.second() as i64)),
-        "weekday" => Ok(v_int(dt(0)?.weekday().num_days_from_monday() as i64)),
-        "is_weekend" => Ok(v_bool(matches!(
-            dt(0)?.weekday(),
-            Weekday::Sat | Weekday::Sun
-        ))),
-        "format_rfc3339" => Ok(v_str(dt(0)?.to_rfc3339())),
-        "parse_rfc3339" => DateTime::parse_from_rfc3339(arg_str(args, 0).map_err(|e| e.code)?)
-            .map(|x| v_int(x.with_timezone(&Utc).timestamp_millis()))
-            .map_err(|_| "parse".into()),
-        "format" => {
-            let value = dt(0)?;
-            let pattern = arg_str(args, 1).map_err(|e| e.code)?;
-            if StrftimeItems::new(pattern).any(|item| matches!(item, Item::Error)) {
-                return Err("parse".into());
-            }
-            Ok(v_str(value.format(pattern).to_string()))
-        }
-        "parse" => {
-            let value = parse_pattern(
-                arg_str(args, 0).map_err(|e| e.code)?,
-                arg_str(args, 1).map_err(|e| e.code)?,
-            )?;
-            Ok(v_int(value.and_utc().timestamp_millis()))
-        }
-        "start_of_day" => Ok(v_int(start_day(dt(0)?)?)),
-        "start_of_week" => {
-            let value = dt(0)?;
-            let monday = value
-                .checked_sub_signed(Duration::days(value.weekday().num_days_from_monday() as i64))
-                .ok_or("out_of_range")?;
-            Ok(v_int(start_day(monday)?))
-        }
-        "start_of_month" => {
-            let value = dt(0)?.with_day(1).ok_or("out_of_range")?;
-            Ok(v_int(start_day(value)?))
-        }
-        "truncate" => {
-            let value = dt(0)?;
-            let unit = arg_str(args, 1).map_err(|e| e.code)?;
-            let millis = match unit {
-                "second" => value.timestamp_millis() - value.timestamp_millis().rem_euclid(1000),
-                "minute" => value
-                    .with_second(0)
-                    .and_then(|x| x.with_nanosecond(0))
-                    .map(|x| x.timestamp_millis())
-                    .ok_or("out_of_range")?,
-                "hour" => value
-                    .with_minute(0)
-                    .and_then(|x| x.with_second(0))
-                    .and_then(|x| x.with_nanosecond(0))
-                    .map(|x| x.timestamp_millis())
-                    .ok_or("out_of_range")?,
-                "day" => start_day(value)?,
-                "week" => {
-                    let monday = value
-                        .checked_sub_signed(Duration::days(
-                            value.weekday().num_days_from_monday() as i64
-                        ))
-                        .ok_or("out_of_range")?;
-                    start_day(monday)?
-                }
-                "month" => {
-                    let first = value.with_day(1).ok_or("out_of_range")?;
-                    start_day(first)?
-                }
-                "year" => {
-                    let first = value
-                        .with_month(1)
-                        .and_then(|x| x.with_day(1))
-                        .ok_or("out_of_range")?;
-                    start_day(first)?
-                }
-                _ => return Err("bad_unit".into()),
-            };
-            Ok(v_int(millis))
-        }
-        _ => Err("unsupported oracle operation".into()),
-    }
+    super::chrono_oracle::reference(name, args)
 }
 
 fn datetime_parity_mismatch(name: &str, args: &[QueryValue]) -> Option<String> {
@@ -733,6 +580,18 @@ fn chrono_differential_boundary_grid_and_seeded_sweep() {
         ("2021-06-02 15:30:45", "%Y-%m-%d %H:%M:%S"),
         ("Wed Jun  2 15:30:45 2021", "%a %b %e %T %Y"),
         ("2021-06-02T15:30:45Z", "%Y-%m-%dT%H:%M:%S%#z"),
+        ("2021-06-02T15:30:45z", "%Y-%m-%dT%H:%M:%S%#z"),
+        ("2021-06-02T15:30:45+02", "%Y-%m-%dT%H:%M:%S%#z"),
+        ("2021-06-02T15:30:45+0200", "%Y-%m-%dT%H:%M:%S%#z"),
+        ("2021-06-02T15:30:45+02:00", "%Y-%m-%dT%H:%M:%S%#z"),
+        ("2021-06-02T15:30:45+02 00", "%Y-%m-%dT%H:%M:%S%#z"),
+        ("2021-06-02T15:30:45+02:00:30", "%Y-%m-%dT%H:%M:%S%#z"),
+        ("2021-06-02T15:30:45-07", "%Y-%m-%dT%H:%M:%S%#z"),
+        ("2021-06-02T15:30:45", "%Y-%m-%dT%H:%M:%S%#z"),
+        ("2021-06-02T15:30:45+02:00", "%Y-%m-%dT%H:%M:%S%z"),
+        ("2021-06-02T15:30:45+02 00", "%Y-%m-%dT%H:%M:%S%z"),
+        ("2021-06-02T15:30:45+30:00", "%Y-%m-%dT%H:%M:%S%z"),
+        ("2021-06-02T15:30:45-99:59", "%Y-%m-%dT%H:%M:%S%#z"),
         ("not-a-date", "%Y-%m-%d"),
         ("2021-13-02", "%Y-%m-%d"),
     ] {
@@ -812,11 +671,12 @@ fn chrono_differential_wall_clock_bounds() {
     let QueryValue::Int(negative_age_secs) = negative_age else {
         panic!("age must return Int: {negative_age:?}");
     };
-    let negative_lower = (before_negative_age - then_negative) / 1000;
-    let negative_upper = (after_negative_age - then_negative) / 1000;
+    let negative_lower =
+        chrono_reference("age_at", &[ts(then_negative), ts(before_negative_age)]).unwrap();
+    let negative_upper =
+        chrono_reference("age_at", &[ts(then_negative), ts(after_negative_age)]).unwrap();
     assert!(negative_age_secs < 0);
-    assert!((negative_lower..=negative_upper).contains(&negative_age_secs));
-    assert!(negative_age_secs == negative_lower || negative_age_secs == negative_upper);
+    assert!(negative_age == negative_lower || negative_age == negative_upper);
 
     let then = Utc::now().timestamp_millis() - 10_000;
     let before_age = Utc::now().timestamp_millis();
@@ -825,13 +685,14 @@ fn chrono_differential_wall_clock_bounds() {
     let QueryValue::Int(age_secs) = age else {
         panic!("age must return Int: {age:?}");
     };
-    let lower = (before_age - then) / 1000;
-    let upper = (after_age - then) / 1000;
-    assert!(
-        (lower..=upper).contains(&age_secs),
-        "age={age_secs}, bounds={lower}..={upper}"
-    );
-    assert!(age_secs == lower || age_secs == upper);
+    let lower = chrono_reference("age_at", &[ts(then), ts(before_age)]).unwrap();
+    let upper = chrono_reference("age_at", &[ts(then), ts(after_age)]).unwrap();
+    assert!((match (&lower, &upper) {
+        (QueryValue::Int(a), QueryValue::Int(b)) => *a.min(b)..=*a.max(b),
+        _ => unreachable!(),
+    })
+    .contains(&age_secs));
+    assert!(age == lower || age == upper);
 }
 
 #[test]

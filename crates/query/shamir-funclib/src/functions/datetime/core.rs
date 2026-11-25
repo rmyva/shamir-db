@@ -680,11 +680,25 @@ pub fn register(reg: &mut ScalarRegistry) {
                 let s = arg_str(a, 0)?;
                 let pattern = arg_str(a, 1)?;
                 validate_pattern(pattern)?;
-                let parsed = CivilDateTime::strptime(pattern, s)
-                    .or_else(|_| {
-                        jiff::civil::Date::strptime(pattern, s).map(|date| date.at(0, 0, 0, 0))
-                    })
-                    .map_err(|_| ScalarError::builtin("parse"))?;
+                let parsed = CivilDateTime::strptime(pattern, s).or_else(|_| {
+                    jiff::civil::Date::strptime(pattern, s).map(|date| date.at(0, 0, 0, 0))
+                });
+                let parsed = match parsed {
+                    Ok(value) => value,
+                    Err(_) => {
+                        let Some((input_prefix, pattern_prefix)) =
+                            super::parse_rescue::rescue(s, pattern)
+                        else {
+                            return Err(ScalarError::builtin("parse"));
+                        };
+                        CivilDateTime::strptime(&pattern_prefix, &input_prefix)
+                            .or_else(|_| {
+                                jiff::civil::Date::strptime(&pattern_prefix, &input_prefix)
+                                    .map(|date| date.at(0, 0, 0, 0))
+                            })
+                            .map_err(|_| ScalarError::builtin("parse"))?
+                    }
+                };
                 let timestamp = parsed
                     .to_zoned(TimeZone::UTC)
                     .map(|zoned| zoned.timestamp())
