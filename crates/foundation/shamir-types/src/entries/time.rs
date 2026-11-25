@@ -8,12 +8,12 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use chrono::{Local, Timelike};
-
-/// Current local minute of day (0–1439).
+/// Current local minute of day (0–1439), using the system's local time zone.
+/// Jiff reports these valid civil clock components as signed integers; convert
+/// through their unsigned representation before arithmetic.
 pub fn local_minute_of_day() -> u32 {
-    let now = Local::now();
-    now.hour() * 60 + now.minute()
+    let now = jiff::Zoned::now();
+    u32::from(now.hour() as u8) * 60 + u32::from(now.minute() as u8)
 }
 
 /// Wall-clock milliseconds since the UNIX epoch; `0` if the clock is set

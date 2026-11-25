@@ -3,8 +3,11 @@
 //! `chrono` directly so the asserts do not duplicate hand-computed constants.
 
 use crate::datetime;
-use crate::registry::{v_bool, v_int, v_str, ScalarRegistry};
-use chrono::{DateTime, TimeZone, Utc};
+use crate::registry::{arg_i64, arg_str, v_bool, v_int, v_str, ScalarRegistry};
+use chrono::format::{Item, StrftimeItems};
+use chrono::{
+    DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc, Weekday,
+};
 use shamir_types::types::value::QueryValue;
 
 fn reg() -> ScalarRegistry {
@@ -25,6 +28,20 @@ fn millis_of(s: &str) -> i64 {
         .unwrap()
         .with_timezone(&Utc)
         .timestamp_millis()
+}
+
+#[test]
+fn local_minute_of_day_matches_chrono_local() {
+    let before = chrono::Local::now();
+    let before_minute = before.hour() * 60 + before.minute();
+    let actual = shamir_types::time::local_minute_of_day();
+    let after = chrono::Local::now();
+    let after_minute = after.hour() * 60 + after.minute();
+
+    assert!(
+        actual == before_minute || actual == after_minute,
+        "actual {actual} did not match chrono minutes before ({before_minute}) or after ({after_minute})",
+    );
 }
 
 #[test]
@@ -414,6 +431,368 @@ fn format_parse_roundtrip() {
         .call("parse", &[formatted, v_str(pattern.into())])
         .unwrap();
     assert_eq!(reparsed, v_int(WED_MS));
+}
+
+// Self-contained copy of the pre-migration chrono implementation, kept only
+// for differential tests. Do not call production helpers from this oracle.
+fn chrono_reference(name: &str, args: &[QueryValue]) -> Result<QueryValue, String> {
+    let dt = |index| -> Result<DateTime<Utc>, String> {
+        match Utc.timestamp_millis_opt(arg_i64(args, index).map_err(|e| e.code)?) {
+            chrono::LocalResult::Single(value) => Ok(value),
+            _ => Err("out_of_range".into()),
+        }
+    };
+    let parse_pattern = |input: &str, pattern: &str| -> Result<NaiveDateTime, String> {
+        if StrftimeItems::new(pattern).any(|item| matches!(item, Item::Error)) {
+            return Err("parse".into());
+        }
+        NaiveDateTime::parse_from_str(input, pattern)
+            .or_else(|_| {
+                NaiveDate::parse_from_str(input, pattern)
+                    .map(|date| date.and_hms_opt(0, 0, 0).unwrap())
+            })
+            .map_err(|_| "parse".into())
+    };
+    let start_day = |value: DateTime<Utc>| -> Result<i64, String> {
+        value
+            .with_hour(0)
+            .and_then(|x| x.with_minute(0))
+            .and_then(|x| x.with_second(0))
+            .and_then(|x| x.with_nanosecond(0))
+            .map(|x| x.timestamp_millis())
+            .ok_or_else(|| "out_of_range".into())
+    };
+    match name {
+        "now" => Ok(v_int(Utc::now().timestamp_millis())),
+        "age" => {
+            let elapsed = Utc::now()
+                .timestamp_millis()
+                .checked_sub(arg_i64(args, 0).map_err(|e| e.code)?)
+                .ok_or("out_of_range")?;
+            Ok(v_int(elapsed / 1000))
+        }
+        "to_epoch_s" => Ok(v_int(
+            arg_i64(args, 0).map_err(|e| e.code)?.div_euclid(1000),
+        )),
+        "to_epoch_ms" | "from_epoch_ms" => Ok(v_int(arg_i64(args, 0).map_err(|e| e.code)?)),
+        "from_epoch_s" => arg_i64(args, 0)
+            .map_err(|e| e.code)?
+            .checked_mul(1000)
+            .map(v_int)
+            .ok_or_else(|| "out_of_range".into()),
+        "add_secs" | "add_days" => {
+            let value = dt(0)?;
+            let amount = arg_i64(args, 1).map_err(|e| e.code)?;
+            let delta = if name == "add_secs" {
+                Duration::try_seconds(amount)
+            } else {
+                Duration::try_days(amount)
+            }
+            .ok_or("out_of_range")?;
+            value
+                .checked_add_signed(delta)
+                .map(|result| v_int(result.timestamp_millis()))
+                .ok_or_else(|| "out_of_range".into())
+        }
+        "diff_secs" => {
+            let difference = arg_i64(args, 0)
+                .map_err(|e| e.code)?
+                .checked_sub(arg_i64(args, 1).map_err(|e| e.code)?)
+                .ok_or("out_of_range")?;
+            Ok(v_int(difference.div_euclid(1000)))
+        }
+        "year" => Ok(v_int(dt(0)?.year() as i64)),
+        "month" => Ok(v_int(dt(0)?.month() as i64)),
+        "day" => Ok(v_int(dt(0)?.day() as i64)),
+        "hour" => Ok(v_int(dt(0)?.hour() as i64)),
+        "minute" => Ok(v_int(dt(0)?.minute() as i64)),
+        "second" => Ok(v_int(dt(0)?.second() as i64)),
+        "weekday" => Ok(v_int(dt(0)?.weekday().num_days_from_monday() as i64)),
+        "is_weekend" => Ok(v_bool(matches!(
+            dt(0)?.weekday(),
+            Weekday::Sat | Weekday::Sun
+        ))),
+        "format_rfc3339" => Ok(v_str(dt(0)?.to_rfc3339())),
+        "parse_rfc3339" => DateTime::parse_from_rfc3339(arg_str(args, 0).map_err(|e| e.code)?)
+            .map(|x| v_int(x.with_timezone(&Utc).timestamp_millis()))
+            .map_err(|_| "parse".into()),
+        "format" => {
+            let value = dt(0)?;
+            let pattern = arg_str(args, 1).map_err(|e| e.code)?;
+            if StrftimeItems::new(pattern).any(|item| matches!(item, Item::Error)) {
+                return Err("parse".into());
+            }
+            Ok(v_str(value.format(pattern).to_string()))
+        }
+        "parse" => {
+            let value = parse_pattern(
+                arg_str(args, 0).map_err(|e| e.code)?,
+                arg_str(args, 1).map_err(|e| e.code)?,
+            )?;
+            Ok(v_int(value.and_utc().timestamp_millis()))
+        }
+        "start_of_day" => Ok(v_int(start_day(dt(0)?)?)),
+        "start_of_week" => {
+            let value = dt(0)?;
+            let monday = value
+                .checked_sub_signed(Duration::days(value.weekday().num_days_from_monday() as i64))
+                .ok_or("out_of_range")?;
+            Ok(v_int(start_day(monday)?))
+        }
+        "start_of_month" => {
+            let value = dt(0)?.with_day(1).ok_or("out_of_range")?;
+            Ok(v_int(start_day(value)?))
+        }
+        "truncate" => {
+            let value = dt(0)?;
+            let unit = arg_str(args, 1).map_err(|e| e.code)?;
+            let millis = match unit {
+                "second" => value.timestamp_millis() - value.timestamp_millis().rem_euclid(1000),
+                "minute" => value
+                    .with_second(0)
+                    .and_then(|x| x.with_nanosecond(0))
+                    .map(|x| x.timestamp_millis())
+                    .ok_or("out_of_range")?,
+                "hour" => value
+                    .with_minute(0)
+                    .and_then(|x| x.with_second(0))
+                    .and_then(|x| x.with_nanosecond(0))
+                    .map(|x| x.timestamp_millis())
+                    .ok_or("out_of_range")?,
+                "day" => start_day(value)?,
+                "week" => {
+                    let monday = value
+                        .checked_sub_signed(Duration::days(
+                            value.weekday().num_days_from_monday() as i64
+                        ))
+                        .ok_or("out_of_range")?;
+                    start_day(monday)?
+                }
+                "month" => {
+                    let first = value.with_day(1).ok_or("out_of_range")?;
+                    start_day(first)?
+                }
+                "year" => {
+                    let first = value
+                        .with_month(1)
+                        .and_then(|x| x.with_day(1))
+                        .ok_or("out_of_range")?;
+                    start_day(first)?
+                }
+                _ => return Err("bad_unit".into()),
+            };
+            Ok(v_int(millis))
+        }
+        _ => Err("unsupported oracle operation".into()),
+    }
+}
+
+fn datetime_parity_mismatch(name: &str, args: &[QueryValue]) -> Option<String> {
+    let actual = reg().call(name, args).map_err(|error| error.code);
+    let expected = chrono_reference(name, args);
+    (actual != expected)
+        .then(|| format!("{name}({args:?}): actual={actual:?}, chrono={expected:?}"))
+}
+
+#[test]
+fn chrono_differential_boundary_grid_and_seeded_sweep() {
+    let mut mismatches = Vec::new();
+    macro_rules! assert_datetime_parity {
+        ($name:expr, $args:expr) => {
+            if let Some(mismatch) = datetime_parity_mismatch($name, $args) {
+                mismatches.push(mismatch);
+            }
+        };
+    }
+    let mut values = vec![
+        i64::MIN,
+        i64::MIN + 1,
+        i64::MAX,
+        i64::MAX - 1,
+        -1,
+        0,
+        1,
+        -1001,
+        -1000,
+        -999,
+        999,
+        1000,
+        1001,
+    ];
+    // Derive chrono's inclusive civil-date endpoints from its own constants;
+    // timestamp_millis_opt then establishes the exact accepted millisecond edge.
+    for date in [NaiveDate::MIN, NaiveDate::MAX] {
+        let midnight = date
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis();
+        let last_second = date
+            .and_hms_opt(23, 59, 59)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis();
+        values.extend([
+            midnight.saturating_sub(1),
+            midnight,
+            midnight.saturating_add(1),
+        ]);
+        values.extend([
+            last_second.saturating_sub(1),
+            last_second,
+            last_second.saturating_add(999),
+        ]);
+    }
+    for year in [
+        -9999, -400, -100, -4, -1, 0, 1, 4, 100, 400, 999, 1900, 2000, 2100, 9999,
+    ] {
+        for date in [
+            (1, 1),
+            (1, 31),
+            (2, 28),
+            (2, 29),
+            (3, 1),
+            (12, 30),
+            (12, 31),
+        ] {
+            if let Some(value) = Utc
+                .with_ymd_and_hms(year, date.0, date.1, 23, 59, 59)
+                .single()
+            {
+                let ms = value.timestamp_millis();
+                values.extend([ms - 1, ms, ms + 1, ms + 999]);
+            }
+        }
+    }
+    let mut seed = 0x6a09_e667_f3bc_c909u64;
+    for _ in 0..512 {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        values.push((seed as i64) % 8_000_000_000_000_000);
+    }
+    values.sort_unstable();
+    values.dedup();
+    let operations = [
+        "to_epoch_s",
+        "to_epoch_ms",
+        "from_epoch_ms",
+        "year",
+        "month",
+        "day",
+        "hour",
+        "minute",
+        "second",
+        "weekday",
+        "is_weekend",
+        "format_rfc3339",
+        "start_of_day",
+        "start_of_week",
+        "start_of_month",
+    ];
+    for millis in values.iter().copied() {
+        for operation in operations {
+            assert_datetime_parity!(operation, &[ts(millis)]);
+        }
+        assert_datetime_parity!("from_epoch_s", &[ts(millis)]);
+        for delta in [-86_401, -1, 0, 1, 86_401, i64::MIN, i64::MAX] {
+            assert_datetime_parity!("add_secs", &[ts(millis), ts(delta)]);
+            assert_datetime_parity!("add_days", &[ts(millis), ts(delta)]);
+            assert_datetime_parity!("diff_secs", &[ts(millis), ts(delta)]);
+        }
+        for unit in [
+            "second",
+            "minute",
+            "hour",
+            "day",
+            "week",
+            "month",
+            "year",
+            "fortnight",
+        ] {
+            assert_datetime_parity!("truncate", &[ts(millis), v_str(unit.into())]);
+        }
+    }
+    // All chrono strftime conversions (including modifiers) plus invalid and truncated directives.
+    let patterns = [
+        "%a", "%A", "%b", "%B", "%c", "%C", "%d", "%D", "%e", "%F", "%G", "%g", "%h", "%H", "%I",
+        "%j", "%k", "%l", "%m", "%M", "%n", "%p", "%P", "%q", "%r", "%R", "%s", "%S", "%t", "%T",
+        "%u", "%U", "%V", "%v", "%w", "%W", "%x", "%X", "%y", "%Y", "%z", "%:z", "%::z", "%:::z",
+        "%Z", "%+", "%%", "%E4Y", "%Od", "%_d", "%-d", "%0d", "%^B", "%#c", "%f", "%.f", "%.3f",
+        "%3f", "%Q", "%J", "%", "%E", "%O",
+    ];
+    for pattern in patterns {
+        assert_datetime_parity!("format", &[ts(1_622_647_845_123), v_str(pattern.into())]);
+    }
+    for (input, pattern) in [
+        ("2021-06-02", "%Y-%m-%d"),
+        ("2021-06-02 15:30:45", "%Y-%m-%d %H:%M:%S"),
+        ("Wed Jun  2 15:30:45 2021", "%a %b %e %T %Y"),
+        ("2021-06-02T15:30:45Z", "%Y-%m-%dT%H:%M:%S%#z"),
+        ("not-a-date", "%Y-%m-%d"),
+        ("2021-13-02", "%Y-%m-%d"),
+    ] {
+        assert_datetime_parity!("parse", &[v_str(input.into()), v_str(pattern.into())]);
+    }
+    for input in [
+        "2021-06-02T15:30:45Z",
+        "2021-06-02T15:30:45.1Z",
+        "2021-06-02T15:30:45.123456789Z",
+        "1969-12-31T23:59:59.9Z",
+        "2021-06-02T15:30:45+02:30",
+        "2021-06-02T15:30:45-07:00",
+        "2021-06-02t15:30:45z",
+        "2016-12-31T23:59:60Z",
+        "2021-06-02T15:30:45",
+        "2021-06-02T15:30:45+25:00",
+        "not-a-date",
+    ] {
+        assert_datetime_parity!("parse_rfc3339", &[v_str(input.into())]);
+    }
+    for (name, args) in [
+        ("year", vec![v_str("x".into())]),
+        ("to_epoch_s", vec![v_str("x".into())]),
+        ("format", vec![ts(0), ts(1)]),
+        ("parse", vec![v_str("x".into()), ts(0)]),
+        ("add_secs", vec![ts(0), v_str("1".into())]),
+        ("truncate", vec![ts(0), ts(1)]),
+    ] {
+        assert_datetime_parity!(name, &args);
+    }
+    assert!(
+        mismatches.is_empty(),
+        "{} chrono differential mismatches:\n{}",
+        mismatches.len(),
+        mismatches.join("\n")
+    );
+}
+
+#[test]
+fn chrono_differential_wall_clock_bounds() {
+    let before_now = Utc::now().timestamp_millis();
+    let now = reg().call("now", &[]).unwrap();
+    let after_now = Utc::now().timestamp_millis();
+    let QueryValue::Int(now_ms) = now else {
+        panic!("now must return Int: {now:?}");
+    };
+    assert!(
+        (before_now..=after_now).contains(&now_ms),
+        "now={now_ms}, bounds={before_now}..={after_now}"
+    );
+
+    let then = Utc::now().timestamp_millis() - 10_000;
+    let before_age = Utc::now().timestamp_millis();
+    let age = reg().call("age", &[ts(then)]).unwrap();
+    let after_age = Utc::now().timestamp_millis();
+    let QueryValue::Int(age_secs) = age else {
+        panic!("age must return Int: {age:?}");
+    };
+    let lower = (before_age - then) / 1000;
+    let upper = (after_age - then) / 1000;
+    assert!(
+        (lower..=upper).contains(&age_secs),
+        "age={age_secs}, bounds={lower}..={upper}"
+    );
 }
 
 #[test]

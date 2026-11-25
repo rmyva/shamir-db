@@ -105,9 +105,8 @@ static UUID_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// RFC-3339 date-time OR bare `YYYY-MM-DD`.
 ///
 /// The full-timestamp shape is matched structurally (not parsed) — a value
-/// that `chrono::DateTime::parse_from_rfc3339` accepts will match this regex
-/// and vice-versa, because the regex encodes the same grammar (date `T` time
-/// offset).  The bare-date shape adds a day-of-month range sanity check so
+/// that matches the RFC-3339 date-time shape encoded here (date, `T`, time,
+/// offset). The bare-date shape adds a day-of-month range sanity check so
 /// `2024-02-31` is rejected even though the regex alone would accept it.
 fn is_date_like(s: &str) -> bool {
     // Full RFC-3339 date-time: YYYY-MM-DDThh:mm:ss with optional fractional
@@ -147,8 +146,8 @@ fn parse_bare_date(s: &str) -> Option<(i32, u32, u32)> {
 
 /// Whether `(year, month, day)` is a valid Gregorian calendar date.
 ///
-/// A small in-process check so we don't pull in `chrono` just for the
-/// `date` format: months 1..=12, days 1..=days_in_month(year, month).
+/// A small in-process Gregorian date check keeps validation independent of
+/// date/time dependencies: months 1..=12, days 1..=days_in_month(year, month).
 fn day_is_valid(year: i32, month: u32, day: u32) -> bool {
     if month == 0 || month > 12 || day == 0 {
         return false;

@@ -1893,6 +1893,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3746,6 +3747,7 @@ dependencies = [
  "data-encoding",
  "hex",
  "hmac",
+ "jiff",
  "log",
  "num-bigint",
  "percent-encoding",
@@ -4249,10 +4251,10 @@ dependencies = [
  "bench-scale-tool",
  "bincode",
  "bytes",
- "chrono",
  "dashmap",
  "getrandom 0.3.4",
  "indexmap",
+ "jiff",
  "log",
  "num-bigint",
  "rand 0.9.4",

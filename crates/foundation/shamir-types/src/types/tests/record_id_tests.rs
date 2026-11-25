@@ -8,6 +8,31 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    fn custom_epoch_is_pinned_to_literal_microseconds() {
+        const EPOCH_2026: i64 = 1_769_817_600_000_000;
+        const BOUNDARY: i64 = 1i64 << 32;
+
+        assert_eq!(
+            &RecordId::from_ts(EPOCH_2026 - 1).as_bytes()[..8],
+            &(-1i64).to_be_bytes()
+        );
+        for timestamp in [EPOCH_2026, EPOCH_2026 + 1, EPOCH_2026 + BOUNDARY - 1] {
+            assert_eq!(
+                &RecordId::from_ts(timestamp).as_bytes()[..8],
+                &BOUNDARY.to_be_bytes()
+            );
+        }
+        assert_eq!(
+            &RecordId::from_ts(EPOCH_2026 + BOUNDARY).as_bytes()[..8],
+            &BOUNDARY.to_be_bytes()
+        );
+        assert_eq!(
+            &RecordId::from_ts(EPOCH_2026 + BOUNDARY + 1).as_bytes()[..8],
+            &(BOUNDARY + 1).to_be_bytes()
+        );
+    }
+
+    #[test]
     fn test_record_id_uniqueness() {
         let mut ids = new_set();
         for _ in 0..100_000 {

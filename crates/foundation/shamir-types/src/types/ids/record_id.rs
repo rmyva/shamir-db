@@ -1,6 +1,5 @@
 use crate::types::base::{self, Base58Error};
 use bytes::Bytes;
-use chrono::Utc;
 use rand::RngCore;
 use rand::SeedableRng;
 use rand_xoshiro::Xoshiro256PlusPlus;
@@ -8,10 +7,11 @@ use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::fmt;
 use std::str::FromStr;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The custom epoch for our RecordId timestamps, set to 2026-01-31 00:00:00 UTC.
 /// This makes the timestamp part of the ID smaller and more manageable.
-/// Value: `chrono::Utc.with_ymd_and_hms(2026, 1, 31, 0, 0, 0).unwrap().timestamp_micros()`
+/// Value: 1_769_817_600_000_000 microseconds since the Unix epoch.
 const CUSTOM_EPOCH_MICROS: i64 = 1_769_817_600_000_000;
 
 /// Timestamp IDs produced by the constructors reserve the first 2^32 relative
@@ -29,7 +29,7 @@ pub struct RecordId(pub [u8; 16]);
 
 impl RecordId {
     pub fn new() -> Self {
-        Self::from_ts(Utc::now().timestamp_micros())
+        Self::from_ts(Self::now_micros())
     }
 
     /// Returns the current wall-clock timestamp in microseconds —
@@ -38,7 +38,22 @@ impl RecordId {
     /// per row.
     #[inline]
     pub fn now_micros() -> i64 {
-        Utc::now().timestamp_micros()
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| i64::try_from(duration.as_micros()).unwrap_or(i64::MAX))
+            .unwrap_or_else(|error| {
+                let duration = error.duration();
+                let micros = i128::try_from(duration.as_micros()).unwrap_or(i128::MAX);
+                let micros = micros
+                    .checked_add(if duration.subsec_nanos() % 1_000 != 0 {
+                        1i128
+                    } else {
+                        0i128
+                    })
+                    .unwrap_or(i128::MAX);
+                let negative_micros = micros.checked_neg().unwrap_or(i128::MIN);
+                i64::try_from(negative_micros).unwrap_or(i64::MIN)
+            })
     }
 
     /// Creates a `RecordId` with a caller-supplied `timestamp_micros` and a

@@ -25,36 +25,544 @@
 use crate::registry::{
     arg_i64, arg_str, v_bool, v_int, v_str, FnEntry, ScalarError, ScalarRegistry,
 };
-use chrono::format::{Item, StrftimeItems};
-use chrono::{
-    DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc, Weekday,
-};
-use shamir_types::types::value::QueryValue;
+use jiff::{civil::DateTime as CivilDateTime, tz::TimeZone, Timestamp};
 
-/// Convert epoch-millis UTC into a `DateTime<Utc>`, or `"out_of_range"`.
-fn to_dt(ms: i64) -> Result<DateTime<Utc>, ScalarError> {
-    match Utc.timestamp_millis_opt(ms) {
-        chrono::LocalResult::Single(dt) => Ok(dt),
-        _ => Err(ScalarError::builtin("out_of_range")),
+/// Chrono 0.4.44's `NaiveDate` limits are -262143-01-01 through
+/// 262142-12-31. These are the inclusive epoch-millisecond bounds accepted by
+/// `DateTime<Utc>::from_timestamp_millis`.
+const CHRONO_MIN_TIMESTAMP_MILLIS: i64 = -8_334_601_228_800_000;
+const CHRONO_MAX_TIMESTAMP_MILLIS: i64 = 8_210_266_876_799_999;
+
+fn ensure_chrono_timestamp_range(ms: i64) -> Result<(), ScalarError> {
+    if (CHRONO_MIN_TIMESTAMP_MILLIS..=CHRONO_MAX_TIMESTAMP_MILLIS).contains(&ms) {
+        Ok(())
+    } else {
+        Err(ScalarError::builtin("out_of_range"))
     }
 }
 
-/// First epoch-millis argument decoded into a `DateTime<Utc>`.
-fn dt_arg(a: &[QueryValue], i: usize) -> Result<DateTime<Utc>, ScalarError> {
-    to_dt(arg_i64(a, i)?)
+/// Gregorian calendar fields for a UTC epoch-millisecond timestamp.
+struct CalendarFields {
+    year: i32,
+    month: i32,
+    day: i32,
+    hour: i32,
+    minute: i32,
+    second: i32,
+    millisecond: i32,
+    /// Monday = 0 through Sunday = 6.
+    weekday: i64,
 }
 
-/// Validate a strftime `pattern` BEFORE it reaches `DateTime::format` (which
-/// panics on unknown specifiers via a lazy `DelayedFormat`). `StrftimeItems`
-/// parses the pattern eagerly and emits [`Item::Error`] for any invalid
-/// specifier; scanning for that variant converts the panic into a clean
-/// `ScalarError("parse")` without ever constructing the panicking
-/// `DelayedFormat`.
+impl CalendarFields {
+    fn from_millis(ms: i64) -> Result<Self, ScalarError> {
+        ensure_chrono_timestamp_range(ms)?;
+        const DAY_MILLIS: i64 = 86_400_000;
+        let days = ms.div_euclid(DAY_MILLIS);
+        let day_millis = ms.rem_euclid(DAY_MILLIS);
+        let (year, month, day) = civil_from_days(days);
+        Ok(Self {
+            year: year as i32,
+            month: month as i32,
+            day: day as i32,
+            hour: (day_millis / 3_600_000) as i32,
+            minute: ((day_millis % 3_600_000) / 60_000) as i32,
+            second: ((day_millis % 60_000) / 1_000) as i32,
+            millisecond: (day_millis % 1_000) as i32,
+            weekday: (days + 3).rem_euclid(7),
+        })
+    }
+}
+
+/// Convert a proleptic Gregorian civil date to days since 1970-01-01.
+fn days_from_civil(year: i32, month: i32, day: i32) -> i64 {
+    let mut y = i64::from(year);
+    let m = i64::from(month);
+    y -= if m <= 2 { 1 } else { 0 };
+    let era = y.div_euclid(400);
+    let year_of_era = y - era * 400;
+    let shifted_month = m + if m > 2 { -3 } else { 9 };
+    let day_of_year = (153 * shifted_month + 2) / 5 + i64::from(day) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+/// Convert days since 1970-01-01 to a proleptic Gregorian civil date.
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    year += if month <= 2 { 1 } else { 0 };
+    (year, month, day)
+}
+
+fn checked_calendar_start(days: i64) -> Result<i64, ScalarError> {
+    let millis = days
+        .checked_mul(86_400_000)
+        .ok_or_else(|| ScalarError::builtin("out_of_range"))?;
+    ensure_chrono_timestamp_range(millis)?;
+    Ok(millis)
+}
+
+fn start_of_calendar_day(ms: i64) -> Result<i64, ScalarError> {
+    ensure_chrono_timestamp_range(ms)?;
+    checked_calendar_start(ms.div_euclid(86_400_000))
+}
+
+fn start_of_calendar_week(ms: i64) -> Result<i64, ScalarError> {
+    ensure_chrono_timestamp_range(ms)?;
+    let days = ms.div_euclid(86_400_000);
+    checked_calendar_start(days - (days + 3).rem_euclid(7))
+}
+
+fn start_of_calendar_month(ms: i64) -> Result<i64, ScalarError> {
+    let fields = CalendarFields::from_millis(ms)?;
+    checked_calendar_start(days_from_civil(fields.year, fields.month, 1))
+}
+
+fn start_of_calendar_year(ms: i64, fields: CalendarFields) -> Result<i64, ScalarError> {
+    ensure_chrono_timestamp_range(ms)?;
+    checked_calendar_start(days_from_civil(fields.year, 1, 1))
+}
+
+/// Reject directives that chrono's `StrftimeItems` would emit as `Item::Error`.
+/// Jiff has a different directive set, so formatting/parsing still maps Jiff
+/// errors below; this lexical gate prevents Jiff-only directives from widening
+/// the old public pattern language.
 fn validate_pattern(pattern: &str) -> Result<(), ScalarError> {
-    if StrftimeItems::new(pattern).any(|item| matches!(item, Item::Error)) {
-        return Err(ScalarError::builtin("parse"));
+    let mut chars = pattern.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '%' {
+            continue;
+        }
+        let Some(mut directive) = chars.next() else {
+            return Err(ScalarError::builtin("parse"));
+        };
+        if directive == '%' {
+            continue;
+        }
+        let mut hash_modifier = false;
+        let mut colon_modifiers = 0;
+        // Chrono accepts its padding flags, `#` for `%z`, and the timezone
+        // forms `%:z`, `%::z`, and `%:::z`. Colons are a single modifier,
+        // not independent flags (in particular, repeated colons are valid).
+        while matches!(directive, '-' | '_' | '0' | '#' | ':') {
+            hash_modifier |= directive == '#';
+            if directive == ':' {
+                colon_modifiers += 1;
+            }
+            directive = chars.next().ok_or_else(|| ScalarError::builtin("parse"))?;
+        }
+        while directive.is_ascii_digit() {
+            directive = chars.next().ok_or_else(|| ScalarError::builtin("parse"))?;
+        }
+        if directive == '.' {
+            directive = chars.next().ok_or_else(|| ScalarError::builtin("parse"))?;
+            while directive.is_ascii_digit() {
+                directive = chars.next().ok_or_else(|| ScalarError::builtin("parse"))?;
+            }
+        }
+        if colon_modifiers > 3 || (colon_modifiers > 0 && directive != 'z') {
+            return Err(ScalarError::builtin("parse"));
+        }
+        if (hash_modifier && directive != 'z')
+            || !matches!(
+                directive,
+                'a' | 'A'
+                    | 'b'
+                    | 'B'
+                    | 'c'
+                    | 'C'
+                    | 'd'
+                    | 'D'
+                    | 'e'
+                    | 'f'
+                    | 'F'
+                    | 'g'
+                    | 'G'
+                    | 'h'
+                    | 'H'
+                    | 'I'
+                    | 'j'
+                    | 'k'
+                    | 'l'
+                    | 'm'
+                    | 'M'
+                    | 'n'
+                    | 'p'
+                    | 'P'
+                    | 'q'
+                    | 'r'
+                    | 'R'
+                    | 'S'
+                    | 't'
+                    | 'T'
+                    | 'u'
+                    | 'U'
+                    | 'v'
+                    | 'V'
+                    | 'w'
+                    | 'W'
+                    | 'x'
+                    | 'X'
+                    | 'y'
+                    | 'Y'
+                    | 'z'
+                    | 'Z'
+                    | '+'
+                    | 's'
+            )
+        {
+            return Err(ScalarError::builtin("parse"));
+        }
     }
     Ok(())
+}
+
+fn chrono_format(pattern: &str, ms: i64) -> Result<String, ScalarError> {
+    let f = CalendarFields::from_millis(ms)?;
+    let year = f.year;
+    let ordinal = days_from_civil(year, f.month, f.day) - days_from_civil(year, 1, 1) + 1;
+    let sunday_weekday = (f.weekday + 1) % 7;
+    let nanos = ms.rem_euclid(1000) * 1_000_000;
+    let epoch_seconds = ms.div_euclid(1000);
+    let names = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
+    let days = [
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+    ];
+    let month_name = names[(f.month - 1) as usize];
+    let weekday_name = days[f.weekday as usize];
+    let year_string = |value: i32| -> String {
+        if (0..=9999).contains(&value) {
+            format!("{:04}", value)
+        } else if value < 0 {
+            format!("-{:04}", value.unsigned_abs())
+        } else {
+            format!("+{:04}", value)
+        }
+    };
+    let iso_weekday = f.weekday + 1;
+    let mut iso_year = year;
+    let mut iso_week = (ordinal - iso_weekday + 10) / 7;
+    let weeks_in_year = |y: i32| -> i64 {
+        let jan1 = (days_from_civil(y, 1, 1) + 3).rem_euclid(7);
+        if jan1 == 3 || (jan1 == 2 && (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0))) {
+            53
+        } else {
+            52
+        }
+    };
+    if iso_week < 1 {
+        iso_year -= 1;
+        iso_week = weeks_in_year(iso_year);
+    } else if iso_week > weeks_in_year(year) {
+        iso_year += 1;
+        iso_week = 1;
+    }
+    let hour = format!("{:02}", f.hour);
+    let minute = format!("{:02}", f.minute);
+    let second = format!("{:02}", f.second);
+    let clock = format!("{hour}:{minute}:{second}");
+    let hour12 = if f.hour % 12 == 0 { 12 } else { f.hour % 12 };
+    let hour12_padded = format!("{:02}", hour12);
+    let ampm = if f.hour < 12 { "AM" } else { "PM" };
+    let mut out = String::new();
+    let mut chars = pattern.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '%' {
+            out.push(c);
+            continue;
+        }
+        if chars.peek() == Some(&'%') {
+            chars.next();
+            out.push('%');
+            continue;
+        }
+        let mut flag = None;
+        let mut colons = 0;
+        while matches!(chars.peek(), Some('-' | '_' | '0' | '#' | ':')) {
+            let next = chars.next().ok_or_else(|| ScalarError::builtin("parse"))?;
+            if next == ':' {
+                colons += 1;
+            } else {
+                flag = Some(next);
+            }
+        }
+        let mut width_text = String::new();
+        while matches!(chars.peek(), Some(c) if c.is_ascii_digit()) {
+            width_text.push(chars.next().ok_or_else(|| ScalarError::builtin("parse"))?);
+        }
+        let width = width_text.parse::<usize>().unwrap_or(0);
+        let mut precision = None;
+        let mut auto_precision = false;
+        if chars.peek() == Some(&'.') {
+            chars.next();
+            let mut digits = String::new();
+            while matches!(chars.peek(), Some(c) if c.is_ascii_digit()) {
+                digits.push(chars.next().ok_or_else(|| ScalarError::builtin("parse"))?);
+            }
+            if digits.is_empty() {
+                auto_precision = true;
+            } else {
+                precision = Some(digits.parse::<usize>().unwrap_or(0));
+            }
+        }
+        let d = chars.next().ok_or_else(|| ScalarError::builtin("parse"))?;
+        let pad_number = |value: i64, natural: usize| -> String {
+            let text = value.to_string();
+            let size = width.max(natural);
+            if flag == Some('-') || text.len() >= size {
+                return text;
+            }
+            let pad = if flag == Some('_') { ' ' } else { '0' };
+            format!("{}{}", pad.to_string().repeat(size - text.len()), text)
+        };
+        let auto_fraction = || -> String {
+            if nanos == 0 {
+                String::new()
+            } else if nanos % 1_000_000 == 0 {
+                format!(".{:03}", nanos / 1_000_000)
+            } else if nanos % 1_000 == 0 {
+                format!(".{:06}", nanos / 1_000)
+            } else {
+                format!(".{:09}", nanos)
+            }
+        };
+        let value = match d {
+            'a' => weekday_name[..3].to_string(),
+            'A' => weekday_name.to_string(),
+            'b' | 'h' => month_name[..3].to_string(),
+            'B' => month_name.to_string(),
+            'c' => format!(
+                "{} {} {:2} {} {}",
+                &weekday_name[..3],
+                &month_name[..3],
+                f.day,
+                clock,
+                year_string(year)
+            ),
+            'C' => pad_number(i64::from(year.div_euclid(100)), 2),
+            'd' => pad_number(i64::from(f.day), 2),
+            'D' => format!("{:02}/{:02}/{:02}", f.month, f.day, year.rem_euclid(100)),
+            'e' => format!("{:>2}", f.day),
+            'F' => format!("{}-{:02}-{:02}", year_string(year), f.month, f.day),
+            'f' => {
+                let digits = precision
+                    .or(if width > 0 { Some(width) } else { None })
+                    .unwrap_or(9)
+                    .min(9);
+                format!("{:09}", nanos)
+                    .chars()
+                    .take(digits)
+                    .collect::<String>()
+            }
+            'g' => format!("{:02}", iso_year.rem_euclid(100)),
+            'G' => year_string(iso_year),
+            'H' => pad_number(i64::from(f.hour), 2),
+            'I' => pad_number(i64::from(hour12), 2),
+            'j' => format!("{:03}", ordinal),
+            'k' => format!("{:>2}", f.hour),
+            'l' => format!("{:>2}", hour12),
+            'm' => pad_number(i64::from(f.month), 2),
+            'M' => pad_number(i64::from(f.minute), 2),
+            'n' => "\n".to_string(),
+            'p' => ampm.to_string(),
+            'P' => ampm.to_ascii_lowercase(),
+            'q' => ((f.month - 1) / 3 + 1).to_string(),
+            'r' => format!("{}:{}:{} {}", hour12_padded, minute, second, ampm),
+            'R' => format!("{}:{}", hour, minute),
+            's' => epoch_seconds.to_string(),
+            'S' => pad_number(i64::from(f.second), 2),
+            't' => "\t".to_string(),
+            'T' | 'X' => format!("{}:{}:{}", hour, minute, second),
+            'u' => (f.weekday + 1).to_string(),
+            'U' => format!("{:02}", (ordinal + 6 - sunday_weekday) / 7),
+            'V' => format!("{:02}", iso_week),
+            'v' => format!("{:2}-{}-{}", f.day, &month_name[..3], year_string(year)),
+            'W' => format!("{:02}", (ordinal + 6 - f.weekday) / 7),
+            'w' => sunday_weekday.to_string(),
+            'x' => format!("{:02}/{:02}/{:02}", f.month, f.day, year.rem_euclid(100)),
+            'y' => format!("{:02}", year.rem_euclid(100)),
+            'Y' => year_string(year),
+            'z' => match colons {
+                1 => "+00:00".to_string(),
+                2 => "+00:00:00".to_string(),
+                3 => "+00".to_string(),
+                _ if flag == Some('#') => "+00".to_string(),
+                _ => "+0000".to_string(),
+            },
+            'Z' => "+00:00".to_string(),
+            '+' => format!(
+                "{}-{:02}-{:02}T{}:{}:{}{}+00:00",
+                year_string(year),
+                f.month,
+                f.day,
+                hour,
+                minute,
+                second,
+                auto_fraction()
+            ),
+            '%' => "%".to_string(),
+            _ => return Err(ScalarError::builtin("parse")),
+        };
+        let value = if d == 'f' && auto_precision {
+            auto_fraction()
+        } else if d == 'f' && precision.is_some() {
+            format!(".{}", value)
+        } else if d == 'f' {
+            value
+        } else if let Some(p) = precision {
+            value.chars().take(p).collect::<String>()
+        } else {
+            value
+        };
+        if width > value.len() && !matches!(d, 'f' | 'n' | 't') {
+            out.push_str(&format!("{:>width$}", value, width = width));
+        } else {
+            out.push_str(&value);
+        }
+    }
+    Ok(out)
+}
+
+fn parse_rfc3339_millis(input: &str) -> Result<i64, ScalarError> {
+    fn parse_error() -> ScalarError {
+        ScalarError::builtin("parse")
+    }
+    fn digits(bytes: &[u8], start: usize, len: usize) -> Result<i64, ScalarError> {
+        let end = start.checked_add(len).ok_or_else(parse_error)?;
+        let part = bytes.get(start..end).ok_or_else(parse_error)?;
+        if !part.iter().all(u8::is_ascii_digit) {
+            return Err(parse_error());
+        }
+        Ok(part
+            .iter()
+            .fold(0i64, |value, digit| value * 10 + i64::from(*digit - b'0')))
+    }
+
+    let bytes = input.as_bytes();
+    if bytes.len() < 20 {
+        return Err(parse_error());
+    }
+    let year = digits(bytes, 0, 4)? as i32;
+    if bytes.get(4) != Some(&b'-')
+        || bytes.get(7) != Some(&b'-')
+        || !matches!(bytes.get(10), Some(b'T' | b't' | b' '))
+        || bytes.get(13) != Some(&b':')
+        || bytes.get(16) != Some(&b':')
+    {
+        return Err(parse_error());
+    }
+    let month = digits(bytes, 5, 2)? as i32;
+    let day = digits(bytes, 8, 2)? as i32;
+    let hour = digits(bytes, 11, 2)?;
+    let minute = digits(bytes, 14, 2)?;
+    let second = digits(bytes, 17, 2)?;
+    let leap = second == 60;
+    if !(1..=12).contains(&month) || hour > 23 || minute > 59 || second > 60 {
+        return Err(parse_error());
+    }
+    let leap_year = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let month_days = [
+        31,
+        if leap_year { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    if day < 1 || day > month_days[(month - 1) as usize] {
+        return Err(parse_error());
+    }
+
+    let mut pos = 19;
+    let mut fraction_nanos = 0i64;
+    if bytes.get(pos) == Some(&b'.') {
+        pos += 1;
+        let start = pos;
+        let fractional = &bytes[start..];
+        let digit_count = fractional
+            .iter()
+            .position(|byte| !byte.is_ascii_digit())
+            .unwrap_or(fractional.len());
+        if digit_count == 0 {
+            return Err(parse_error());
+        }
+        for digit in fractional.iter().take(9) {
+            fraction_nanos = fraction_nanos * 10 + i64::from(*digit - b'0');
+        }
+        for _ in digit_count.min(9)..9 {
+            fraction_nanos *= 10;
+        }
+        pos += digit_count;
+    }
+    let offset_seconds: i64 = match bytes.get(pos) {
+        Some(b'Z' | b'z') if pos + 1 == bytes.len() => 0,
+        Some(sign @ (b'+' | b'-'))
+            if pos + 6 == bytes.len() && bytes.get(pos + 3) == Some(&b':') =>
+        {
+            let offset_hour = digits(bytes, pos + 1, 2)?;
+            let offset_minute = digits(bytes, pos + 4, 2)?;
+            if offset_hour > 23 || offset_minute > 59 {
+                return Err(parse_error());
+            }
+            let magnitude = offset_hour * 3600 + offset_minute * 60;
+            if *sign == b'+' {
+                magnitude
+            } else {
+                -magnitude
+            }
+        }
+        _ => return Err(parse_error()),
+    };
+
+    let days = days_from_civil(year, month, day);
+    let local_seconds = days
+        .checked_mul(86_400)
+        .and_then(|v| v.checked_add(hour * 3_600 + minute * 60 + if leap { 59 } else { second }))
+        .ok_or_else(|| ScalarError::builtin("out_of_range"))?;
+    let utc_seconds = local_seconds
+        .checked_sub(offset_seconds)
+        .ok_or_else(|| ScalarError::builtin("out_of_range"))?;
+    let millis = utc_seconds
+        .checked_mul(1_000)
+        .and_then(|v| v.checked_add(fraction_nanos / 1_000_000))
+        .and_then(|v| if leap { v.checked_add(1_000) } else { Some(v) })
+        .ok_or_else(|| ScalarError::builtin("out_of_range"))?;
+    ensure_chrono_timestamp_range(millis)?;
+    Ok(millis)
 }
 
 /// Register the `/datetime` functions.
@@ -63,7 +571,7 @@ pub fn register(reg: &mut ScalarRegistry) {
     reg.register(
         "now",
         FnEntry {
-            f: std::sync::Arc::new(|_a: &[_]| Ok(v_int(Utc::now().timestamp_millis()))),
+            f: std::sync::Arc::new(|_a: &[_]| Ok(v_int(Timestamp::now().as_millisecond()))),
             min_args: 0,
             max_args: Some(0),
             pure: false,
@@ -76,10 +584,8 @@ pub fn register(reg: &mut ScalarRegistry) {
         FnEntry {
             f: std::sync::Arc::new(|a: &[_]| {
                 let then = arg_i64(a, 0)?;
-                // Checked: now - i64::MIN overflows; surface "out_of_range"
-                // instead of a debug panic / silent wrap (RV-FUNCLIB-D45CF639).
-                let diff = Utc::now()
-                    .timestamp_millis()
+                let diff = Timestamp::now()
+                    .as_millisecond()
                     .checked_sub(then)
                     .ok_or_else(|| ScalarError::builtin("out_of_range"))?;
                 Ok(v_int(diff / 1000))
@@ -125,10 +631,8 @@ pub fn register(reg: &mut ScalarRegistry) {
         FnEntry::pure(
             |a| {
                 let s = arg_str(a, 0)?;
-                let dt = DateTime::parse_from_rfc3339(s)
-                    .map_err(|_| ScalarError::builtin("parse"))?
-                    .with_timezone(&Utc);
-                Ok(v_int(dt.timestamp_millis()))
+                let timestamp = parse_rfc3339_millis(s)?;
+                Ok(v_int(timestamp))
             },
             1,
             Some(1),
@@ -138,8 +642,29 @@ pub fn register(reg: &mut ScalarRegistry) {
         "format_rfc3339",
         FnEntry::pure(
             |a| {
-                let dt = dt_arg(a, 0)?;
-                Ok(v_str(dt.to_rfc3339()))
+                let fields = CalendarFields::from_millis(arg_i64(a, 0)?)?;
+                let year = if (0..=9999).contains(&fields.year) {
+                    format!("{:04}", fields.year)
+                } else if fields.year < 0 {
+                    format!("-{:04}", fields.year.unsigned_abs())
+                } else {
+                    format!("+{:04}", fields.year)
+                };
+                let fraction = if fields.millisecond == 0 {
+                    String::new()
+                } else {
+                    format!(".{:03}", fields.millisecond)
+                };
+                Ok(v_str(format!(
+                    "{}-{:02}-{:02}T{:02}:{:02}:{:02}{}+00:00",
+                    year,
+                    fields.month,
+                    fields.day,
+                    fields.hour,
+                    fields.minute,
+                    fields.second,
+                    fraction
+                )))
             },
             1,
             Some(1),
@@ -154,13 +679,16 @@ pub fn register(reg: &mut ScalarRegistry) {
                 let s = arg_str(a, 0)?;
                 let pattern = arg_str(a, 1)?;
                 validate_pattern(pattern)?;
-                let ndt = NaiveDateTime::parse_from_str(s, pattern)
+                let parsed = CivilDateTime::strptime(pattern, s)
                     .or_else(|_| {
-                        NaiveDate::parse_from_str(s, pattern)
-                            .map(|d| d.and_hms_opt(0, 0, 0).unwrap())
+                        jiff::civil::Date::strptime(pattern, s).map(|date| date.at(0, 0, 0, 0))
                     })
                     .map_err(|_| ScalarError::builtin("parse"))?;
-                Ok(v_int(ndt.and_utc().timestamp_millis()))
+                let timestamp = parsed
+                    .to_zoned(TimeZone::UTC)
+                    .map(|zoned| zoned.timestamp())
+                    .map_err(|_| ScalarError::builtin("out_of_range"))?;
+                Ok(v_int(timestamp_millis(timestamp)?))
             },
             2,
             Some(2),
@@ -170,10 +698,11 @@ pub fn register(reg: &mut ScalarRegistry) {
         "format",
         FnEntry::pure(
             |a| {
-                let dt = dt_arg(a, 0)?;
+                let millis = arg_i64(a, 0)?;
                 let pattern = arg_str(a, 1)?;
+                ensure_chrono_timestamp_range(millis)?;
                 validate_pattern(pattern)?;
-                Ok(v_str(dt.format(pattern).to_string()))
+                chrono_format(pattern, millis).map(v_str)
             },
             2,
             Some(2),
@@ -183,33 +712,81 @@ pub fn register(reg: &mut ScalarRegistry) {
     // ---- component extractors ---------------------------------------------
     reg.register(
         "year",
-        FnEntry::pure(|a| Ok(v_int(dt_arg(a, 0)?.year() as i64)), 1, Some(1)),
+        FnEntry::pure(
+            |a| {
+                Ok(v_int(
+                    CalendarFields::from_millis(arg_i64(a, 0)?)?.year as i64,
+                ))
+            },
+            1,
+            Some(1),
+        ),
     );
     reg.register(
         "month",
-        FnEntry::pure(|a| Ok(v_int(dt_arg(a, 0)?.month() as i64)), 1, Some(1)),
+        FnEntry::pure(
+            |a| {
+                Ok(v_int(
+                    CalendarFields::from_millis(arg_i64(a, 0)?)?.month as i64,
+                ))
+            },
+            1,
+            Some(1),
+        ),
     );
     reg.register(
         "day",
-        FnEntry::pure(|a| Ok(v_int(dt_arg(a, 0)?.day() as i64)), 1, Some(1)),
+        FnEntry::pure(
+            |a| {
+                Ok(v_int(
+                    CalendarFields::from_millis(arg_i64(a, 0)?)?.day as i64,
+                ))
+            },
+            1,
+            Some(1),
+        ),
     );
     reg.register(
         "hour",
-        FnEntry::pure(|a| Ok(v_int(dt_arg(a, 0)?.hour() as i64)), 1, Some(1)),
+        FnEntry::pure(
+            |a| {
+                Ok(v_int(
+                    CalendarFields::from_millis(arg_i64(a, 0)?)?.hour as i64,
+                ))
+            },
+            1,
+            Some(1),
+        ),
     );
     reg.register(
         "minute",
-        FnEntry::pure(|a| Ok(v_int(dt_arg(a, 0)?.minute() as i64)), 1, Some(1)),
+        FnEntry::pure(
+            |a| {
+                Ok(v_int(
+                    CalendarFields::from_millis(arg_i64(a, 0)?)?.minute as i64,
+                ))
+            },
+            1,
+            Some(1),
+        ),
     );
     reg.register(
         "second",
-        FnEntry::pure(|a| Ok(v_int(dt_arg(a, 0)?.second() as i64)), 1, Some(1)),
+        FnEntry::pure(
+            |a| {
+                Ok(v_int(
+                    CalendarFields::from_millis(arg_i64(a, 0)?)?.second as i64,
+                ))
+            },
+            1,
+            Some(1),
+        ),
     );
     // weekday: 0 = Monday .. 6 = Sunday.
     reg.register(
         "weekday",
         FnEntry::pure(
-            |a| Ok(v_int(dt_arg(a, 0)?.weekday().num_days_from_monday() as i64)),
+            |a| Ok(v_int(CalendarFields::from_millis(arg_i64(a, 0)?)?.weekday)),
             1,
             Some(1),
         ),
@@ -218,8 +795,9 @@ pub fn register(reg: &mut ScalarRegistry) {
         "is_weekend",
         FnEntry::pure(
             |a| {
-                let wd = dt_arg(a, 0)?.weekday();
-                Ok(v_bool(matches!(wd, Weekday::Sat | Weekday::Sun)))
+                Ok(v_bool(
+                    CalendarFields::from_millis(arg_i64(a, 0)?)?.weekday >= 5,
+                ))
             },
             1,
             Some(1),
@@ -231,14 +809,15 @@ pub fn register(reg: &mut ScalarRegistry) {
         "add_secs",
         FnEntry::pure(
             |a| {
-                let dt = dt_arg(a, 0)?;
-                let n = arg_i64(a, 1)?;
-                let delta =
-                    Duration::try_seconds(n).ok_or_else(|| ScalarError::builtin("out_of_range"))?;
-                let out = dt
-                    .checked_add_signed(delta)
+                let timestamp = arg_i64(a, 0)?;
+                ensure_chrono_timestamp_range(timestamp)?;
+                let seconds = arg_i64(a, 1)?;
+                let millis = seconds
+                    .checked_mul(1000)
+                    .and_then(|delta| timestamp.checked_add(delta))
                     .ok_or_else(|| ScalarError::builtin("out_of_range"))?;
-                Ok(v_int(out.timestamp_millis()))
+                ensure_chrono_timestamp_range(millis)?;
+                Ok(v_int(millis))
             },
             2,
             Some(2),
@@ -248,14 +827,15 @@ pub fn register(reg: &mut ScalarRegistry) {
         "add_days",
         FnEntry::pure(
             |a| {
-                let dt = dt_arg(a, 0)?;
-                let n = arg_i64(a, 1)?;
-                let delta =
-                    Duration::try_days(n).ok_or_else(|| ScalarError::builtin("out_of_range"))?;
-                let out = dt
-                    .checked_add_signed(delta)
+                let timestamp = arg_i64(a, 0)?;
+                ensure_chrono_timestamp_range(timestamp)?;
+                let days = arg_i64(a, 1)?;
+                let millis = days
+                    .checked_mul(86_400_000)
+                    .and_then(|delta| timestamp.checked_add(delta))
                     .ok_or_else(|| ScalarError::builtin("out_of_range"))?;
-                Ok(v_int(out.timestamp_millis()))
+                ensure_chrono_timestamp_range(millis)?;
+                Ok(v_int(millis))
             },
             2,
             Some(2),
@@ -280,33 +860,46 @@ pub fn register(reg: &mut ScalarRegistry) {
     // ---- truncation / period starts ---------------------------------------
     reg.register(
         "start_of_day",
-        FnEntry::pure(|a| Ok(v_int(start_of_day(dt_arg(a, 0)?)?)), 1, Some(1)),
+        FnEntry::pure(
+            |a| Ok(v_int(start_of_calendar_day(arg_i64(a, 0)?)?)),
+            1,
+            Some(1),
+        ),
     );
     reg.register(
         "start_of_week",
-        FnEntry::pure(|a| Ok(v_int(start_of_week(dt_arg(a, 0)?)?)), 1, Some(1)),
+        FnEntry::pure(
+            |a| Ok(v_int(start_of_calendar_week(arg_i64(a, 0)?)?)),
+            1,
+            Some(1),
+        ),
     );
     reg.register(
         "start_of_month",
-        FnEntry::pure(|a| Ok(v_int(start_of_month(dt_arg(a, 0)?)?)), 1, Some(1)),
+        FnEntry::pure(
+            |a| Ok(v_int(start_of_calendar_month(arg_i64(a, 0)?)?)),
+            1,
+            Some(1),
+        ),
     );
     reg.register(
         "truncate",
         FnEntry::pure(
             |a| {
-                let dt = dt_arg(a, 0)?;
+                let millis = arg_i64(a, 0)?;
+                let fields = CalendarFields::from_millis(millis)?;
                 let unit = arg_str(a, 1)?;
-                let ms = match unit {
-                    "second" => dt.timestamp_millis() - (dt.timestamp_millis().rem_euclid(1000)),
-                    "minute" => start_of_minute(dt)?,
-                    "hour" => start_of_hour(dt)?,
-                    "day" => start_of_day(dt)?,
-                    "week" => start_of_week(dt)?,
-                    "month" => start_of_month(dt)?,
-                    "year" => start_of_year(dt)?,
+                let value = match unit {
+                    "second" => Ok(millis.div_euclid(1_000) * 1_000),
+                    "minute" => Ok(millis.div_euclid(60_000) * 60_000),
+                    "hour" => Ok(millis.div_euclid(3_600_000) * 3_600_000),
+                    "day" => start_of_calendar_day(millis),
+                    "week" => start_of_calendar_week(millis),
+                    "month" => start_of_calendar_month(millis),
+                    "year" => start_of_calendar_year(millis, fields),
                     _ => return Err(ScalarError::builtin("bad_unit")),
                 };
-                Ok(v_int(ms))
+                Ok(v_int(value?))
             },
             2,
             Some(2),
@@ -320,60 +913,14 @@ fn div_floor(n: i64, d: i64) -> i64 {
     n.div_euclid(d)
 }
 
-fn start_of_minute(dt: DateTime<Utc>) -> Result<i64, ScalarError> {
-    let t = dt
-        .with_second(0)
-        .and_then(|d| d.with_nanosecond(0))
-        .ok_or_else(|| ScalarError::builtin("out_of_range"))?;
-    Ok(t.timestamp_millis())
-}
-
-fn start_of_hour(dt: DateTime<Utc>) -> Result<i64, ScalarError> {
-    let t = dt
-        .with_minute(0)
-        .and_then(|d| d.with_second(0))
-        .and_then(|d| d.with_nanosecond(0))
-        .ok_or_else(|| ScalarError::builtin("out_of_range"))?;
-    Ok(t.timestamp_millis())
-}
-
-fn start_of_day(dt: DateTime<Utc>) -> Result<i64, ScalarError> {
-    let t = dt
-        .with_hour(0)
-        .and_then(|d| d.with_minute(0))
-        .and_then(|d| d.with_second(0))
-        .and_then(|d| d.with_nanosecond(0))
-        .ok_or_else(|| ScalarError::builtin("out_of_range"))?;
-    Ok(t.timestamp_millis())
-}
-
-fn start_of_week(dt: DateTime<Utc>) -> Result<i64, ScalarError> {
-    let days_back = dt.weekday().num_days_from_monday() as i64;
-    let monday = dt
-        .checked_sub_signed(Duration::days(days_back))
-        .ok_or_else(|| ScalarError::builtin("out_of_range"))?;
-    start_of_day(monday)
-}
-
-fn start_of_month(dt: DateTime<Utc>) -> Result<i64, ScalarError> {
-    let t = dt
-        .with_day(1)
-        .and_then(|d| d.with_hour(0))
-        .and_then(|d| d.with_minute(0))
-        .and_then(|d| d.with_second(0))
-        .and_then(|d| d.with_nanosecond(0))
-        .ok_or_else(|| ScalarError::builtin("out_of_range"))?;
-    Ok(t.timestamp_millis())
-}
-
-fn start_of_year(dt: DateTime<Utc>) -> Result<i64, ScalarError> {
-    let t = dt
-        .with_month(1)
-        .and_then(|d| d.with_day(1))
-        .and_then(|d| d.with_hour(0))
-        .and_then(|d| d.with_minute(0))
-        .and_then(|d| d.with_second(0))
-        .and_then(|d| d.with_nanosecond(0))
-        .ok_or_else(|| ScalarError::builtin("out_of_range"))?;
-    Ok(t.timestamp_millis())
+fn timestamp_millis(timestamp: Timestamp) -> Result<i64, ScalarError> {
+    // Chrono timestamp_millis floors negative instants and truncates fractional
+    // milliseconds; Jiff's seconds and subsecond fields are signed/consistent.
+    timestamp
+        .as_second()
+        .checked_mul(1_000)
+        .and_then(|millis| {
+            millis.checked_add(timestamp.subsec_nanosecond().div_euclid(1_000_000) as i64)
+        })
+        .ok_or_else(|| ScalarError::builtin("out_of_range"))
 }
