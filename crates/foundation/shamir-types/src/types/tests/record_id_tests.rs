@@ -5,7 +5,36 @@ mod tests {
     use crate::types::record_id::RecordId;
     use shamir_collections::TFxSet;
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    /// Pins the committed WIP conversion formula. Chrono's `Utc::now().timestamp_micros()`
+    /// panicked on a pre-epoch clock, so the ceiling-negative fallback is the
+    /// round-1 sanctioned behavior, not chrono parity; positive values retain
+    /// chrono-floor parity.
+    #[test]
+    fn unix_micros_conversion_matches_chrono_rounding() {
+        use crate::types::ids::record_id::unix_micros_from_system_time;
+        assert_eq!(
+            unix_micros_from_system_time(UNIX_EPOCH + Duration::new(1_234_567_890, 123_456_789)),
+            1_234_567_890_123_456
+        );
+        assert_eq!(
+            unix_micros_from_system_time(UNIX_EPOCH + Duration::new(0, 999)),
+            0
+        );
+        assert_eq!(
+            unix_micros_from_system_time(UNIX_EPOCH - Duration::from_nanos(500)),
+            -1
+        );
+        assert_eq!(
+            unix_micros_from_system_time(UNIX_EPOCH - Duration::from_nanos(1_500_000)),
+            -1_500
+        );
+        assert_eq!(
+            unix_micros_from_system_time(UNIX_EPOCH - Duration::from_micros(2)),
+            -2
+        );
+    }
 
     #[test]
     fn custom_epoch_is_pinned_to_literal_microseconds() {

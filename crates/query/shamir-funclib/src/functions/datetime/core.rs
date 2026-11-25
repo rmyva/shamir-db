@@ -132,95 +132,72 @@ fn start_of_calendar_year(ms: i64, fields: CalendarFields) -> Result<i64, Scalar
     checked_calendar_start(days_from_civil(fields.year, 1, 1))
 }
 
-/// Reject directives that chrono's `StrftimeItems` would emit as `Item::Error`.
-/// Jiff has a different directive set, so formatting/parsing still maps Jiff
-/// errors below; this lexical gate prevents Jiff-only directives from widening
-/// the old public pattern language.
+/// Pattern validation intentionally remains lexical and shared with formatting.
 fn validate_pattern(pattern: &str) -> Result<(), ScalarError> {
+    fn invalid() -> ScalarError {
+        ScalarError::builtin("parse")
+    }
+    const NUMERIC: &str = "CdefGHIjklmMqsSuUVwWyYg";
     let mut chars = pattern.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch != '%' {
             continue;
         }
-        let Some(mut directive) = chars.next() else {
-            return Err(ScalarError::builtin("parse"));
+        let Some(mut spec) = chars.next() else {
+            return Err(invalid());
         };
-        if directive == '%' {
+        if spec == '%' {
             continue;
         }
-        let mut hash_modifier = false;
-        let mut colon_modifiers = 0;
-        // Chrono accepts its padding flags, `#` for `%z`, and the timezone
-        // forms `%:z`, `%::z`, and `%:::z`. Colons are a single modifier,
-        // not independent flags (in particular, repeated colons are valid).
-        while matches!(directive, '-' | '_' | '0' | '#' | ':') {
-            hash_modifier |= directive == '#';
-            if directive == ':' {
-                colon_modifiers += 1;
-            }
-            directive = chars.next().ok_or_else(|| ScalarError::builtin("parse"))?;
-        }
-        while directive.is_ascii_digit() {
-            directive = chars.next().ok_or_else(|| ScalarError::builtin("parse"))?;
-        }
-        if directive == '.' {
-            directive = chars.next().ok_or_else(|| ScalarError::builtin("parse"))?;
-            while directive.is_ascii_digit() {
-                directive = chars.next().ok_or_else(|| ScalarError::builtin("parse"))?;
+        let pad = matches!(spec, '-' | '0' | '_');
+        let alternate = spec == '#';
+        if pad || alternate {
+            spec = chars.next().ok_or_else(invalid)?;
+            if matches!(spec, '-' | '0' | '_' | '#') {
+                return Err(invalid());
             }
         }
-        if colon_modifiers > 3 || (colon_modifiers > 0 && directive != 'z') {
-            return Err(ScalarError::builtin("parse"));
+        if spec == ':' {
+            if pad || alternate {
+                return Err(invalid());
+            }
+            let mut colons = 1;
+            while chars.peek() == Some(&':') {
+                chars.next();
+                colons += 1;
+            }
+            if colons > 3 || chars.next() != Some('z') {
+                return Err(invalid());
+            }
+            continue;
         }
-        if (hash_modifier && directive != 'z')
-            || !matches!(
-                directive,
-                'a' | 'A'
-                    | 'b'
-                    | 'B'
-                    | 'c'
-                    | 'C'
-                    | 'd'
-                    | 'D'
-                    | 'e'
-                    | 'f'
-                    | 'F'
-                    | 'g'
-                    | 'G'
-                    | 'h'
-                    | 'H'
-                    | 'I'
-                    | 'j'
-                    | 'k'
-                    | 'l'
-                    | 'm'
-                    | 'M'
-                    | 'n'
-                    | 'p'
-                    | 'P'
-                    | 'q'
-                    | 'r'
-                    | 'R'
-                    | 'S'
-                    | 't'
-                    | 'T'
-                    | 'u'
-                    | 'U'
-                    | 'v'
-                    | 'V'
-                    | 'w'
-                    | 'W'
-                    | 'x'
-                    | 'X'
-                    | 'y'
-                    | 'Y'
-                    | 'z'
-                    | 'Z'
-                    | '+'
-                    | 's'
-            )
+        if spec == '.' {
+            if pad || alternate {
+                return Err(invalid());
+            }
+            match chars.next() {
+                Some('f') => continue,
+                Some('3' | '6' | '9') if chars.next() == Some('f') => continue,
+                _ => return Err(invalid()),
+            }
+        }
+        if matches!(spec, '3' | '6' | '9') {
+            if pad || alternate || chars.next() != Some('f') {
+                return Err(invalid());
+            }
+            continue;
+        }
+        if alternate && spec != 'z' {
+            return Err(invalid());
+        }
+        if pad && !NUMERIC.contains(spec) {
+            return Err(invalid());
+        }
+        if !"aAbBcCdDe fFgGhHIjklmMn pPqrRsStTuUvVwWxXyYzZ+"
+            .replace(' ', "")
+            .contains(spec)
         {
-            return Err(ScalarError::builtin("parse"));
+            return Err(invalid());
         }
     }
     Ok(())
@@ -373,14 +350,22 @@ fn chrono_format(pattern: &str, ms: i64) -> Result<String, ScalarError> {
             'e' => format!("{:>2}", f.day),
             'F' => format!("{}-{:02}-{:02}", year_string(year), f.month, f.day),
             'f' => {
-                let digits = precision
-                    .or(if width > 0 { Some(width) } else { None })
-                    .unwrap_or(9)
-                    .min(9);
-                format!("{:09}", nanos)
-                    .chars()
-                    .take(digits)
-                    .collect::<String>()
+                if precision.is_none() && width == 0 {
+                    match flag {
+                        Some('-') => nanos.to_string(),
+                        Some('_') => format!("{:9}", nanos),
+                        _ => format!("{:09}", nanos),
+                    }
+                } else {
+                    let digits = precision
+                        .or(if width > 0 { Some(width) } else { None })
+                        .unwrap_or(9)
+                        .min(9);
+                    format!("{:09}", nanos)
+                        .chars()
+                        .take(digits)
+                        .collect::<String>()
+                }
             }
             'g' => format!("{:02}", iso_year.rem_euclid(100)),
             'G' => year_string(iso_year),
@@ -410,14 +395,18 @@ fn chrono_format(pattern: &str, ms: i64) -> Result<String, ScalarError> {
             'x' => format!("{:02}/{:02}/{:02}", f.month, f.day, year.rem_euclid(100)),
             'y' => format!("{:02}", year.rem_euclid(100)),
             'Y' => year_string(year),
-            'z' => match colons {
-                1 => "+00:00".to_string(),
-                2 => "+00:00:00".to_string(),
-                3 => "+00".to_string(),
-                _ if flag == Some('#') => "+00".to_string(),
-                _ => "+0000".to_string(),
-            },
-            'Z' => "+00:00".to_string(),
+            'z' => {
+                if flag == Some('#') {
+                    return Err(ScalarError::builtin("parse"));
+                }
+                match colons {
+                    1 => "+00:00".to_string(),
+                    2 => "+00:00:00".to_string(),
+                    3 => "+00".to_string(),
+                    _ => "+0000".to_string(),
+                }
+            }
+            'Z' => "UTC".to_string(),
             '+' => format!(
                 "{}-{:02}-{:02}T{}:{}:{}{}+00:00",
                 year_string(year),
@@ -442,7 +431,7 @@ fn chrono_format(pattern: &str, ms: i64) -> Result<String, ScalarError> {
         } else {
             value
         };
-        if width > value.len() && !matches!(d, 'f' | 'n' | 't') {
+        if width > value.len() && !matches!(d, 'n' | 't') {
             out.push_str(&format!("{:>width$}", value, width = width));
         } else {
             out.push_str(&value);
@@ -520,7 +509,7 @@ fn parse_rfc3339_millis(input: &str) -> Result<i64, ScalarError> {
         if digit_count == 0 {
             return Err(parse_error());
         }
-        for digit in fractional.iter().take(9) {
+        for digit in &fractional[..digit_count.min(9)] {
             fraction_nanos = fraction_nanos * 10 + i64::from(*digit - b'0');
         }
         for _ in digit_count.min(9)..9 {
@@ -528,24 +517,36 @@ fn parse_rfc3339_millis(input: &str) -> Result<i64, ScalarError> {
         }
         pos += digit_count;
     }
-    let offset_seconds: i64 = match bytes.get(pos) {
-        Some(b'Z' | b'z') if pos + 1 == bytes.len() => 0,
-        Some(sign @ (b'+' | b'-'))
-            if pos + 6 == bytes.len() && bytes.get(pos + 3) == Some(&b':') =>
-        {
-            let offset_hour = digits(bytes, pos + 1, 2)?;
-            let offset_minute = digits(bytes, pos + 4, 2)?;
-            if offset_hour > 23 || offset_minute > 59 {
-                return Err(parse_error());
-            }
-            let magnitude = offset_hour * 3600 + offset_minute * 60;
-            if *sign == b'+' {
-                magnitude
-            } else {
-                -magnitude
-            }
+    let suffix = &input[pos..];
+    let (offset_start, negative) = if suffix.starts_with('−') {
+        (pos + '−'.len_utf8(), true)
+    } else {
+        match bytes.get(pos) {
+            Some(b'Z' | b'z') if pos + 1 == bytes.len() => (bytes.len(), false),
+            Some(b'+') => (pos + 1, false),
+            Some(b'-') => (pos + 1, true),
+            _ => return Err(parse_error()),
         }
-        _ => return Err(parse_error()),
+    };
+    let offset_seconds = if matches!(suffix, "+" | "-" | "−") {
+        return Err(parse_error());
+    } else if offset_start == bytes.len() {
+        0
+    } else {
+        if offset_start + 5 != bytes.len() || bytes.get(offset_start + 2) != Some(&b':') {
+            return Err(parse_error());
+        }
+        let offset_hour = digits(bytes, offset_start, 2)?;
+        let offset_minute = digits(bytes, offset_start + 3, 2)?;
+        if offset_hour > 23 || offset_minute > 59 {
+            return Err(parse_error());
+        }
+        let magnitude = offset_hour * 3600 + offset_minute * 60;
+        if negative {
+            -magnitude
+        } else {
+            magnitude
+        }
     };
 
     let days = days_from_civil(year, month, day);
@@ -907,8 +908,6 @@ pub fn register(reg: &mut ScalarRegistry) {
     );
 }
 
-/// Floor division that rounds toward negative infinity (matches calendar
-/// intuition for negative epoch values, unlike truncating `/`).
 fn div_floor(n: i64, d: i64) -> i64 {
     n.div_euclid(d)
 }

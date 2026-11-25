@@ -25,7 +25,7 @@ arc-swap = "1.7"
 rust_decimal = { version = "1.40.0", features = ["serde"] }
 num-bigint = { version = "0.4", features = ["serde"] }
 # System-local wall-clock time zone for local_minute_of_day.
-jiff = { version = "0.2.24", default-features = false, features = ["tz-system"] }
+jiff = { version = "0.2.24", default-features = false, features = ["tz-system", "tzdb-bundle-platform"] }
 
 # Codecs
 rmp = "0.8"

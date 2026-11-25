@@ -38,22 +38,7 @@ impl RecordId {
     /// per row.
     #[inline]
     pub fn now_micros() -> i64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| i64::try_from(duration.as_micros()).unwrap_or(i64::MAX))
-            .unwrap_or_else(|error| {
-                let duration = error.duration();
-                let micros = i128::try_from(duration.as_micros()).unwrap_or(i128::MAX);
-                let micros = micros
-                    .checked_add(if duration.subsec_nanos() % 1_000 != 0 {
-                        1i128
-                    } else {
-                        0i128
-                    })
-                    .unwrap_or(i128::MAX);
-                let negative_micros = micros.checked_neg().unwrap_or(i128::MIN);
-                i64::try_from(negative_micros).unwrap_or(i64::MIN)
-            })
+        unix_micros_from_system_time(SystemTime::now())
     }
 
     /// Creates a `RecordId` with a caller-supplied `timestamp_micros` and a
@@ -155,6 +140,24 @@ impl RecordId {
         let arr: [u8; 16] = b.try_into().ok()?;
         Some(Self(arr))
     }
+}
+
+/// Converts system time to Unix microseconds with chrono-compatible rounding.
+pub(crate) fn unix_micros_from_system_time(t: SystemTime) -> i64 {
+    t.duration_since(UNIX_EPOCH)
+        .map(|duration| i64::try_from(duration.as_micros()).unwrap_or(i64::MAX))
+        .unwrap_or_else(|error| {
+            let duration = error.duration();
+            let micros = i128::try_from(duration.as_micros()).unwrap_or(i128::MAX);
+            let micros = micros
+                .checked_add(if duration.subsec_nanos() % 1_000 != 0 {
+                    1
+                } else {
+                    0
+                })
+                .unwrap_or(i128::MAX);
+            i64::try_from(micros.checked_neg().unwrap_or(i128::MIN)).unwrap_or(i64::MIN)
+        })
 }
 
 impl Default for RecordId {

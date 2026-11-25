@@ -642,6 +642,9 @@ fn chrono_differential_boundary_grid_and_seeded_sweep() {
             last_second,
             last_second.saturating_add(999),
         ]);
+        if date == NaiveDate::MAX {
+            values.push(last_second.saturating_add(1000));
+        }
     }
     for year in [
         -9999, -400, -100, -4, -1, 0, 1, 4, 100, 400, 999, 1900, 2000, 2100, 9999,
@@ -718,8 +721,9 @@ fn chrono_differential_boundary_grid_and_seeded_sweep() {
         "%a", "%A", "%b", "%B", "%c", "%C", "%d", "%D", "%e", "%F", "%G", "%g", "%h", "%H", "%I",
         "%j", "%k", "%l", "%m", "%M", "%n", "%p", "%P", "%q", "%r", "%R", "%s", "%S", "%t", "%T",
         "%u", "%U", "%V", "%v", "%w", "%W", "%x", "%X", "%y", "%Y", "%z", "%:z", "%::z", "%:::z",
-        "%Z", "%+", "%%", "%E4Y", "%Od", "%_d", "%-d", "%0d", "%^B", "%#c", "%f", "%.f", "%.3f",
-        "%3f", "%Q", "%J", "%", "%E", "%O",
+        "%Z", "%+", "%%", "%E4Y", "%Od", "%_d", "%-d", "%0d", "%^B", "%#c", "%f", "%6f", "%9f",
+        "%.f", "%.3f", "%.6f", "%.9f", "%3f", "%-f", "%_f", "%-G", "%_g", "%Q", "%J", "%", "%E",
+        "%O",
     ];
     for pattern in patterns {
         assert_datetime_parity!("format", &[ts(1_622_647_845_123), v_str(pattern.into())]);
@@ -737,8 +741,29 @@ fn chrono_differential_boundary_grid_and_seeded_sweep() {
     for input in [
         "2021-06-02T15:30:45Z",
         "2021-06-02T15:30:45.1Z",
+        "2021-06-02T15:30:45.12Z",
+        "2021-06-02T15:30:45.123Z",
+        "2021-06-02T15:30:45.123456Z",
         "2021-06-02T15:30:45.123456789Z",
+        "2021-06-02T15:30:45.1234567890Z",
+        "2021-06-02T15:30:45.1+02:30",
+        "2021-06-02T15:30:45.12+02:30",
+        "2021-06-02T15:30:45.123+02:30",
+        "2021-06-02T15:30:45.123456+02:30",
+        "2021-06-02T15:30:45.123456789+02:30",
+        "2021-06-02T15:30:45.1234567890+02:30",
+        "2021-06-02T15:30:45.1−05:00",
+        "2021-06-02T15:30:45.12−05:00",
+        "2021-06-02T15:30:45.123−05:00",
+        "2021-06-02T15:30:45.123456−05:00",
+        "2021-06-02T15:30:45.123456789−05:00",
+        "2021-06-02T15:30:45.1234567890−05:00",
+        "2021-06-02T15:30:45.Z",
+        "2021-06-02T15:30:45.",
         "1969-12-31T23:59:59.9Z",
+        "2021-06-02T15:30:45+",
+        "2021-06-02T15:30:45−",
+        "2021-06-02T15:30:45+0",
         "2021-06-02T15:30:45+02:30",
         "2021-06-02T15:30:45-07:00",
         "2021-06-02t15:30:45z",
@@ -780,6 +805,19 @@ fn chrono_differential_wall_clock_bounds() {
         "now={now_ms}, bounds={before_now}..={after_now}"
     );
 
+    let then_negative = Utc::now().timestamp_millis() + 90_000;
+    let before_negative_age = Utc::now().timestamp_millis();
+    let negative_age = reg().call("age", &[ts(then_negative)]).unwrap();
+    let after_negative_age = Utc::now().timestamp_millis();
+    let QueryValue::Int(negative_age_secs) = negative_age else {
+        panic!("age must return Int: {negative_age:?}");
+    };
+    let negative_lower = (before_negative_age - then_negative) / 1000;
+    let negative_upper = (after_negative_age - then_negative) / 1000;
+    assert!(negative_age_secs < 0);
+    assert!((negative_lower..=negative_upper).contains(&negative_age_secs));
+    assert!(negative_age_secs == negative_lower || negative_age_secs == negative_upper);
+
     let then = Utc::now().timestamp_millis() - 10_000;
     let before_age = Utc::now().timestamp_millis();
     let age = reg().call("age", &[ts(then)]).unwrap();
@@ -793,6 +831,7 @@ fn chrono_differential_wall_clock_bounds() {
         (lower..=upper).contains(&age_secs),
         "age={age_secs}, bounds={lower}..={upper}"
     );
+    assert!(age_secs == lower || age_secs == upper);
 }
 
 #[test]
