@@ -591,8 +591,13 @@ A с rotation-цепочкой и снапшотом (§3.2): 0 round trips, п�
    `serde_bytes-0.11.19/src/de.rs:153-185`), TS приводит корень и слоты KDF
    приведением типов (`protocol.ts:147-160`). Шаги 3 и 4 §7 пишут
    явный marker-aware валидатор в каждом языке.
-8. **Общие побайтовые вектора принятия и отказа** (генерирует reference
-   шага 1, лежат рядом с `challenge_identity_v2.*`): ПРИНЯТЬ — более
+8. **Общие побайтовые вектора принятия и отказа** (лежат рядом с
+   `challenge_identity_v2.*` в `challenge_layout_v2.{toml,json}`; hex строк
+   пишется ВРУЧНУЮ из сырых маркеров, не энкодером `rmp_serde`, чтобы
+   вектор фиксировал раскладку независимо от энкодера; шаг 1 кладёт строки
+   внутренней тройки и тестирует ими `ChallengeRotationWire::decode`,
+   строки внешнего 9-элементного кадра добавляют шаги 3б и 4б вместе со
+   своими декодерами): ПРИНЯТЬ — более
    широкие маркеры для bin и uint при тех же значениях, `uint64`-маркер для
    KDF-значения, влезающего в u32, дедлайн с маркером любой ширины;
    ОТКАЗАТЬ (`ChallengeLayout`) — корень map; 8 и 10 элементов; array из
@@ -631,14 +636,18 @@ TypeScript применяют правило одинаково: Rust — явн
 не как побочный эффект энкодера.)
 
 **Общий фиксчур-вектор: правило генерации** (не рукописный hex): фиксированные
-входы `{domain_tag="SHAMIR-CHALLENGE-ID-v1", client_nonce=0xAA×32,
-server_nonce=0xBB×32, salt=0xCC×16, kdf={19456,2,1,0x13}, transport=0x01,
-binding=0x01, exporter=0x00×32, pub/priv — фиксированная тестовая Ed25519
-пара}` (зеркалит константы `protocol.ts:41-43`); reference-реализация Rust
-вычисляет `challenge_identity_input` и подпись ОДИН раз; hex транскрипта и
-подписи записывается в `crates/net/shamir-connect/test-vectors/challenge_identity_v2.toml`
-и `.json`. TS-тест сверяет оба значения. Vector — артефакт шага 1 (§7),
-не этого документа.
+входы — тот же фиксированный сценарий и тот же Ed25519-seed, что у
+`auth_message_default` и `identity_sig_default`: `{domain_tag="SHAMIR-CHALLENGE-ID-v1",
+ed25519_seed=0x01..0x20, client_nonce=0x00,0x11..0xFF,0x00,0x11..0xFF (32 байта),
+server_nonce=0x20..0x3F, salt=0x50..0x5F (16 байт), kdf={memory_kb=131072,
+time=4, parallelism=1}, argon2_version=0x13, transport=0x01, binding=0x01,
+exporter=0xAA,0xAB..0xC9 (32 байта, НЕ нули)}`. Вектор генерировал
+независимый reference (чистый Python по RFC 8032, предварительно сверенный
+побитно с `identity_sig_default`), а не Rust-код: он записал hex транскрипта
+(181 байт), SHA-256 ключа и подпись в
+`crates/net/shamir-connect/test-vectors/challenge_identity_v2.toml` и `.json`.
+Rust-тест и TS-тест сверяют все три значения; вектор не пересчитывается
+реализацией. Vector — артефакт шага 1 (§7), не этого документа.
 
 ### 4.2. Политика (решения владельца)
 
