@@ -15,18 +15,21 @@
 //! error, lock free after the drain. Mutant: the lock leaked unconditionally.
 //!
 //! `release_sources_stop_before_the_repository_flush` orders the ONE
-//! release-source stop against the REAL flush through the two one-shot
-//! probes (no timing): the sources-stopped marker must fire before the
-//! flush marker. Mutant: the helper moved after the flush.
+//! release-source stop against the REAL flush through the one-shot probes
+//! (no timing): the registry-cleared marker must fire and precede the
+//! sources-stopped marker, which must precede the flush marker. Mutants: the
+//! helper moved after the flush, or the registry clearing removed while the
+//! markers stay in place.
 //!
-//! `public_shutdown_uses_the_owner_drain_and_keeps_the_lock_over_a_live_job`
-//! drives the PUBLIC `ServerHandle::shutdown()` with a parked worker and
-//! shrunk overrides: it must return only through the owner drain (reporting
-//! the expired fallback join) and must not release the lock while the job is
-//! live. Mutant: `shutdown()` reverting to its old shape (build an owner,
-//! run the teardown, DROP the owner without draining — it could not return
-//! here at all with the worker parked, and its old deadline-wrapped callers
-//! released the lock over a live backup).
+//! `cancelled_shutdown_leaks_the_lock_until_process_exit` drives the PUBLIC
+//! `ServerHandle::shutdown()` and ABORTS the spawned future while a scheduled
+//! backup job is parked (a deterministic point — the scheduled-join probe —
+//! where the worker is parked and the owner holds the lock): the aborted
+//! future drops the owner, whose `DataDirLock` LEAKS the file, so the lock is
+//! still held after the abort AND still held after the worker later exits
+//! (observed through the runner's test-only `on_finished` handshake). Mutant:
+//! a plain `Drop` that releases the file (the old shape), or a shutdown that
+//! takes the lock into the future.
 //!
 //! No sleeps: the worker rendezvous is the semaphore + condvar gate from the
 //! deadline tests, every await is bounded by [`BOUND`], and the joins under
@@ -35,16 +38,18 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tokio::sync::Semaphore;
+
+use shamir_db::ShutdownWaitStage;
 
 use super::*;
 
 use crate::boot::config::diagnostics::backup_online::schedule::runner::spawn_for_test;
 use crate::server::server_handle::{
-    arm_release_sources_stopped_probe, arm_repo_flush_probe, arm_scheduled_join_probe,
-    set_drain_backup_join_bound_for_test,
+    arm_registry_cleared_probe, arm_release_sources_stopped_probe, arm_repo_flush_probe,
+    arm_scheduled_join_probe, set_drain_backup_join_bound_for_test,
 };
 
 /// Restores the `cfg(test)` overrides even when an assertion fails, so a
@@ -69,6 +74,7 @@ async fn launch_with_parked_worker(
     gate: Arc<(Mutex<WorkerState>, std::sync::Condvar)>,
     parked: Arc<Semaphore>,
     completed: Arc<AtomicBool>,
+    on_finished: impl FnMut() + Send + 'static,
 ) -> crate::server::ServerHandle {
     ServerLauncher::new(backup_config(data_dir, backups))
         .with_bootstrap(BootstrapMode::Skip)
@@ -89,6 +95,7 @@ async fn launch_with_parked_worker(
                 shutdown.child_token(),
                 Duration::from_secs(3600),
                 move |ok| completed.store(ok, Ordering::SeqCst),
+                on_finished,
             )
         })
         .await
@@ -125,12 +132,22 @@ async fn run_expired_drain_join() {
         std::sync::Condvar::new(),
     ));
     let completed = Arc::new(AtomicBool::new(false));
+    // Completion handshake for the LATE worker-finished signal (never a
+    // sleep/poll loop): fires when the runner clears the in-flight slot on
+    // `Signal::Finished` — after retention and the final publication.
+    let (finished_tx, finished_rx) = tokio::sync::oneshot::channel::<()>();
+    let mut finished_tx = Some(finished_tx);
     let handle = launch_with_parked_worker(
         data_dir.clone(),
         backups,
         Arc::clone(&gate),
         Arc::clone(&parked),
         Arc::clone(&completed),
+        move || {
+            if let Some(tx) = finished_tx.take() {
+                let _ = tx.send(());
+            }
+        },
     )
     .await;
     let parked_permit = timeout(BOUND, parked.acquire())
@@ -149,11 +166,9 @@ async fn run_expired_drain_join() {
         .expect("drain_server must return even with the worker parked");
     guard.mark("drain returned with the worker still parked");
 
-    assert!(
-        report.errors().iter().any(|error| {
-            error.contains("shutdown owner wait expired (")
-                && error.contains("scheduled backup worker join")
-        }),
+    assert_eq!(
+        report.expired_owner_wait(),
+        Some(ShutdownWaitStage::ScheduledBackupJoin),
         "the expired drain-side backup join must be recorded TYPED, naming the stage: {report:?}"
     );
     assert!(
@@ -178,16 +193,13 @@ async fn run_expired_drain_join() {
     );
     // Let the runner finish: the lock is LEAKED, so it must stay held even
     // after the job is no longer live (kernel releases it only at process
-    // exit; a second acquire must still fail).
+    // exit; a second acquire must still fail). The worker's exit is observed
+    // through the runner's finished handshake, never by polling.
     release(&gate);
-    let finished = Instant::now();
-    while !completed.load(Ordering::SeqCst) {
-        assert!(
-            finished.elapsed() < BOUND,
-            "the worker must finish after its release"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    timeout(BOUND, finished_rx)
+        .await
+        .expect("the worker must finish after its release (finished handshake)")
+        .expect("finished channel");
     assert!(
         crate::maintenance_lock::acquire_server(&data_dir).is_err(),
         "the lock file was leaked on purpose: the kernel must hold it until the process exits"
@@ -233,11 +245,9 @@ async fn run_clean_release() {
         .await
         .expect("clean drain must finish");
     assert!(
-        !report
-            .errors()
-            .iter()
-            .any(|error| error.contains("shutdown owner wait expired (")),
-        "a clean drain must not record an expired owner wait: {report:?}"
+        report.is_clean(),
+        "a clean drain must produce a CLEAN report, not merely one without the expired \
+         owner-wait entry: {report:?}"
     );
     let lock_free = crate::maintenance_lock::acquire_server(&data_dir).is_ok();
     assert!(
@@ -284,7 +294,15 @@ async fn run_sources_before_flush() {
 
     let order = Arc::new(Mutex::new(Vec::<&'static str>::new()));
     let (sources_tx, sources_rx) = tokio::sync::oneshot::channel::<()>();
+    let (cleared_tx, cleared_rx) = tokio::sync::oneshot::channel::<()>();
     let (flush_tx, flush_rx) = tokio::sync::oneshot::channel::<()>();
+    let _cleared_probe = {
+        let order = Arc::clone(&order);
+        arm_registry_cleared_probe(move || {
+            order.lock().expect("order log").push("cleared");
+            let _ = cleared_tx.send(());
+        })
+    };
     let _sources_probe = {
         let order = Arc::clone(&order);
         arm_release_sources_stopped_probe(move || {
@@ -303,6 +321,13 @@ async fn run_sources_before_flush() {
     let report = timeout(BOUND, crate::runtime::drain_server(handle, BOUND))
         .await
         .expect("shutdown must finish");
+    timeout(BOUND, cleared_rx)
+        .await
+        .expect(
+            "the registry clearing must run on a shutdown (mutant: remove_all removed \
+                 while the markers stay)",
+        )
+        .expect("cleared probe channel");
     timeout(BOUND, sources_rx)
         .await
         .expect("the release-source stop must run on a shutdown")
@@ -313,6 +338,10 @@ async fn run_sources_before_flush() {
         .expect("flush probe channel");
 
     let order = order.lock().expect("order log").clone();
+    let cleared_at = order
+        .iter()
+        .position(|marker| *marker == "cleared")
+        .expect("registry-cleared marker recorded");
     let sources_at = order
         .iter()
         .position(|marker| *marker == "sources")
@@ -321,6 +350,11 @@ async fn run_sources_before_flush() {
         .iter()
         .position(|marker| *marker == "flush")
         .expect("flush marker recorded");
+    assert!(
+        cleared_at < sources_at,
+        "the registry must be cleared BEFORE the sources-stopped marker (observed order \
+         {order:?}; mutant: the registry clearing removed while the marker stays in place)"
+    );
     assert!(
         sources_at < flush_at,
         "the release sources must stop BEFORE the flush (observed order {order:?}; mutant: the \
@@ -333,21 +367,22 @@ async fn run_sources_before_flush() {
     );
 }
 
-/// The PUBLIC `ServerHandle::shutdown()` runs the owner-drain path: with the
-/// worker parked and both bounds shrunk it returns through the fallback drain
-/// and keeps the lock over the live job.
+/// The PUBLIC `ServerHandle::shutdown()` CANCELLED mid-teardown: the aborted
+/// future drops the owner, whose `DataDirLock` leaks the lock file, so the
+/// data-directory lock stays held over the live job — and stays held even
+/// after the worker later exits (the OS releases it only at process death).
 #[test]
-fn public_shutdown_uses_the_owner_drain_and_keeps_the_lock_over_a_live_job() {
+fn cancelled_shutdown_leaks_the_lock_until_process_exit() {
     on_big_stack(|| async {
-        timeout(BOUND, run_public_shutdown_over_live_job())
+        timeout(BOUND, run_cancelled_shutdown_keeps_lock())
             .await
-            .expect("public-shutdown test bounded");
+            .expect("cancelled-shutdown test bounded");
     });
 }
 
-async fn run_public_shutdown_over_live_job() {
+async fn run_cancelled_shutdown_keeps_lock() {
     let guard = FlakeGuard::with_watchdog(
-        "public_shutdown_uses_the_owner_drain_and_keeps_the_lock_over_a_live_job",
+        "cancelled_shutdown_leaks_the_lock_until_process_exit",
         Duration::from_secs(300),
     );
     let _overrides = BoundOverrideGuard;
@@ -364,12 +399,19 @@ async fn run_public_shutdown_over_live_job() {
         std::sync::Condvar::new(),
     ));
     let completed = Arc::new(AtomicBool::new(false));
+    let (finished_tx, finished_rx) = tokio::sync::oneshot::channel::<()>();
+    let mut finished_tx = Some(finished_tx);
     let handle = launch_with_parked_worker(
         data_dir.clone(),
         backups,
         Arc::clone(&gate),
         Arc::clone(&parked),
         Arc::clone(&completed),
+        move || {
+            if let Some(tx) = finished_tx.take() {
+                let _ = tx.send(());
+            }
+        },
     )
     .await;
     let parked_permit = timeout(BOUND, parked.acquire())
@@ -378,8 +420,6 @@ async fn run_public_shutdown_over_live_job() {
         .expect("parked semaphore open");
     drop(parked_permit);
 
-    set_drain_backup_join_bound_for_test(Some(Duration::from_secs(1)));
-    crate::runtime::set_drain_deadline_override(Some(TEST_DEADLINE));
     let (join_tx, join_rx) = tokio::sync::oneshot::channel::<()>();
     let _join_probe = {
         let _ = &join_tx;
@@ -392,25 +432,39 @@ async fn run_public_shutdown_over_live_job() {
         .await
         .expect("shutdown() must reach the scheduled-join stage (the drain_server path)")
         .expect("join probe channel");
-    let report = timeout(BOUND, shutdown)
+    // Deterministic point: the worker is parked, the owner holds the lock.
+    // ABORT the shutdown future — exactly what a cancelled embedding caller
+    // does. The abort is awaited only to observe `is_cancelled`.
+    shutdown.abort();
+    let result = timeout(BOUND, shutdown)
         .await
-        .expect("shutdown() must return even with the worker parked")
-        .expect("shutdown task");
-
+        .expect("aborted task must join");
     assert!(
-        report
-            .errors()
-            .iter()
-            .any(|error| error.contains("shutdown owner wait expired (")),
-        "shutdown() must run the owner drain and report the expired fallback join: {report:?}"
+        matches!(&result, Err(error) if error.is_cancelled()),
+        "the shutdown future must have been CANCELLED, not completed: {result:?}"
     );
-    // The job is LIVE (still parked): the lock must still be held after
-    // shutdown() returned. (Mutant: the old shape — teardown + drop the
-    // owner — released the lock over the live backup.)
+    guard.mark("shutdown future aborted at the scheduled-join stage");
+
+    // The aborted future dropped the owner; the lock must STILL be held over
+    // the live job. (Mutant: a plain `Drop` that releases the file — the old
+    // shape — or a shutdown that moved the lock into the future.)
     assert!(
         crate::maintenance_lock::acquire_server(&data_dir).is_err(),
-        "shutdown() must not release the data-directory lock over a live job"
+        "a cancelled shutdown future must NOT release the data-directory lock over a live job"
     );
+    // Let the worker finish (observed through the runner's finished
+    // handshake), then assert the lock is STILL held AFTER the worker exited:
+    // the file was leaked on purpose, so the kernel keeps it until the
+    // process exits.
     release(&gate);
-    guard.mark("worker released after shutdown() returned");
+    timeout(BOUND, finished_rx)
+        .await
+        .expect("the worker must finish after its release (finished handshake)")
+        .expect("finished channel");
+    guard.mark("worker exited after the cancelled shutdown");
+    assert!(
+        crate::maintenance_lock::acquire_server(&data_dir).is_err(),
+        "the lock file was leaked on purpose: the kernel must hold it even after the worker \
+         exited, until the process exits"
+    );
 }

@@ -1,9 +1,8 @@
 //! Bounded drain of the interactive-tx record-lock release tails (the
 //! operator-cancel release and the registry `Drop` release): these releases
-//! are IN-MEMORY registrations and detached release tasks, not store writes
-//! at drain time — the drain waits for the release TAILS (the detached
-//! `spawn_abort_release` tasks writing into a table's `MvccStore`) so the
-//! repository flush cannot overlap one.
+//! settle IN-MEMORY record locks — the detached `spawn_abort_release` tasks
+//! they enqueue never write into the store at drain time. The drain waits for
+//! those detached tasks so the repository flush cannot overlap one.
 
 use shamir_db::ShutdownReport;
 use shamir_sync::durability::tx::ReleaseTails;

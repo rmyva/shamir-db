@@ -50,8 +50,8 @@ use crate::config::{
 };
 use crate::db_handler::NodeMode;
 use crate::server::server_handle::{
-    arm_fallback_drain_join_probe, arm_release_sources_stopped_probe, arm_repo_flush_probe,
-    arm_scheduled_join_probe,
+    arm_fallback_drain_join_probe, arm_pre_observability_registry_probe,
+    arm_release_sources_stopped_probe, arm_repo_flush_probe, arm_scheduled_join_probe,
 };
 use crate::server::server_launcher::audit_teardown::arm_teardown_probe;
 use crate::server::{release_stores, BootstrapMode, ReleaseOutcome, ServerLauncher};
@@ -143,6 +143,7 @@ async fn run_scheduled_worker() {
                     shutdown.child_token(),
                     Duration::from_secs(3600),
                     move |ok| completed.store(ok, Ordering::SeqCst),
+                    || {},
                 )
             }
         })
@@ -345,6 +346,7 @@ async fn run_normal_order() {
                     shutdown.child_token(),
                     Duration::from_secs(3600),
                     move |ok| completed.store(ok, Ordering::SeqCst),
+                    || {},
                 )
             }
         })
@@ -704,6 +706,107 @@ fn observability_bind_rollback_keeps_the_boot_error_and_releases_the_lock() {
     );
 }
 
+/// The observability-bind rollback with an OPEN interactive transaction in
+/// the registry: the pre-observability probe parks a REAL transaction (an
+/// in-memory `ShamirDb` tx registered into the SERVER's registry — the same
+/// `parked()` shape the activity tests use) at a deterministic point before
+/// the bind attempt, the occupied port fails the bind, and the test asserts
+/// the boot error still wins AND the registry is EMPTY after the rollback.
+/// With a registered tx present, emptiness FAILS if the arm's
+/// `stop_release_sources` (its `registry.remove_all()`) is removed — the
+/// teardown/sources markers alone cannot discriminate that, because with no
+/// tx registered the registry is empty either way.
+#[test]
+fn observability_rollback_clears_a_registry_with_an_open_tx() {
+    let temp = tempfile::tempdir().expect("test root");
+    let data_dir = temp.path().join("data");
+    create_private_dir(&data_dir).expect("private data directory");
+    let held = std::net::TcpListener::bind("127.0.0.1:0").expect("hold a port");
+    let occupied = held.local_addr().expect("held address").to_string();
+    let config = bind_config(data_dir.clone(), "127.0.0.1:0".to_owned(), occupied);
+
+    // The registry the launcher hands us; retained by cloning the Arc so the
+    // emptiness assertion runs AFTER the rollback returned.
+    let server_registry: Arc<
+        std::sync::Mutex<Option<std::sync::Arc<crate::tx_registry::TxRegistry>>>,
+    > = Arc::new(std::sync::Mutex::new(None));
+    let _registry_probe = {
+        let slot = Arc::clone(&server_registry);
+        arm_pre_observability_registry_probe(move |registry| {
+            let slot = Arc::clone(&slot);
+            let registry = std::sync::Arc::clone(registry);
+            Box::pin(async move {
+                // Park a REAL interactive transaction into the server's
+                // registry (own in-memory db: the release closure is the real
+                // engine lock release, so the rollback's tail drain settles
+                // it exactly like a production tx).
+                let owner = shamir_db::access::Actor::User(shamir_db::access::principal64([3; 16]));
+                let db = open_app_db_for_rollback(&owner).await;
+                let (ctx, snapshot) = db
+                    .tx_begin_as(owner.clone(), "app", "main", "snapshot")
+                    .await
+                    .expect("begin interactive tx");
+                let handle = ctx.tx_id.0;
+                let repo = db
+                    .get_db("app")
+                    .expect("fixture db")
+                    .get_repo("main")
+                    .expect("fixture repo");
+                let release: crate::tx_registry::TxAbortRelease =
+                    std::sync::Arc::new(move |parked: shamir_tx::TxContext| {
+                        let repo = repo.clone();
+                        Box::pin(async move {
+                            shamir_db::engine::tx::release_interactive_tx_locks(
+                                &parked,
+                                repo.core(),
+                            )
+                            .await;
+                        })
+                            as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+                    });
+                let it = crate::tx_registry::InteractiveTx::new(
+                    ctx,
+                    snapshot,
+                    [9; 32],
+                    [9; 16],
+                    "app".into(),
+                    "main".into(),
+                    Duration::from_secs(3_600),
+                    release,
+                );
+                let registered = registry.register(handle, it);
+                assert!(
+                    registered.is_ok(),
+                    "the tx must park into the server's registry: {}",
+                    registered.err().map(|e| e.to_string()).unwrap_or_default()
+                );
+                assert!(!registry.is_empty(), "the tx must be registered");
+                *slot.lock().expect("registry slot") = Some(registry);
+            })
+        })
+    };
+
+    let error = run_blocking(move || match block_on_launch(config) {
+        Ok(_) => panic!("the occupied observability port must fail the bind"),
+        Err(error) => error,
+    });
+    let message = error.to_string();
+    assert!(
+        message.contains("listener bind") && message.contains("observability"),
+        "the boot error must still win over the rollback cleanup: {message}"
+    );
+    let registry = server_registry
+        .lock()
+        .expect("registry slot")
+        .clone()
+        .expect("the probe must have parked a tx before the bind attempt");
+    assert!(
+        registry.is_empty(),
+        "the rollback must clear the registry even with an open tx present (mutant: \
+         `stop_release_sources` removed from the arm)"
+    );
+}
+
 /// Run one real launch on a roomy thread with its own current-thread runtime,
 /// bounded so a rollback that never finishes fails instead of hanging CI.
 fn block_on_launch(
@@ -867,4 +970,27 @@ fn listener_config(addr: String) -> ListenerConfig {
         kdf_override: None,
         browser_origin_allowlist: Vec::new(),
     }
+}
+
+/// In-memory `app`/`main` fixture for the observability-rollback test's open
+/// transaction (the same shape the activity tests' `parked()` helper uses).
+async fn open_app_db_for_rollback(
+    owner: &shamir_db::access::Actor,
+) -> std::sync::Arc<shamir_db::ShamirDb> {
+    use shamir_db::engine::repo::{BoxRepoFactory, RepoConfig};
+    use shamir_db::engine::table::TableConfig;
+    let db = shamir_db::ShamirDb::init_memory()
+        .await
+        .expect("in-memory db");
+    db.create_db_as("app", owner.clone())
+        .await
+        .expect("create db");
+    db.add_repo_as(
+        "app",
+        RepoConfig::new("main", BoxRepoFactory::in_memory()).add_table(TableConfig::new("items")),
+        owner.clone(),
+    )
+    .await
+    .expect("add repo");
+    std::sync::Arc::new(db)
 }

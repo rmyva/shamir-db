@@ -9,6 +9,7 @@ pub use core::ServerHandle;
 pub use core::*;
 #[cfg(test)]
 pub(crate) use shutdown_owner::set_drain_backup_join_bound_for_test;
+pub(in crate::engine::server) use shutdown_owner::DataDirLock;
 #[cfg(test)]
 mod tests;
 

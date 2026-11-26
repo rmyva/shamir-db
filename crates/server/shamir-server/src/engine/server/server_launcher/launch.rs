@@ -673,7 +673,6 @@ impl ServerLauncher {
                         );
                     }
                 }
-                log_rollback_cleanup("listener bind", &cleanup);
                 join_meta_snapshot("listener bind", meta_snapshot_task).await;
                 stop_release_sources(
                     "listener bind",
@@ -682,14 +681,15 @@ impl ServerLauncher {
                     &mut cleanup,
                 )
                 .await;
-                if let Some(reaper) = cursor_reaper {
-                    let _ = reaper.handle.await;
-                }
+                log_rollback_cleanup("listener bind", &cleanup);
+                rollback_cleanup::join_cursor_reaper(cursor_reaper).await;
                 return Err(error);
             }
         };
         // 11. Optional observability HTTP server. Spawned LAST so its
         //     `/readyz` flips to 200 only after every listener is bound.
+        #[cfg(test)]
+        crate::server::fire_pre_observability_registry_probe(&tx_registry_for_rollback).await;
         let observability_result: Result<
             Option<crate::observability::ObservabilityHandle>,
             BootError,
@@ -842,7 +842,6 @@ impl ServerLauncher {
                         );
                     }
                 }
-                log_rollback_cleanup("observability bind", &cleanup);
                 join_meta_snapshot("observability bind", meta_snapshot_task).await;
                 stop_release_sources(
                     "observability bind",
@@ -851,9 +850,8 @@ impl ServerLauncher {
                     &mut cleanup,
                 )
                 .await;
-                if let Some(reaper) = cursor_reaper {
-                    let _ = reaper.handle.await;
-                }
+                log_rollback_cleanup("observability bind", &cleanup);
+                rollback_cleanup::join_cursor_reaper(cursor_reaper).await;
                 return Err(error);
             }
         };
@@ -925,7 +923,9 @@ impl ServerLauncher {
             data_dir: config.data_dir.clone(),
             conn_tasks: conn_tasks.clone(),
             format_stamp,
-            data_dir_lock: Some(data_dir_lock),
+            data_dir_lock: Some(crate::server::server_handle::DataDirLock::new(
+                data_dir_lock,
+            )),
             tunables: Arc::new(RuntimeTunables::new()),
             // Tests drive the real handler and scrape the actual bound metrics address.
             #[cfg(test)]

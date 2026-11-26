@@ -223,10 +223,17 @@ fn service_main_inner() -> anyhow::Result<()> {
         tracing::info!("shamir-server service stopped cleanly");
     }
 
-    if result.is_err() {
-        // A failed run can leave a detached blocking job: dropping the runtime
-        // would wait for it without a bound and keep the process alive.
-        rt.shutdown_timeout(Duration::from_secs(5));
+    // A failed run — OR an abnormal shutdown report (exit code 70) — can
+    // leave a detached blocking job: dropping the runtime would wait for it
+    // without a bound and keep the process alive. Both leave through the SAME
+    // bounded runtime shutdown with the same named bound as `main.rs`; the
+    // data-directory lock is leaked by the owner guard, so the OS keeps it
+    // until the process is gone.
+    if runtime::exits_through_bounded_shutdown(
+        result.is_err(),
+        result.as_ref().map(|report| !report.is_clean()).ok(),
+    ) {
+        rt.shutdown_timeout(runtime::EXIT_RUNTIME_SHUTDOWN_TIMEOUT);
     }
     result.map(|_| ())
 }

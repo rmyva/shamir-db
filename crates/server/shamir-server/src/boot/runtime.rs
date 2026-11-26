@@ -26,7 +26,30 @@ use crate::server::{BootstrapMode, ServerHandle, ServerLauncher};
 /// The scheduled-backup worker and data-directory lock remain owned outside
 /// the bounded future and are awaited before `serve` returns. There is no forced
 /// exit and nothing calls `std::process::exit`.
-pub(crate) const SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+const SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Bound for dropping the tokio runtime itself on an ABNORMAL exit. When the
+/// run failed (`Err`) or the shutdown report is abnormal (exit code 70), a
+/// detached blocking job (a stalled final snapshot flush inside the fjall
+/// store) could otherwise hold the runtime's normal destruction — and the
+/// process — indefinitely after the bounded shutdown wait already returned.
+/// The same 5 s bound the error path always had, now named and used by BOTH
+/// `main.rs` paths and the Windows service path (see
+/// [`exits_through_bounded_shutdown`]). The data-directory lock stays held on
+/// that path (it is leaked by the owner guard), so the OS keeps it until the
+/// process is gone.
+pub const EXIT_RUNTIME_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// THE one decision for leaving through the BOUNDED runtime shutdown
+/// (`shutdown_timeout(EXIT_RUNTIME_SHUTDOWN_TIMEOUT)`): the run failed at
+/// boot (`boot_failed`), OR a shutdown report exists and is abnormal
+/// (`report_abnormal = Some(!report.is_clean())`; `None` = no report — e.g.
+/// a non-server subcommand — and never counts as abnormal). Used by BOTH
+/// call sites (`main.rs` and the Windows service path) so they can never
+/// disagree.
+pub fn exits_through_bounded_shutdown(boot_failed: bool, report_abnormal: Option<bool>) -> bool {
+    boot_failed || report_abnormal == Some(true)
+}
 
 /// Test-only seam for the embedding shutdown deadline: a test cannot spend
 /// 30 s, so it shrinks the deadline for `ServerHandle::shutdown()` (which
@@ -43,17 +66,21 @@ pub(crate) fn set_drain_deadline_override(deadline: Option<std::time::Duration>)
         .expect("drain deadline override") = deadline;
 }
 
-#[cfg(test)]
-fn drain_deadline() -> std::time::Duration {
-    DRAIN_DEADLINE_OVERRIDE
-        .lock()
-        .expect("drain deadline override")
-        .unwrap_or(SHUTDOWN_DEADLINE)
-}
-
-#[cfg(not(test))]
-fn drain_deadline() -> std::time::Duration {
-    SHUTDOWN_DEADLINE
+/// The ONE source of the embedding shutdown deadline: `serve` and
+/// `ServerHandle::shutdown` both read it, so the public wrapper can never
+/// drift from the boot path. The override static and setter stay `#[cfg(test)]`.
+pub(crate) fn drain_deadline() -> std::time::Duration {
+    #[cfg(test)]
+    {
+        DRAIN_DEADLINE_OVERRIDE
+            .lock()
+            .expect("drain deadline override")
+            .unwrap_or(SHUTDOWN_DEADLINE)
+    }
+    #[cfg(not(test))]
+    {
+        SHUTDOWN_DEADLINE
+    }
 }
 
 /// Boot the server, wait for `shutdown`, then drain gracefully.
@@ -125,9 +152,10 @@ pub async fn serve(
 /// synchronous work is not interrupted, and the detached metadata join may
 /// continue after timeout. If one of the OWNER's own bounded waits expires
 /// (see `shutdown_owner::report_expired_owner_wait`), the data-directory
-/// lock is deliberately NOT released here: the `File` is leaked, so the
-/// kernel holds the advisory lock until the process exits, and the report
-/// names the expired stage (exit code 70, the abnormal-report semantics).
+/// lock is deliberately NOT released here: the owner guard leaks the file,
+/// so the kernel holds the advisory lock until the process exits, and the
+/// report names the expired stage typed (exit code 70, the abnormal-report
+/// semantics).
 pub(crate) async fn drain_server(
     handle: ServerHandle,
     deadline: std::time::Duration,

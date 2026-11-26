@@ -35,7 +35,7 @@ pub(crate) fn spawn(
     owner: String,
     shutdown: CancellationToken,
 ) -> JoinHandle<()> {
-    spawn_with_observer(schedule, registry, owner, shutdown, |_| {})
+    spawn_with_observer(schedule, registry, owner, shutdown, |_| {}, || {})
 }
 
 #[cfg(test)]
@@ -46,9 +46,17 @@ pub(crate) fn spawn_for_test(
     shutdown: CancellationToken,
     interval: Duration,
     on_terminal: impl FnMut(bool) + Send + 'static,
+    on_finished: impl FnMut() + Send + 'static,
 ) -> JoinHandle<()> {
     schedule.interval = interval;
-    spawn_with_observer(schedule, registry, owner, shutdown, on_terminal)
+    spawn_with_observer(
+        schedule,
+        registry,
+        owner,
+        shutdown,
+        on_terminal,
+        on_finished,
+    )
 }
 
 fn spawn_with_observer(
@@ -57,6 +65,7 @@ fn spawn_with_observer(
     owner: String,
     shutdown: CancellationToken,
     mut on_terminal: impl FnMut(bool) + Send + 'static,
+    mut on_finished: impl FnMut() + Send + 'static,
 ) -> JoinHandle<()> {
     let boot = Instant::now();
     let boot_unix_nanos = unix_nanos();
@@ -76,8 +85,12 @@ fn spawn_with_observer(
     tokio::spawn(async move {
         let _cells_guard = cells_guard;
         run_with_anchor(
-            (boot, schedule.interval, schedule.run_on_start),
-            schedule.window,
+            (
+                boot,
+                schedule.interval,
+                schedule.run_on_start,
+                schedule.window,
+            ),
             shutdown,
             local_minute_of_day,
             move || {
@@ -110,6 +123,7 @@ fn spawn_with_observer(
                     .unwrap_or(0);
                 schedule_state.note_next_run_unix_ns(generation, nanos);
             },
+            &mut on_finished,
         )
         .await;
     })
@@ -141,25 +155,30 @@ pub(super) async fn run(
     note: impl FnMut(ScheduledResult),
 ) {
     run_with_anchor(
-        (boot, interval, run_on_start),
-        window,
+        (boot, interval, run_on_start, window),
         shutdown,
         local_minute,
         start,
         note,
         |_: Option<Instant>| {},
+        || {},
     )
     .await;
 }
 
 async fn run_with_anchor(
-    (boot, interval, run_on_start): (Instant, Duration, bool),
-    window: Option<DailyWindow>,
+    (boot, interval, run_on_start, window): (Instant, Duration, bool, Option<DailyWindow>),
     shutdown: CancellationToken,
     mut local_minute: impl FnMut() -> u32,
     mut start: impl FnMut() -> Result<ScheduledRunSignals, StartBackupError>,
     mut note: impl FnMut(ScheduledResult),
     mut publish_next: impl FnMut(Option<Instant>),
+    // Test-only completion handshake: fired when the loop's `Signal::Finished`
+    // clears the in-flight slot, and again after the post-loop drain's
+    // `run.finished.await` (at most one of the two fires per run, and a run
+    // that never admits one fires only via the post-loop drain). Production
+    // callers pass a no-op; tests await it instead of polling for completion.
+    mut on_finished: impl FnMut(),
 ) {
     let mut next = if run_on_start {
         Some(boot)
@@ -179,7 +198,10 @@ async fn run_with_anchor(
                     }
                     note(outcome_result(result));
                 }
-                Signal::Finished => in_flight = None,
+                Signal::Finished => {
+                    in_flight = None;
+                    on_finished();
+                }
             },
             () = async {
                 // Already-due ticks must not wait for Tokio's timer granularity.
@@ -223,6 +245,7 @@ async fn run_with_anchor(
             note(outcome_result(run.outcome.await));
         }
         let _ = run.finished.await;
+        on_finished();
     }
 }
 

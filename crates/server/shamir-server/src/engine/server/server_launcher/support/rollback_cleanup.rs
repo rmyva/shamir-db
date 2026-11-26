@@ -81,6 +81,16 @@ pub(super) async fn join_meta_snapshot(stage: &'static str, task: Option<MetaSna
     }
 }
 
+/// Join the cursor-reaper task of a failed launch. Both rollback arms do the
+/// same unbounded await (the reaper is cooperative and its shutdown token is
+/// already cancelled); kept here so the launcher's rollback arms stay one
+/// line each.
+pub(super) async fn join_cursor_reaper(reaper: Option<crate::cursor_registry::CursorReaperTask>) {
+    if let Some(reaper) = reaper {
+        let _ = reaper.handle.await;
+    }
+}
+
 /// Log every cleanup failure of a rollback, naming the stage that failed.
 pub(super) fn log_rollback_cleanup(stage: &'static str, cleanup: &ShutdownReport) {
     for error in cleanup.errors() {

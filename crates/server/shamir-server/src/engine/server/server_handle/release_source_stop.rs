@@ -117,6 +117,8 @@ pub(in crate::engine::server) async fn stop_release_sources_and_drain_tails(
         // Dropping the returned `Arc`s is what triggers each RAII release
         // (registered into the still-open tail admission below).
         drop(registry.remove_all());
+        #[cfg(test)]
+        super::shutdown_probes::fire_registry_cleared_probe();
     }
     // The release SOURCES are now stopped: fire the order probe (test-only)
     // before the drain closes admission, so a test can prove this point ran

@@ -18,7 +18,8 @@ use super::shutdown_probes::{
 
 use super::release_source_stop::{stop_release_sources_and_drain_tails, ReleaseStopBounds};
 use super::shutdown_owner::{
-    early_stage_bound, stage_bound, ShutdownOwner, CONN_DRAIN_TIMEOUT, REPO_FLUSH_BUDGET,
+    early_stage_bound, stage_bound, DataDirLock, ShutdownOwner, CONN_DRAIN_TIMEOUT,
+    REPO_FLUSH_BUDGET,
 };
 use crate::audit_appender::FjallAuditAppender;
 use crate::boot::config::diagnostics::logical::export_online::OnlineExport;
@@ -233,14 +234,17 @@ pub struct ServerHandle {
     /// opened (created / adopted / unchanged / version-updated).
     pub(in crate::engine::server) format_stamp: shamir_sync::format_stamp::StampOutcome,
     /// RAII single-instance guard: an advisory OS file lock on
-    /// `<data_dir>/.shamir.lock`. The kernel releases it automatically
-    /// when this `File` is dropped (or the process crashes), so a second
-    /// `shamir-server` that tries to open the same `data_dir` gets
-    /// `BootError::AlreadyRunning` instead of silently corrupting the
-    /// fjall stores. Do NOT explicitly unlock — drop is the release.
-    /// `None` once [`ServerHandle::take_shutdown_owner`] moved it out for the
-    /// embedding path.
-    pub(in crate::engine::server) data_dir_lock: Option<std::fs::File>,
+    /// `<data_dir>/.shamir.lock`, wrapped in [`DataDirLock`]. The kernel
+    /// releases it automatically when the inner `File` is dropped (or the
+    /// process crashes), so a second `shamir-server` that tries to open the
+    /// same `data_dir` gets `BootError::AlreadyRunning` instead of silently
+    /// corrupting the fjall stores. The wrapper releases the lock ONLY via
+    /// [`DataDirLock::release_clean`] at the end of a completed clean drain;
+    /// dropping this handle — or dropping/cancelling the shutdown future —
+    /// LEAKS the file on purpose, so the OS keeps the lock until the process
+    /// exits. `None` once [`ServerHandle::take_shutdown_owner`] moved it out
+    /// for the embedding path.
+    pub(in crate::engine::server) data_dir_lock: Option<DataDirLock>,
     /// Instance-level runtime tunables. Initialized from `instance_defaults`
     /// consts — reads are a single atomic load (instant, non-blocking).
     /// Consumer wiring to accept-loop sleep sites is deferred to a follow-up
@@ -313,19 +317,20 @@ impl ServerHandle {
     /// [`crate::boot::runtime::drain_server`] (the same owner extraction,
     /// bounded teardown and post-deadline owner drain `serve` uses).
     ///
-    /// CONTRACT: this future must NOT be dropped half way. The shutdown
-    /// owner — the scheduled-backup worker and the data-directory instance
-    /// lock — lives inside it; dropping the future mid-teardown cancels the
-    /// worker's task and releases the instance lock over a possibly live
-    /// backup run. Await it to completion: the worker is joined (with the
-    /// generous fallback bound), the release sources are stopped before the
-    /// flush, and the lock is released only after the owner drain — never
-    /// over a live job. If an owner wait expires, the report names the stage
-    /// and the lock is kept until the process exits (exit code 70, the
-    /// abnormal-report semantics).
+    /// WHAT REALLY HAPPENS IF THIS FUTURE IS DROPPED OR CANCELLED: the
+    /// shutdown owner — the scheduled-backup worker and the data-directory
+    /// instance lock ([`DataDirLock`]) — lives OUTSIDE this future (borrowed
+    /// through `&mut`), so dropping it half way does NOT cancel the worker's
+    /// task and does NOT release the instance lock. The lock file is LEAKED
+    /// instead: the OS keeps the advisory data-directory lock until the
+    /// process exits, over the possibly still-running backup job. ONLY a
+    /// future awaited to a COMPLETED clean drain releases the lock (the
+    /// owner drain's `release_clean`); a drain whose owner wait expired also
+    /// leaks it, and the report then names the expired stage (exit code 70,
+    /// the abnormal-report semantics).
     pub async fn shutdown(self) -> ShutdownReport {
         let report =
-            crate::boot::runtime::drain_server(self, crate::boot::runtime::SHUTDOWN_DEADLINE).await;
+            crate::boot::runtime::drain_server(self, crate::boot::runtime::drain_deadline()).await;
         crate::observability::record_shutdown(&report);
         report
     }
@@ -367,7 +372,9 @@ impl ServerHandle {
     /// cancel-safe: NO — joins and flushes may be incomplete; caller retains
     /// repository outcomes and marks deadline expiry as unclean. `owner` is
     /// borrowed, not taken: dropping this future must never drop the
-    /// scheduled worker or the instance lock.
+    /// scheduled worker or the instance lock (the lock would be LEAKED by
+    /// [`DataDirLock`]'s `Drop`, keeping the data directory locked until the
+    /// process exits).
     pub(crate) async fn shutdown_with_budget(
         mut self,
         report: &mut ShutdownReport,

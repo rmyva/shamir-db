@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use shamir_db::ShutdownReport;
+use shamir_db::{ShutdownReport, ShutdownWaitStage};
 use shamir_sync::durability::tx::ReleaseTails;
 use tokio::task::JoinHandle;
 use tokio_util::sync::DropGuard;
@@ -98,30 +98,39 @@ pub(super) fn early_stage_bound(
     }
 }
 
-/// The stage of the owner drain whose bounded wait expired. The expired stage
-/// is RECORDED TYPED (this enum names it) and as a report entry whose fixed
-/// prefix is part of the operator contract: the data-directory lock is kept
-/// until the process exits.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum OwnerWaitStage {
-    /// The scheduled backup worker's completion signal.
-    ScheduledBackup,
-    /// The owned mutation workers.
-    MutationWorkers,
-    /// The online-export drain handle.
-    OnlineExport,
-    /// The release-tail machinery (reaper join or tail drain) not settling.
-    ReleaseTails,
+/// RAII owner of the data-directory instance lock (`<data_dir>/.shamir.lock`).
+///
+/// The lock is released ONLY by an explicit, completed, clean drain:
+/// [`Self::release_clean`] is a CONSUMING method called at the end of a clean
+/// owner drain, and it is the only place the inner `File` is dropped (the
+/// drop of the file is what releases the advisory OS lock). EVERY other end
+/// of the owner's life leaks the file ON PURPOSE — dropping or cancelling the
+/// shutdown future, a panic unwinding through the owner, an early return: the
+/// [`Drop`] impl `std::mem::forget`s whatever is still inside, so the OS keeps
+/// the advisory lock until the process exits and no other process can open
+/// the data directory over work that is still running. This is the same
+/// mechanism the expired owner wait uses, expressed exactly ONCE, here.
+pub(in crate::engine::server) struct DataDirLock(Option<std::fs::File>);
+
+impl DataDirLock {
+    pub(in crate::engine::server) fn new(file: std::fs::File) -> Self {
+        Self(Some(file))
+    }
+
+    /// Release the advisory lock by dropping the inner `File`. Consuming:
+    /// after this the [`Drop`] impl sees `None` and forgets nothing. Call it
+    /// ONLY at the end of a completed, clean drain.
+    pub(in crate::engine::server) fn release_clean(mut self) {
+        drop(self.0.take());
+    }
 }
 
-impl OwnerWaitStage {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::ScheduledBackup => "scheduled backup worker join",
-            Self::MutationWorkers => "owned mutation workers join",
-            Self::OnlineExport => "online export drain",
-            Self::ReleaseTails => "release tail drain",
-        }
+impl Drop for DataDirLock {
+    fn drop(&mut self) {
+        // Deliberate leak: the kernel releases the advisory lock only at
+        // process death — never explicitly unlocked, and never handed to
+        // another process over a stage that is still running.
+        std::mem::forget(self.0.take());
     }
 }
 
@@ -132,16 +141,19 @@ impl OwnerWaitStage {
 /// lock when the process dies), and the report stays unclean, so the exit
 /// code is the abnormal-report code 70 as before. Nothing forces an exit.
 pub(crate) fn report_expired_owner_wait(
-    stage: OwnerWaitStage,
+    stage: ShutdownWaitStage,
     budget: Duration,
     report: &mut ShutdownReport,
 ) {
-    report.add_error(format!(
-        "shutdown owner wait expired ({}: waited {budget:?}): that stage is still running, \
-         so the data-directory instance lock is KEPT until the process exits — check for a \
-         running backup or export job, then restart the server",
-        stage.label()
-    ));
+    report.set_expired_owner_wait(
+        stage,
+        format!(
+            "shutdown owner wait expired ({}: waited {budget:?}): that stage is still running, \
+             so the data-directory instance lock is KEPT until the process exits — check for a \
+             running backup or export job, then restart the server",
+            stage.as_str()
+        ),
+    );
 }
 
 /// The shutdown state that must OUTLIVE the bounded shutdown wait.
@@ -179,7 +191,13 @@ pub(crate) struct ShutdownOwner {
     /// registered while tail admission is still open).
     pub(super) tx_reaper: Option<crate::tx_registry::ReaperTask>,
     pub(super) tx_registry: Option<Arc<crate::tx_registry::TxRegistry>>,
-    pub(super) data_dir_lock: Option<std::fs::File>,
+    /// Same discard discipline as the rest of the owner, wrapped in
+    /// [`DataDirLock`]: the lock is released only by an explicit, completed,
+    /// clean drain ([`DataDirLock::release_clean`]); any other end of this
+    /// struct's life — a dropped or cancelled shutdown future, a panic that
+    /// unwinds through it, an early return, an expired owner wait — LEAKS the
+    /// lock file so the OS keeps it until the process exits.
+    pub(super) data_dir_lock: Option<DataDirLock>,
 }
 
 impl ShutdownOwner {
@@ -236,7 +254,7 @@ impl ShutdownOwner {
     }
 
     /// Await whatever the deadline left unawaited, then release the instance
-    /// lock by drop — UNLESS one of the bounded owner waits expired.
+    /// lock — ONLY if every bounded owner wait settled.
     ///
     /// On a normal shutdown [`Self::join_schedule`] already ran inside the
     /// deadline, so this only releases the lock. On expiry of the shutdown
@@ -244,17 +262,18 @@ impl ShutdownOwner {
     /// afterwards, never before. If any of the bounded waits below expires,
     /// the stage that expired is recorded typed in the report
     /// ([`report_expired_owner_wait`]) and the lock is deliberately NOT
-    /// released: the `File` is leaked, so the kernel holds the advisory
-    /// data-directory lock until the process exits and no other process can
-    /// open the directory over the still-running stage. The report stays
-    /// unclean, so the process exit code is the abnormal 70 as before.
+    /// released: the [`DataDirLock`] guard leaks the file, so the kernel holds
+    /// the advisory data-directory lock until the process exits and no other
+    /// process can open the directory over the still-running stage. The
+    /// report stays unclean, so the process exit code is the abnormal 70 as
+    /// before.
     pub(crate) async fn drain(mut self, report: &mut ShutdownReport) {
-        let mut expired: Option<OwnerWaitStage> = None;
+        let mut expired: Option<ShutdownWaitStage> = None;
         let budget = drain_backup_join_budget();
         let (deadline, _) = stage_bound(None, budget, Duration::ZERO);
         if !self.join_schedule(Some((deadline, budget)), report).await {
-            expired = Some(OwnerWaitStage::ScheduledBackup);
-            report_expired_owner_wait(OwnerWaitStage::ScheduledBackup, budget, report);
+            expired = Some(ShutdownWaitStage::ScheduledBackupJoin);
+            report_expired_owner_wait(ShutdownWaitStage::ScheduledBackupJoin, budget, report);
         }
         if let Some(tracker) = &self.owned_mutation_tasks {
             tracker.close();
@@ -266,8 +285,8 @@ impl ShutdownOwner {
                 report.add_error(format!(
                     "owned mutation workers still running after the shutdown bound; repository flush skipped ({budget:?})"
                 ));
-                expired = Some(OwnerWaitStage::MutationWorkers);
-                report_expired_owner_wait(OwnerWaitStage::MutationWorkers, budget, report);
+                expired = Some(ShutdownWaitStage::MutationWorkersJoin);
+                report_expired_owner_wait(ShutdownWaitStage::MutationWorkersJoin, budget, report);
             }
         }
         // The export drain HANDLE keeps its fallback ownership here (the
@@ -283,8 +302,8 @@ impl ShutdownOwner {
                 report.add_error(format!(
                     "online export worker still draining after the fallback bound ({budget:?})"
                 ));
-                expired = Some(OwnerWaitStage::OnlineExport);
-                report_expired_owner_wait(OwnerWaitStage::OnlineExport, budget, report);
+                expired = Some(ShutdownWaitStage::OnlineExportDrain);
+                report_expired_owner_wait(ShutdownWaitStage::OnlineExportDrain, budget, report);
             }
         }
         // Stop the release sources, clear the registry, wait for the release
@@ -310,19 +329,29 @@ impl ShutdownOwner {
             )
             .await;
             if !settled {
-                expired = Some(OwnerWaitStage::ReleaseTails);
-                report_expired_owner_wait(OwnerWaitStage::ReleaseTails, RELEASE_TAIL_DRAIN, report);
+                expired = Some(ShutdownWaitStage::ReleaseTailDrain);
+                report_expired_owner_wait(
+                    ShutdownWaitStage::ReleaseTailDrain,
+                    RELEASE_TAIL_DRAIN,
+                    report,
+                );
             }
         }
         match expired {
-            // Keep the advisory lock until the process exits: leaking the
-            // `File` means the kernel releases it only at process death —
-            // never explicitly unlocked, and never handed to another process
-            // over a stage that is still running.
-            Some(_) => std::mem::forget(self.data_dir_lock.take()),
-            // Released here, after the scheduled worker finished — never
-            // explicitly unlocked (drop is the release).
-            None => drop(self.data_dir_lock.take()),
+            // Keep the advisory lock until the process exits: leave the
+            // `DataDirLock` in place — its `Drop` impl leaks the inner `File`
+            // on purpose, so the kernel releases the lock only at process
+            // death — never explicitly unlocked, and never handed to another
+            // process over a stage that is still running.
+            Some(_) => {}
+            // Released here, after the scheduled worker finished — the ONE
+            // clean end of the owner's life (never explicitly unlocked; the
+            // drop of the inner `File` is the release).
+            None => {
+                if let Some(lock) = self.data_dir_lock.take() {
+                    lock.release_clean();
+                }
+            }
         }
     }
 }
