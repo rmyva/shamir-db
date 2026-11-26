@@ -536,15 +536,16 @@ TypeScript применяют правило одинаково: Rust — явн
 элементах структуры — `decode.rs:566-574` — но правило фиксируется явно,
 не как побочный эффект энкодера.)
 
-**Общий фиксчур-вектор: правило генерации** (не рукописный hex): фиксированные
-входы `{domain_tag="SHAMIR-CHALLENGE-ID-v1", client_nonce=0xAA×32,
-server_nonce=0xBB×32, salt=0xCC×16, kdf={19456,2,1,0x13}, transport=0x01,
-binding=0x01, exporter=0x00×32, pub/priv — фиксированная тестовая Ed25519
-пара}` (зеркалит константы `protocol.ts:41-43`); reference-реализация Rust
-вычисляет `challenge_identity_input` и подпись ОДИН раз; hex транскрипта и
-подписи записывается в `crates/net/shamir-connect/test-vectors/challenge_identity_v2.toml`
-и `.json`. TS-тест сверяет оба значения. Vector — артефакт шага 1 (§7),
-не этого документа.
+**Общий фиксчур-вектор.** Файлы `crates/net/shamir-connect/test-vectors/challenge_identity_v2.json`
+и `.toml` уже лежат в репозитории и сделаны независимым reference-генератором
+(RFC 8032 на чистом Python, предварительно подтверждённым побайтно на
+существующем векторе `identity_sig_default`): тот же общий сценарий
+(`auth_message_default`: nonces, salt, KDF, `transport_kind=1`,
+`binding_mode=1`, exporter `aaab…c9`) и тот же Ed25519-seed, что у
+`identity_sig_default`; транскрипт 181 байт. Rust-тест (шаг 1) и TS-тест
+(шаг 4) воспроизводят `challenge_identity_input_hex` и `challenge_sig_hex`
+боевым кодом из `inputs` и сверяют побайтно. Вектор для версии 1
+(транскрипт `auth_message`) уже есть: `auth_message_default`.
 
 ### 4.2. Политика (решения владельца)
 
