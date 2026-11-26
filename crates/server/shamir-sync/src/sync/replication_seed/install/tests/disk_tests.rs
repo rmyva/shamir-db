@@ -23,7 +23,7 @@ use crate::replication_seed::{verify, Manifest};
 fn reserved_requested_seed_name_refuses_before_destination_probe() {
     // Without an entry guard, staging probes an existing seed target and artifact verification/exact __system__ rejection can mask the reserved-name refusal.
     let dir = tempfile::tempdir().unwrap();
-    let artifact = dir.path().join("missing-artifact");
+    let missing_artifact = dir.path().join("missing-artifact");
     let data = dir.path().join("data");
     fs::create_dir_all(&data).unwrap();
     for name in ["users", "Users"] {
@@ -34,7 +34,7 @@ fn reserved_requested_seed_name_refuses_before_destination_probe() {
                 fs::create_dir_all(&target).unwrap();
             }
             let error = runtime()
-                .block_on(install(&data, name, "main", &artifact, "not-a-digest"))
+                .block_on(install(&data, name, "main", &missing_artifact, "not-a-digest"))
                 .expect_err("reserved requested database name must refuse first");
             assert!(matches!(
                 &error,
