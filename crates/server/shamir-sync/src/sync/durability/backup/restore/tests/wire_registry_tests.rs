@@ -14,7 +14,7 @@ use crate::sync::durability::backup::restore::RestoreError;
 use shamir_types::types::value::QueryValue;
 use tempfile::TempDir;
 
-const REAL_DATA_ROOT_ENTRIES: [&str; 14] = [
+const REAL_DATA_ROOT_ENTRIES: [&str; 19] = [
     "__system__",
     "shamir_db_meta.redb",
     "users",
@@ -29,6 +29,11 @@ const REAL_DATA_ROOT_ENTRIES: [&str; 14] = [
     "bootstrap_token.txt",
     "format.stamp",
     ".logical-import-receipt.json",
+    ".shamir.lock",
+    "wire_tables.mpack",
+    "format.stamp.tmp",
+    "shamir_db_meta.redb.shamirwal",
+    "shamir_db_default_main.redb.shamirwal",
 ];
 
 #[test]
@@ -48,7 +53,7 @@ fn pinned_real_data_root_entries_are_refused_and_match_production() {
             db: "ordinary_db".into(),
             repo: "repo".into(),
             store_dir: format!("{name}/repo"),
-            wal: (format!("{name}/wal"), 0),
+            wal: (format!("wal-{name}/wal"), 0),
             v_star: 0,
         };
         assert!(
@@ -70,7 +75,7 @@ fn reserved_store_components_match_shared_names_exactly() {
             db: "ordinary_db".into(),
             repo: "repo".into(),
             store_dir: format!("{name}/repo"),
-            wal: (format!("{name}/wal"), 0),
+            wal: (format!("wal-{name}/wal"), 0),
             v_star: 0,
         };
         assert!(super::super::catalogue::reject_reserved_store_route(&repo)
@@ -100,13 +105,56 @@ fn store_route_accepts_ordinary_and_case_variant_components() {
 }
 
 #[test]
+fn default_main_route_exception_is_exact() {
+    // Catches loosening the exception to a name-only or prefix-only allow; the tuple and route shape must match.
+    let store_mismatches = [("default", "other"), ("other", "main")];
+    for (db, repo_name) in store_mismatches {
+        let repo = super::super::catalogue::CapturedRepo {
+            db: db.into(),
+            repo: repo_name.into(),
+            store_dir: "shamir_db_default_main.redb".into(),
+            wal: ("ordinary/wal".into(), 0),
+            v_star: 0,
+        };
+        assert!(super::super::catalogue::reject_reserved_store_route(&repo).is_err());
+    }
+    let case_variant = super::super::catalogue::CapturedRepo {
+        db: "default".into(),
+        repo: "main".into(),
+        store_dir: "Shamir_db_default_main.redb".into(),
+        wal: ("ordinary/wal".into(), 0),
+        v_star: 0,
+    };
+    assert!(super::super::catalogue::reject_reserved_store_route(&case_variant).is_err());
+
+    let wal_mismatches = [
+        ("default", "main", "shamir_db_default_main.redb"),
+        ("default", "other", "shamir_db_default_main.redb.shamirwal"),
+        ("other", "main", "shamir_db_default_main.redb.shamirwal"),
+        ("default", "main", "Shamir_db_default_main.redb.shamirwal"),
+    ];
+    for (db, repo_name, wal_component) in wal_mismatches {
+        let repo = super::super::catalogue::CapturedRepo {
+            db: db.into(),
+            repo: repo_name.into(),
+            store_dir: "ordinary/store".into(),
+            wal: ("ordinary/wal".into(), 0),
+            v_star: 0,
+        };
+        assert!(
+            super::super::catalogue::reject_reserved_wal_dir(Some(wal_component), &repo).is_err()
+        );
+    }
+}
+
+#[test]
 fn wal_route_reserved_components_are_literal_and_case_sensitive() {
     // Removing literal reserved-route refusal fails below; the shortened reason assertion survives message edits.
     let repo = super::super::catalogue::CapturedRepo {
         db: "ordinary_db".into(),
         repo: "repo".into(),
-        store_dir: "ordinary_db/repo".into(),
-        wal: ("ordinary_db/wal".into(), 0),
+        store_dir: "ordinary/store".into(),
+        wal: ("users/wal".into(), 0),
         v_star: 0,
     };
     // A normalized comparison would wrongly reject the case variant used by server-produced routes.
@@ -131,15 +179,26 @@ fn wal_route_reserved_components_are_literal_and_case_sensitive() {
 
 #[tokio::test]
 async fn staged_catalogue_name_scan_refuses_reserved_database_rows() {
-    // Removing this refusal lets the reserved staged row publish and fail at next boot; this seam does not compare full target bytes.
+    // Catches removal of the pre-publication refusal while bypassing create_db's reserved-name admission guard.
     let stage = TempDir::new().expect("temp dir");
-    let db = shamir_db::ShamirDb::init_seed(shamir_db::SystemStoreConfig::Fjall(
-        stage.path().join("shamir_db_meta.redb"),
-    ))
+    let store = shamir_db::shamir_db::system_store::SystemStore::init(
+        shamir_db::shamir_db::system_store::SystemStoreConfig::Fjall(
+            stage.path().join("shamir_db_meta.redb"),
+        ),
+    )
     .await
     .expect("initialize staged catalogue");
-    db.create_db("users").await.expect("create reserved row");
-    drop(db);
+    let mut record = shamir_types::types::common::new_map();
+    record.insert("name".to_string(), QueryValue::Str("users".to_string()));
+    store
+        .save_database(
+            "users",
+            &QueryValue::Map(record),
+            &shamir_db::access::ResourceMeta::default(),
+        )
+        .await
+        .expect("inject legacy reserved row");
+    drop(store);
     let error = super::super::catalogue::validate_staged_db_names(stage.path())
         .await
         .expect_err("reserved catalogue row must refuse");
@@ -153,28 +212,36 @@ async fn staged_catalogue_name_scan_refuses_reserved_database_rows() {
 }
 
 #[tokio::test]
-async fn staged_catalogue_name_scan_accepts_non_reserved_database() {
-    // Removing the __system__ exception or rejecting users2 makes this acceptance scan fail.
+async fn staged_catalogue_name_scan_accepts_internal_and_non_reserved_rows() {
+    // Catches loss of the __system__ legacy-row exception or overbroad refusal of an ordinary database.
     let stage = TempDir::new().expect("temp dir");
-    let db = shamir_db::ShamirDb::init_seed(shamir_db::SystemStoreConfig::Fjall(
-        stage.path().join("shamir_db_meta.redb"),
-    ))
+    let store = shamir_db::shamir_db::system_store::SystemStore::init(
+        shamir_db::shamir_db::system_store::SystemStoreConfig::Fjall(
+            stage.path().join("shamir_db_meta.redb"),
+        ),
+    )
     .await
     .expect("initialize staged catalogue");
-    db.create_db("users2").await.expect("create ordinary row");
-    let rows = db
-        .system_store()
-        .load_databases()
-        .await
-        .expect("load catalogue rows");
+    for name in ["__system__", "users2"] {
+        let mut record = shamir_types::types::common::new_map();
+        record.insert("name".to_string(), QueryValue::Str(name.to_string()));
+        store
+            .save_database(
+                name,
+                &QueryValue::Map(record),
+                &shamir_db::access::ResourceMeta::default(),
+            )
+            .await
+            .expect("inject catalogue row");
+    }
+    let rows = store.load_databases().await.expect("load catalogue rows");
     assert!(rows
         .iter()
-        .any(|row| { row.get("name").and_then(QueryValue::as_str) == Some("__system__") }));
+        .any(|row| row.get("name").and_then(QueryValue::as_str) == Some("__system__")));
     assert!(rows
         .iter()
         .any(|row| row.get("name").and_then(QueryValue::as_str) == Some("users2")));
-    drop(db);
-    // Catches either loss of the __system__ exception or overbroad refusal of users2.
+    drop(store);
     assert!(super::super::catalogue::validate_catalogue_db_name_records(&rows).is_ok());
     assert!(
         super::super::catalogue::validate_staged_db_names(stage.path())

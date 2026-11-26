@@ -183,6 +183,11 @@ fn reserved_database_names_apply_only_documented_normalization() {
         "bootstrap_token.txt",
         "format.stamp",
         ".logical-import-receipt.json",
+        ".shamir.lock",
+        "wire_tables.mpack",
+        "format.stamp.tmp",
+        "shamir_db_meta.redb.shamirwal",
+        "shamir_db_default_main.redb.shamirwal",
     ] {
         assert!(is_reserved_db_name(name), "{name:?} should be reserved");
     }

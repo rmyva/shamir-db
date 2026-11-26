@@ -31,8 +31,8 @@ pub async fn install_subscription(
 ) -> Result<SeedReceipt, SeedError> {
     if is_reserved_db_name(db) {
         // Before the destination check, the existing target/probe could mask this requested-name refusal.
-        return Err(invalid(format!(
-            "database name '{db}' is reserved by the server"
+        return Err(SeedError::Database(shamir_db::DbError::Validation(
+            format!("database name '{db}' is reserved by the server"),
         )));
     }
     subscription.validate()?;
@@ -84,8 +84,8 @@ async fn install_inner(
 ) -> Result<SeedReceipt, SeedError> {
     if is_reserved_db_name(db) {
         // Before the destination check, the existing target/probe could mask this requested-name refusal.
-        return Err(invalid(format!(
-            "database name '{db}' is reserved by the server"
+        return Err(SeedError::Database(shamir_db::DbError::Validation(
+            format!("database name '{db}' is reserved by the server"),
         )));
     }
     let root = artifact.to_owned();

@@ -241,14 +241,22 @@ async fn retry_existing(
             args.target.display()
         )));
     }
-    let entries = std::fs::read_dir(&args.target).map_err(|e| {
+    let mut entries = std::fs::read_dir(&args.target).map_err(|e| {
         LogicalImportError::Target(format!(
             "cannot inspect existing target {}: {e}",
             args.target.display()
         ))
     })?;
-    if entries.count() == 0 {
-        return Ok(None);
+    match entries.next() {
+        Some(entry) => {
+            entry.map_err(|e| {
+                LogicalImportError::Target(format!(
+                    "cannot inspect existing target {}: {e}",
+                    args.target.display()
+                ))
+            })?;
+        }
+        None => return Ok(None),
     }
     let preflight = Preflight::run(&args.input, args, cancel)?;
     let db_name = args

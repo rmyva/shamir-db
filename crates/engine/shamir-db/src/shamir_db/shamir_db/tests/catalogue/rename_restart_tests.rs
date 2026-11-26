@@ -235,7 +235,7 @@ fn in_doubt_rename_reopens_as_exactly_one_catalogued_incarnation() {
 #[test]
 fn production_reserved_names_cover_real_data_root_entries() {
     // Catches removing a real system-store name from production or adding a store without updating this pin.
-    const REAL_DATA_ROOT_ENTRIES: [&str; 14] = [
+    const REAL_DATA_ROOT_ENTRIES: [&str; 19] = [
         "__system__",
         "shamir_db_meta.redb",
         "shamir_db_default_main.redb",
@@ -250,6 +250,11 @@ fn production_reserved_names_cover_real_data_root_entries() {
         "bootstrap_token.txt",
         "format.stamp",
         ".logical-import-receipt.json",
+        ".shamir.lock",
+        "wire_tables.mpack",
+        "format.stamp.tmp",
+        "shamir_db_meta.redb.shamirwal",
+        "shamir_db_default_main.redb.shamirwal",
     ];
 
     for name in REAL_DATA_ROOT_ENTRIES {

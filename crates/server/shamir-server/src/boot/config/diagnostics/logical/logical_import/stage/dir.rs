@@ -57,8 +57,8 @@ impl ImportStage {
     }
 
     /// The rename is the publication commit point. On Windows the target
-    /// must not exist (an existing empty target is removed first by the
-    /// caller through `prepare_target_name`); `fs::rename` never replaces.
+    /// must not exist; an existing empty target is rechecked and removed
+    /// immediately before the rename while the caller holds the sibling lock.
     /// Transient Windows sharing errors are retried a bounded number of
     /// times (see [`RENAME_ATTEMPTS`]); the retry never replaces a target
     /// that appeared meanwhile — that fails immediately.
@@ -68,6 +68,7 @@ impl ImportStage {
         cancel: &CancellationToken,
     ) -> Result<(), LogicalImportError> {
         let source = self.path.clone();
+        remove_empty_target(target)?;
         let mut attempts = 0u32;
         let result = rename_with_retry(
             || {
@@ -103,21 +104,38 @@ impl ImportStage {
 }
 
 /// Refuse an existing non-empty target (callers inspect the target only
-/// after acquiring the lock). An existing empty directory is removed so the
-/// publish rename has an absent name.
+/// after acquiring the lock). An existing empty directory remains intact
+/// until publication, preserving it if pre-publication work fails.
 pub(crate) fn prepare_target_name(target: &Path) -> Result<(), LogicalImportError> {
     match fs::symlink_metadata(target) {
         Err(_) => Ok(()),
         Ok(meta) if meta.is_dir() => {
-            let mut entries = fs::read_dir(target).map_err(|e| {
-                LogicalImportError::Target(format!(
-                    "cannot inspect existing target {}: {e}",
-                    target.display()
-                ))
-            })?;
-            if entries.next().is_some() {
+            if has_entry(target)? {
                 return Err(LogicalImportError::Target(format!(
                     "target {} exists and is not empty",
+                    target.display()
+                )));
+            }
+            Ok(())
+        }
+        Ok(_) => Err(LogicalImportError::Target(format!(
+            "target {} exists and is not a directory",
+            target.display()
+        ))),
+    }
+}
+
+fn remove_empty_target(target: &Path) -> Result<(), LogicalImportError> {
+    match fs::symlink_metadata(target) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(LogicalImportError::Target(format!(
+            "cannot inspect existing target {}: {error}",
+            target.display()
+        ))),
+        Ok(meta) if meta.is_dir() => {
+            if has_entry(target)? {
+                return Err(LogicalImportError::Target(format!(
+                    "target {} is no longer empty",
                     target.display()
                 )));
             }
@@ -132,6 +150,24 @@ pub(crate) fn prepare_target_name(target: &Path) -> Result<(), LogicalImportErro
             "target {} exists and is not a directory",
             target.display()
         ))),
+    }
+}
+
+fn has_entry(target: &Path) -> Result<bool, LogicalImportError> {
+    let mut entries = fs::read_dir(target).map_err(|e| {
+        LogicalImportError::Target(format!(
+            "cannot inspect existing target {}: {e}",
+            target.display()
+        ))
+    })?;
+    match entries.next() {
+        Some(entry) => entry.map(|_| true).map_err(|e| {
+            LogicalImportError::Target(format!(
+                "cannot inspect existing target {}: {e}",
+                target.display()
+            ))
+        }),
+        None => Ok(false),
     }
 }
 

@@ -38,7 +38,7 @@ fn reserved_requested_seed_name_refuses_before_destination_probe() {
                 .expect_err("reserved requested database name must refuse first");
             assert!(matches!(
                 &error,
-                crate::replication_seed::SeedError::Invalid(_)
+                crate::replication_seed::SeedError::Database(shamir_db::DbError::Validation(_))
             ));
             assert!(error
                 .to_string()
@@ -49,6 +49,29 @@ fn reserved_requested_seed_name_refuses_before_destination_probe() {
             let _ = fs::remove_dir_all(&target);
         }
     }
+    // Catches moving the reserved-name guard behind artifact verification or destination probing: a valid artifact reaches verification and the absent/existing destination branches on a non-reserved name.
+    let valid_artifact = dir.path().join("valid-artifact");
+    let valid_digest = runtime().block_on(artifact(&valid_artifact));
+    let valid_name = "app";
+    runtime()
+        .block_on(install(
+            &data,
+            valid_name,
+            "main",
+            &valid_artifact,
+            &valid_digest,
+        ))
+        .expect("valid name with absent destination passes the probe and installs");
+    // A retry on the now-published valid seed reaches the existing-target completion probe.
+    runtime()
+        .block_on(install(
+            &data,
+            valid_name,
+            "main",
+            &valid_artifact,
+            &valid_digest,
+        ))
+        .expect("valid completed destination is found through the existing-target probe");
 }
 
 fn runtime() -> Runtime {

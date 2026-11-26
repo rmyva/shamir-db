@@ -320,7 +320,7 @@ fn restore_impl<F, B>(
     from: &Path,
     data_dir: &Path,
     force: bool,
-    probe: F,
+    _probe: F,
     before_copy: B,
 ) -> Result<RestoreReport, RestoreError>
 where
@@ -595,17 +595,16 @@ where
         return Err(e);
     }
 
-    // ---- Step 3b' (LEGACY kind only, unless force): liveness probe, run
-    // ONLY after the staged presence re-check succeeded (finding 6, R2d-FIX-C
-    // review). The CLI probe's `server_meta::open_or_init` persists
-    // `last_started_at` in the target, so a missing staged file now refuses
-    // BEFORE the probe can write anything. A probe failure at this point
-    // cleans the staged copy and leaves `data_dir` untouched by the restore
-    // itself. The ONLINE path bypasses this probe entirely and keeps its
-    // read-only `probe_source_stopped` probes (early, after verify; final,
-    // before the swap). ----
+    // ---- Step 3b' (LEGACY kind only, unless force): read-only liveness
+    // probe. Unlike the CLI probe, this cannot persist last_started_at into
+    // the live target; it preserves the guarantee that any refusal leaves
+    // the target byte-for-byte unchanged. ----
     let probe_result = if !online_classified && !force {
-        probe(data_dir)
+        backup::probe_source_stopped(data_dir).map_err(|e| match e {
+            BackupError::SourceRunning(_) => RestoreError::ServerRunning(data_dir.to_path_buf()),
+            BackupError::Io(io) => RestoreError::Io(io),
+            other => RestoreError::ManifestVerification(other),
+        })
     } else {
         Ok(())
     };
@@ -642,13 +641,23 @@ where
                 let result = runtime.block_on(catalogue::validate_staged_db_names(&stage));
                 drop(runtime);
                 result
-            })
-            .map_err(RestoreError::Io)?;
-        let result = thread.join().map_err(|_| {
-            RestoreError::Io(std::io::Error::other(
-                "catalogue validation thread panicked",
-            ))
-        })?;
+            });
+        let thread = match thread {
+            Ok(thread) => thread,
+            Err(error) => {
+                cleanup_staged_temp_dir(&temp_dir);
+                return Err(RestoreError::Io(error));
+            }
+        };
+        let result = match thread.join() {
+            Ok(result) => result,
+            Err(_) => {
+                cleanup_staged_temp_dir(&temp_dir);
+                return Err(RestoreError::Io(std::io::Error::other(
+                    "catalogue validation thread panicked",
+                )));
+            }
+        };
         if let Err(error) = result {
             cleanup_staged_temp_dir(&temp_dir);
             return Err(error);

@@ -20,7 +20,6 @@
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-#[cfg(unix)]
 use std::path::Path;
 
 use tempfile::TempDir;
@@ -31,7 +30,7 @@ use crate::sync::durability::backup::offline::{
 use crate::sync::durability::backup::online::copy_engine::hash_file;
 use crate::sync::durability::backup::online::manifest::BackupKind;
 use crate::sync::durability::backup::online::manifest::BACKUP_META_FILE_NAME;
-use crate::sync::durability::backup::restore::restore_with_probe;
+use crate::sync::durability::backup::restore::{restore_with_probe, RestoreError};
 
 const LISTED_PAYLOAD: &str = "payload/keeper.bin";
 const TIMESTAMPED_NAME: &str = "20200101_000001";
@@ -224,5 +223,116 @@ fn tagged_export_in_read_only_parent_restores() {
     assert!(
         !export_parent.join(SNAPSHOT_LEASE_FILE_NAME).exists(),
         "restore must NOT create the lease marker in the read-only export parent"
+    );
+}
+
+fn recursive_listing(root: &Path) -> Vec<(String, bool, u64)> {
+    fn walk(root: &Path, current: &Path, out: &mut Vec<(String, bool, u64)>) {
+        for entry in fs::read_dir(current).expect("list directory") {
+            let entry = entry.expect("directory entry");
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path).expect("entry metadata");
+            out.push((
+                path.strip_prefix(root)
+                    .expect("relative path")
+                    .to_string_lossy()
+                    .into_owned(),
+                metadata.is_dir(),
+                metadata.len(),
+            ));
+            if metadata.is_dir() {
+                walk(root, &path, out);
+            }
+        }
+    }
+    let mut listing = Vec::new();
+    walk(root, root, &mut listing);
+    listing.sort();
+    listing
+}
+
+#[test]
+fn public_restore_rejects_legacy_reserved_catalogue_without_mutating_target_and_accepts_absent_catalogue(
+) {
+    // Catches removal of the pre-swap scan (publishes an unbootable home) and the old writing probe (persists last_started_at before refusal).
+    let root = TempDir::new().expect("root");
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).expect("home");
+    crate::format_stamp::write_stamp(
+        &home,
+        &crate::format_stamp::FormatStamp::with_epoch(
+            crate::format_stamp::CURRENT_FORMAT_EPOCH,
+            "restore-catalogue-test",
+            1_700_000_000_000,
+        ),
+    )
+    .expect("write home stamp");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let store = runtime
+        .block_on(shamir_db::shamir_db::system_store::SystemStore::init(
+            shamir_db::shamir_db::system_store::SystemStoreConfig::Fjall(
+                home.join("shamir_db_meta.redb"),
+            ),
+        ))
+        .expect("initialize legacy catalogue");
+    let mut record = shamir_types::types::common::new_map();
+    record.insert(
+        "name".to_string(),
+        shamir_types::types::value::QueryValue::Str("users".to_string()),
+    );
+    runtime
+        .block_on(store.save_database(
+            "users",
+            &shamir_types::types::value::QueryValue::Map(record),
+            &shamir_db::access::ResourceMeta::default(),
+        ))
+        .expect("inject legacy reserved row");
+    drop(store);
+    drop(runtime);
+    let snapshot = crate::sync::durability::backup::backup(&home, &root.path().join("snapshots"))
+        .expect("backup legacy home")
+        .dest_dir;
+    let target = root.path().join("live");
+    fs::create_dir_all(&target).expect("live target");
+    fs::write(target.join("live.bin"), b"unchanged target").expect("live marker");
+    let before = recursive_listing(&target);
+    let error = restore_with_probe(&snapshot, &target, false, |_| Ok(()))
+        .expect_err("legacy reserved catalogue must refuse before publication");
+    assert!(matches!(
+        error,
+        RestoreError::Catalogue(shamir_db::DbError::Validation(_))
+    ));
+    assert_eq!(
+        recursive_listing(&target),
+        before,
+        "refusal must preserve every target entry"
+    );
+
+    // Catches regressions that treat a catalogue-less generic backup as invalid rather than preserving prior restore behavior.
+    let plain = root.path().join("plain");
+    fs::create_dir_all(&plain).expect("plain source");
+    crate::format_stamp::write_stamp(
+        &plain,
+        &crate::format_stamp::FormatStamp::with_epoch(
+            crate::format_stamp::CURRENT_FORMAT_EPOCH,
+            "restore-catalogue-test",
+            1_700_000_000_000,
+        ),
+    )
+    .expect("write plain stamp");
+    fs::write(plain.join("payload.txt"), b"plain snapshot").expect("write payload");
+    let plain_snapshot =
+        crate::sync::durability::backup::backup(&plain, &root.path().join("plain-snapshots"))
+            .expect("backup catalogue-less source")
+            .dest_dir;
+    let fresh = root.path().join("fresh");
+    restore_with_probe(&plain_snapshot, &fresh, false, |_| Ok(()))
+        .expect("catalogue-less snapshot publishes");
+    assert_eq!(
+        fs::read(fresh.join("payload.txt")).expect("restored payload"),
+        b"plain snapshot"
     );
 }
