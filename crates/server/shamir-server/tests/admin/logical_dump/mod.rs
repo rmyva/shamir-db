@@ -6,6 +6,8 @@
 mod budget_tests;
 #[path = "fixture.rs"]
 mod fixture;
+#[path = "import_durability_tests.rs"]
+mod import_durability_tests;
 #[path = "online_tests.rs"]
 mod online_tests;
 #[path = "pinned_properties.rs"]

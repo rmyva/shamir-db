@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use sha2::Digest;
 use shamir_db::{ShamirDb, SystemStoreConfig};
@@ -70,14 +70,23 @@ pub async fn import(
     let stage = ImportStage::prepare(&args.target)?;
     let outcome = import_into_stage(&stage, &args, &preflight, &cancel).await;
     match outcome {
-        Ok(report) => match stage.publish(&args.target, &cancel).await {
-            Ok(()) => {
-                drop(lock);
-                progress(&format!("published {}", args.target.display()));
-                Ok(report)
+        Ok(report) => {
+            let publish_started = Instant::now();
+            let published = stage.publish(&args.target, &cancel).await;
+            phase(
+                "publish",
+                publish_started,
+                &args.target.display().to_string(),
+            );
+            match published {
+                Ok(()) => {
+                    drop(lock);
+                    progress(&format!("published {}", args.target.display()));
+                    Ok(report)
+                }
+                Err(e) => Err(e),
             }
-            Err(e) => Err(e),
-        },
+        }
         Err(e) => {
             // The staged engines were dropped on the error path (and flushed
             // before that); wait for their detached flusher tasks to release
@@ -116,11 +125,17 @@ async fn import_into_stage(
     // stage is published. Records that only lived in a membuffer would
     // otherwise vanish with the engine's memory and the published directory
     // would silently miss them.
+    let flush_started = Instant::now();
     loaded
         .home
         .flush_all_waiting()
         .await
         .map_err(|e| LogicalImportError::Stage(format!("cannot flush the staged database: {e}")))?;
+    phase(
+        "final_flush",
+        flush_started,
+        &format!("records={}", loaded.records),
+    );
     // Handle-lifecycle invariant: every handle the import opened (the staged
     // engine, its repositories and the user directory) is closed and dropped
     // BEFORE the publish rename, exactly once per instance — no database may
@@ -145,11 +160,14 @@ async fn import_into_stage(
     // Stage validation reads from a FRESH open of the staged directory, so
     // "validation passed" can never again mean "the loading engine still had
     // the records in memory".
+    let reopen_started = Instant::now();
     let reopened = ShamirDb::init(SystemStoreConfig::Fjall(
         stage.path().join("shamir_db_meta.redb"),
     ))
     .await
     .map_err(|e| LogicalImportError::Stage(format!("cannot re-open the staged engine: {e}")))?;
+    phase("staging_reopen", reopen_started, "");
+    let validate_started = Instant::now();
     validate::run(
         &reopened,
         preflight,
@@ -159,6 +177,11 @@ async fn import_into_stage(
         cancel,
     )
     .await?;
+    phase(
+        "validate",
+        validate_started,
+        &format!("records={}", loaded.records),
+    );
     drop(reopened);
     // Deterministic close (root-cause fix for the Windows rename): wait until
     // every staged store (shamir_db + users) is lock-free BEFORE the stamp,
@@ -344,4 +367,16 @@ fn hex(bytes: &[u8]) -> String {
 
 fn progress(message: &str) {
     eprintln!("logical-import: {message}");
+}
+
+/// Phase timing line: single-line, no secrets. Mirrors `progress` but with
+/// a machine-readable `LOGICAL_IMPORT_PHASE phase=<name> elapsed_ms=<ms>
+/// <extras>` shape so CI logs can pin per-phase budgets.
+pub(crate) fn phase(phase: &str, started: Instant, extras: &str) {
+    let elapsed_ms = started.elapsed().as_millis();
+    if extras.is_empty() {
+        eprintln!("LOGICAL_IMPORT_PHASE phase={phase} elapsed_ms={elapsed_ms}");
+    } else {
+        eprintln!("LOGICAL_IMPORT_PHASE phase={phase} elapsed_ms={elapsed_ms} {extras}");
+    }
 }
