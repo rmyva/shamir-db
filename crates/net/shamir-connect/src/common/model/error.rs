@@ -83,6 +83,14 @@ pub enum Error {
     #[error("unsupported_version")]
     UnsupportedVersion,
 
+    /// The peer closed or rejected before a challenge, possibly speaking another handshake version.
+    #[error("server may speak another handshake version")]
+    HandshakeVersionMismatch,
+
+    /// Challenge fields do not conform to the positional wire layout.
+    #[error("invalid challenge layout")]
+    ChallengeLayout,
+
     /// Bootstrap handshake failed — generic (§14.3).
     #[error("bootstrap_failed")]
     BootstrapFailed,
@@ -157,6 +165,8 @@ impl Error {
                 retry_after: *retry_after,
             },
             Error::UnsupportedVersion => Error::UnsupportedVersion,
+            Error::HandshakeVersionMismatch => Error::HandshakeVersionMismatch,
+            Error::ChallengeLayout => Error::ChallengeLayout,
             Error::BootstrapFailed => Error::BootstrapFailed,
             Error::AuthFailed => Error::AuthFailed,
             // Internal failure causes: explicitly collapsed to the generic

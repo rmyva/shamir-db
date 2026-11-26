@@ -34,6 +34,16 @@ pub struct RotationRecovery {
 /// with far-future timestamps (spec §6.5 HIGH-2 fix).
 pub const ROTATION_MAX_TRANSITION_NS: u64 = 7 * ns::DAY + ns::HOUR; // 7d + 1h skew
 
+/// Check the shared rotation deadline bounds. Narrowly exposed for challenge verification.
+pub(crate) fn verify_rotation_window(transition_until_ns: u64, now_ns: u64) -> Result<()> {
+    if transition_until_ns <= now_ns
+        || transition_until_ns > now_ns.saturating_add(ROTATION_MAX_TRANSITION_NS)
+    {
+        return Err(Error::ServerIdentityChanged);
+    }
+    Ok(())
+}
+
 /// Verify a broadcast `identity_rotation` event received over an active
 /// session (spec §12.2 step 5).
 ///
@@ -142,13 +152,9 @@ pub fn verify_rotation_in_progress(
         return Err(Error::ServerSignatureInvalid);
     }
 
-    // 4. Window sanity.
-    if payload.transition_until_ns <= now_ns {
-        return Err(Error::ServerSignatureInvalid);
-    }
-    if payload.transition_until_ns > now_ns.saturating_add(ROTATION_MAX_TRANSITION_NS) {
-        return Err(Error::ServerSignatureInvalid);
-    }
+    // 4. Window sanity, shared with pre-proof challenge verification.
+    verify_rotation_window(payload.transition_until_ns, now_ns)
+        .map_err(|_| Error::ServerSignatureInvalid)?;
 
     if !accept_rotation {
         return Err(Error::ServerIdentityChanged);

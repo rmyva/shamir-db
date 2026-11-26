@@ -26,7 +26,9 @@ use crate::common::crypto::{argon2id, ed25519_verify_strict, Ed25519Keypair};
 #[cfg(feature = "server")]
 use crate::common::domain_tags::TICKET_V1;
 use crate::common::fake_blob::FakeBlob;
-use crate::common::identity::{build_identity_input, sign_identity};
+use crate::common::identity::{
+    build_challenge_identity_input, build_identity_input, sign_identity,
+};
 use crate::common::kdf_params::KdfParams;
 use crate::common::rotation::build_rotate_event_input;
 use crate::common::scram::{build_client_proof, build_server_signature, DerivedKeys};
@@ -120,6 +122,7 @@ const TICKET_TOML: &str = include_str!("../../../../test-vectors/resumption_tick
 const ROTATION_TOML: &str =
     include_str!("../../../../test-vectors/identity_rotation_signed_by_old.toml");
 const AUTH_MSG_TOML: &str = include_str!("../../../../test-vectors/auth_message_default.toml");
+const CHALLENGE_ID_TOML: &str = include_str!("../../../../test-vectors/challenge_identity_v2.toml");
 
 #[derive(serde::Deserialize)]
 struct VecKdfParams {
@@ -468,9 +471,73 @@ fn fake_blob_matches_vector() {
     );
 }
 
-// ===========================================================================
+#[derive(serde::Deserialize)]
+struct ChallengeIdentityVector {
+    inputs: ChallengeIdentityInputs,
+    expected: ChallengeIdentityExpected,
+}
+#[derive(serde::Deserialize)]
+struct ChallengeIdentityInputs {
+    ed25519_seed_hex: String,
+    client_nonce_hex: String,
+    server_nonce_hex: String,
+    salt_hex: String,
+    memory_kb: u32,
+    time: u32,
+    parallelism: u32,
+    argon2_version: u8,
+    transport_kind: u8,
+    binding_mode: u8,
+    tls_exporter_hex: String,
+}
+#[derive(serde::Deserialize)]
+struct ChallengeIdentityExpected {
+    server_pub_key_hex: String,
+    server_pub_key_sha256_hex: String,
+    challenge_identity_input_hex: String,
+    challenge_identity_input_total_bytes: usize,
+    challenge_sig_hex: String,
+}
+
+#[test]
+fn challenge_identity_v2_matches_independent_vector() {
+    let vector: ChallengeIdentityVector = toml::from_str(CHALLENGE_ID_TOML).unwrap();
+    let input = &vector.inputs;
+    let keypair = Ed25519Keypair::from_seed(&hex_to_array(&input.ed25519_seed_hex));
+    let public_key = keypair.public_bytes();
+    assert_eq!(hex::encode(public_key), vector.expected.server_pub_key_hex);
+    assert_eq!(
+        hex::encode(crate::common::crypto::sha256(&public_key)),
+        vector.expected.server_pub_key_sha256_hex
+    );
+    let transcript = build_challenge_identity_input(
+        &public_key,
+        &hex_to_array(&input.client_nonce_hex),
+        &hex_to_array(&input.server_nonce_hex),
+        &hex_to_array(&input.salt_hex),
+        input.memory_kb,
+        input.time,
+        input.parallelism,
+        input.argon2_version,
+        TransportKind::from_u8(input.transport_kind).unwrap(),
+        BindingMode::from_u8(input.binding_mode).unwrap(),
+        &hex_to_array(&input.tls_exporter_hex),
+    );
+    assert_eq!(
+        transcript.len(),
+        vector.expected.challenge_identity_input_total_bytes
+    );
+    assert_eq!(
+        hex::encode(&transcript),
+        vector.expected.challenge_identity_input_hex
+    );
+    let signature = sign_identity(&keypair, &transcript);
+    assert_eq!(hex::encode(signature), vector.expected.challenge_sig_hex);
+}
+
+// ==========================================================================
 // 6. resumption_ticket_roundtrip (AES-256-GCM)
-// ===========================================================================
+// ==========================================================================
 
 #[cfg(feature = "server")]
 #[derive(serde::Deserialize)]

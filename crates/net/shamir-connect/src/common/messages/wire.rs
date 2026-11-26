@@ -132,6 +132,58 @@ pub struct IdentityRotationEvent {
     pub signed_by_old: [u8; 64],
 }
 
+/// Positional challenge-identity rotation chain (exactly three MessagePack elements).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChallengeRotationWire {
+    /// Previously pinned public key (32-byte MessagePack bin).
+    #[serde(with = "serde_bytes")]
+    pub previous_pub: Vec<u8>,
+    /// End of the overlap in Unix nanoseconds.
+    pub transition_until_ns: u64,
+    /// Proof by the previous key (64-byte MessagePack bin).
+    #[serde(with = "serde_bytes")]
+    pub rotation_proof: Vec<u8>,
+}
+
+impl ChallengeRotationWire {
+    /// Encode as a positional three-element MessagePack array.
+    pub fn encode(&self) -> crate::common::error::Result<Vec<u8>> {
+        rmp_serde::to_vec(self).map_err(|_| crate::common::error::Error::ChallengeLayout)
+    }
+
+    /// Decode a positional three-element MessagePack array.
+    pub fn decode(bytes: &[u8]) -> crate::common::error::Result<Self> {
+        rmp_serde::from_slice(bytes).map_err(|_| crate::common::error::Error::ChallengeLayout)
+    }
+
+    /// Check byte field lengths and convert to the validated payload.
+    pub fn into_payload(self) -> crate::common::error::Result<ChallengeRotationPayload> {
+        Ok(ChallengeRotationPayload {
+            previous_pub: self
+                .previous_pub
+                .try_into()
+                .map_err(|_| crate::common::error::Error::ChallengeLayout)?,
+            transition_until_ns: self.transition_until_ns,
+            rotation_proof: self
+                .rotation_proof
+                .try_into()
+                .map_err(|_| crate::common::error::Error::ChallengeLayout)?,
+        })
+    }
+}
+
+/// Validated challenge rotation chain payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChallengeRotationPayload {
+    /// Previous public identity key.
+    pub previous_pub: [u8; 32],
+    /// Overlap deadline in Unix nanoseconds.
+    pub transition_until_ns: u64,
+    /// Previous-key signature over the rotation chain.
+    pub rotation_proof: [u8; 64],
+}
+
 /// Wire view: `rotation_in_progress` payload embedded in `auth_ok` for
 /// offline-client orphan recovery (spec §6.5 + diagram 05 Part B step 70).
 ///

@@ -17,12 +17,15 @@ use crate::common::auth_message::{AuthMessage, AuthMessageInputs};
 use crate::common::crypto::{try_random_array, Ed25519Keypair, HmacTag};
 use crate::common::error::{Error, Result};
 use crate::common::fake_blob::FakeBlob;
-use crate::common::identity::{build_identity_input, sign_identity};
+use crate::common::identity::{
+    build_challenge_identity_input, build_identity_input, sign_identity,
+};
 use crate::common::kdf_params::KdfParams;
 use crate::common::scram::{build_server_signature, verify_client_proof, ClientProof};
 use crate::common::time::{ns, UnixNanos};
 use crate::common::types::{limits, BindingMode, ProtocolVersion, TransportKind};
 use crate::common::username::NormalizedUsername;
+use crate::common::wire::ChallengeRotationPayload;
 use crate::server::config::{ListenerPolicy, ServerSecrets};
 use crate::server::rotation::{
     build_rotation_in_progress_payload, RotationInProgressPayload, ServerIdentityState,
@@ -42,8 +45,20 @@ pub struct AuthInitView {
     pub version: u8,
 }
 
+/// One identity view captured for a single hello; step 2 consumes this snapshot.
+#[derive(Clone)]
+pub struct IdentitySnapshot {
+    /// Currently signing identity keypair.
+    pub current_signer: Ed25519Keypair,
+    /// Previous signer during an overlap window.
+    pub previous_signer: Option<Ed25519Keypair>,
+    /// Rotation overlap deadline.
+    pub transition_until_ns: Option<u64>,
+    /// Prepared proof signed by the previous signer.
+    pub rotation_proof: Option<[u8; 64]>,
+}
+
 /// Server-side per-handshake state, built from `auth_init` + listener policy.
-///
 /// Holds derived material across `auth_init → challenge → client_proof →
 /// auth_ok` round trips. GC after `HANDSHAKE_TIMEOUT` (spec §8.2).
 pub struct ServerHandshake<'a> {
@@ -69,6 +84,12 @@ pub struct ChallengeView {
     pub kdf_params: KdfParams,
     /// Per-handshake CSPRNG.
     pub server_nonce: [u8; limits::SERVER_NONCE_BYTES],
+    /// Public key signing the challenge (v2); absent on v1 view.
+    pub server_pub_key: Option<[u8; 32]>,
+    /// Signature over the challenge-identity transcript (v2).
+    pub challenge_sig: Option<[u8; 64]>,
+    /// Optional in-window rotation authorization chain (v2).
+    pub challenge_rotation: Option<ChallengeRotationPayload>,
 }
 
 /// Server's `auth_ok` view — bundles everything the client needs to verify.
@@ -192,7 +213,43 @@ impl<'a> ServerHandshake<'a> {
             salt,
             kdf_params: self.effective_kdf,
             server_nonce: self.server_nonce,
+            server_pub_key: None,
+            challenge_sig: None,
+            challenge_rotation: None,
         }
+    }
+
+    /// Build an identity-signed challenge from one captured identity snapshot.
+    pub fn challenge_signed(&self, snapshot: &IdentitySnapshot) -> Result<ChallengeView> {
+        let mut view = self.challenge();
+        let key = snapshot.current_signer.public_bytes();
+        let input = build_challenge_identity_input(
+            &key,
+            &self.auth_init.client_nonce,
+            &self.server_nonce,
+            &view.salt,
+            view.kdf_params.memory_kb,
+            view.kdf_params.time,
+            view.kdf_params.parallelism,
+            view.kdf_params.argon2_version,
+            self.transport_kind,
+            self.auth_init.binding_mode,
+            &self.tls_exporter_or_zeros,
+        );
+        view.server_pub_key = Some(key);
+        view.challenge_sig = Some(sign_identity(&snapshot.current_signer, &input));
+        if let (Some(previous), Some(until), Some(proof)) = (
+            snapshot.previous_signer.as_ref(),
+            snapshot.transition_until_ns,
+            snapshot.rotation_proof,
+        ) {
+            view.challenge_rotation = Some(ChallengeRotationPayload {
+                previous_pub: previous.public_bytes(),
+                transition_until_ns: until,
+                rotation_proof: proof,
+            });
+        }
+        Ok(view)
     }
 
     /// Verify the client's SCRAM proof and (if valid) build `auth_ok`.

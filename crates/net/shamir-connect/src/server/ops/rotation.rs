@@ -327,6 +327,22 @@ pub fn build_rotation_in_progress_payload(
     })
 }
 
+/// Build the challenge rotation chain from existing rotation-proof material.
+/// The transcript is connection-independent and exactly reuses the canonical constructor.
+pub fn build_challenge_rotation_payload(
+    previous_signer: &Ed25519Keypair,
+    current_pub: &[u8; 32],
+    transition_until_ns: u64,
+) -> crate::common::wire::ChallengeRotationPayload {
+    let previous_pub = previous_signer.public_bytes();
+    let input = build_rotation_proof_input(&previous_pub, current_pub, transition_until_ns);
+    crate::common::wire::ChallengeRotationPayload {
+        previous_pub,
+        transition_until_ns,
+        rotation_proof: previous_signer.sign(&input),
+    }
+}
+
 // Wire views moved to common so the standalone `client` feature builds
 // without server code (RV-CONNECT-FED6910E); paths preserved via re-export.
 pub use crate::common::wire::{IdentityRotationEvent, RotationInProgressPayload};

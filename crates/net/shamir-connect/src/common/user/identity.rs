@@ -19,8 +19,39 @@
 
 use crate::common::auth_message::AuthMessage;
 use crate::common::crypto::{ed25519_verify_strict, sha256, Ed25519Keypair};
-use crate::common::domain_tags::{IDENTITY_V1, RESUME_PROOF_V1};
+use crate::common::domain_tags::{CHALLENGE_ID_V1, IDENTITY_V1, RESUME_PROOF_V1};
 use crate::common::types::{BindingMode, TransportKind};
+
+/// Build the canonical challenge-identity transcript (§3.1).
+#[allow(clippy::too_many_arguments)]
+pub fn build_challenge_identity_input(
+    server_pub_key: &[u8; 32],
+    client_nonce: &[u8; 32],
+    server_nonce: &[u8; 32],
+    salt: &[u8; 16],
+    memory_kb: u32,
+    time: u32,
+    parallelism: u32,
+    argon2_version: u8,
+    transport_kind: TransportKind,
+    binding_mode: BindingMode,
+    tls_exporter_or_zeros: &[u8; 32],
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(181);
+    out.extend_from_slice(CHALLENGE_ID_V1);
+    out.extend_from_slice(&sha256(server_pub_key));
+    out.extend_from_slice(client_nonce);
+    out.extend_from_slice(server_nonce);
+    out.extend_from_slice(salt);
+    out.extend_from_slice(&memory_kb.to_be_bytes());
+    out.extend_from_slice(&time.to_be_bytes());
+    out.extend_from_slice(&parallelism.to_be_bytes());
+    out.push(argon2_version);
+    out.push(transport_kind.as_u8());
+    out.push(binding_mode.as_u8());
+    out.extend_from_slice(tls_exporter_or_zeros);
+    out
+}
 
 /// Build the canonical `identity_input` byte string for signing/verification.
 pub fn build_identity_input(
@@ -63,6 +94,15 @@ pub fn resume_proof_message(client_nonce: &[u8; 32], tls_exporter: &[u8; 32]) ->
     out.extend_from_slice(client_nonce);
     out.extend_from_slice(tls_exporter);
     out
+}
+
+/// Verify a challenge identity signature using strict Ed25519 verification.
+pub fn verify_challenge_identity(
+    server_pub_key: &[u8; 32],
+    input: &[u8],
+    signature: &[u8; 64],
+) -> bool {
+    ed25519_verify_strict(server_pub_key, input, signature)
 }
 
 /// Server: sign the `identity_input` with the server Ed25519 priv key.
