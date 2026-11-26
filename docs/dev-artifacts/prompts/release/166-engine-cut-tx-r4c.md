@@ -12,10 +12,6 @@ Machine memory: at most ONE cargo command at a time machine-wide (other executor
 
 Never write a private machine path into any file. Leave no scratch files in the tree and none outside it. Waits in tests are bounded by absolute deadlines (at least 120 s for a whole test); no sleep or timer polling where a completion handshake can exist.
 
-## Time and cost discipline
-
-The cargo lock is shared with other executors and queues FIFO; a full-engine check is minutes, so edit first and gate in the order below, ONCE after the last edit. The HARD stop of this run is 12:00 local time (check with `date`): launch no new chunk after 10:30 and start composing the final report NO LATER than 11:30, whatever is open. A cut that is not finished at the report time is reported as it stands (what moved, what does not compile, the exact errors), never abandoned silently. Give each worker one small chunk with exact paths; retry a worker that returned nothing at most once.
-
 ## Goal and why
 The `tx` layer of `crates/engine/shamir-engine/src` (module `tx/`, `TxHorizon`, `RepoCore`, with their `tests/` dirs) becomes the crate `crates/engine/shamir-engine-tx`, as design 7.4 describes. Why: the tx test job is the longest job of the full CI run on Windows (design section 1), and the engine group must reach its 7-crate shape so the CI matrix can build and test the layers in parallel.
 
