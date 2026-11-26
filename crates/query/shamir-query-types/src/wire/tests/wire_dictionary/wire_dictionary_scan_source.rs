@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use syn::ext::IdentExt;
 use syn::Item;
 
 // ---------------------------------------------------------------------------
@@ -48,6 +49,24 @@ pub(crate) struct SerdeFlags {
     pub(crate) renames: Vec<String>,
     /// every `alias = "..."` value
     pub(crate) aliases: Vec<String>,
+    /// `from = "T"` conversion target (serde deserializes T, converts)
+    pub(crate) from: Option<String>,
+    pub(crate) try_from: Option<String>,
+    pub(crate) into: Option<String>,
+    pub(crate) remote: Option<String>,
+    /// container `rename_all_fields = "..."` (enum variant FIELD names)
+    pub(crate) rename_all_fields: Option<String>,
+    /// `#[serde(skip)]` = skip_serializing + skip_deserializing; recorded as
+    /// the `skip` attribute string itself so the JSON can pin it exactly.
+    pub(crate) skip: bool,
+    /// variant-level `#[serde(other)]`
+    pub(crate) other: bool,
+    /// `rename(serialize = "a")` values
+    pub(crate) renames_serialize: Vec<String>,
+    /// `rename(deserialize = "b")` values — the DESERIALIZE value is the
+    /// identifier serde's field/variant visitor matches on, so it is the
+    /// effective wire name when no plain `rename` is present.
+    pub(crate) renames_deserialize: Vec<String>,
 }
 
 impl SerdeFlags {
@@ -56,8 +75,14 @@ impl SerdeFlags {
     }
 
     /// The first `rename = "..."` value, if any (the effective wire name).
+    /// A directional `rename(serialize = "a", deserialize = "b")` yields
+    /// its DESERIALIZE value: that is the identifier the serde visitor
+    /// matches on while decoding, which is what this dictionary pins.
     pub(crate) fn rename(&self) -> Option<&str> {
-        self.renames.first().map(|s| s.as_str())
+        self.renames
+            .first()
+            .or_else(|| self.renames_deserialize.first())
+            .map(|s| s.as_str())
     }
 
     /// The canonical attribute strings this scanner pins, as a set. This is
@@ -87,6 +112,11 @@ impl SerdeFlags {
             (&self.tag, "tag"),
             (&self.content, "content"),
             (&self.rename_all, "rename_all"),
+            (&self.rename_all_fields, "rename_all_fields"),
+            (&self.from, "from"),
+            (&self.try_from, "try_from"),
+            (&self.into, "into"),
+            (&self.remote, "remote"),
             (&self.skip_serializing_if, "skip_serializing_if"),
             (&self.with, "with"),
             (&self.serialize_with, "serialize_with"),
@@ -102,16 +132,35 @@ impl SerdeFlags {
         for a in &self.aliases {
             set.insert(format!("alias = \"{a}\""));
         }
+        for (present, name) in [(self.skip, "skip"), (self.other, "other")] {
+            if present {
+                set.insert(name.to_string());
+            }
+        }
+        for r in &self.renames_serialize {
+            set.insert(format!("rename_serialize = \"{r}\""));
+        }
+        for r in &self.renames_deserialize {
+            set.insert(format!("rename_deserialize = \"{r}\""));
+        }
         set
     }
 
-    pub(crate) fn from_attrs(attrs: &[syn::Attribute]) -> SerdeFlags {
+    /// Parse `#[serde(...)]` attributes into flags. Attribute FILTER is
+    /// airtight: only `#[serde(...)]` attrs are read (`attr.path().is_ident("serde")`),
+    /// so Rust-native `#[default]` attrs never contaminate the flags.
+    ///
+    /// `parse_nested_meta` ERRORS ARE COLLECTED in `errs`, never discarded:
+    /// a malformed serde attribute must fail the scan (the caller prefixes
+    /// the current file path and item name). Unknown serde keys are
+    /// consumed (value literal, if any) but not pinned.
+    pub(crate) fn from_attrs(attrs: &[syn::Attribute], errs: &mut Vec<String>) -> SerdeFlags {
         let mut flags = SerdeFlags::default();
         for attr in attrs {
             if !attr.path().is_ident("serde") {
                 continue;
             }
-            let _ = attr.parse_nested_meta(|meta| {
+            if let Err(e) = attr.parse_nested_meta(|meta| {
                 let name = meta
                     .path
                     .get_ident()
@@ -183,16 +232,69 @@ impl SerdeFlags {
                         flags.deserialize_with = Some(value_lit()?);
                         Ok(())
                     }
-                    "rename" => {
-                        flags.renames.push(value_lit()?);
+                    "skip" => {
+                        flags.skip = true;
                         Ok(())
+                    }
+                    "other" => {
+                        flags.other = true;
+                        Ok(())
+                    }
+                    "rename_all_fields" => {
+                        flags.rename_all_fields = Some(value_lit()?);
+                        Ok(())
+                    }
+                    "from" => {
+                        flags.from = Some(value_lit()?);
+                        Ok(())
+                    }
+                    "try_from" => {
+                        flags.try_from = Some(value_lit()?);
+                        Ok(())
+                    }
+                    "into" => {
+                        flags.into = Some(value_lit()?);
+                        Ok(())
+                    }
+                    "remote" => {
+                        flags.remote = Some(value_lit()?);
+                        Ok(())
+                    }
+                    "rename" => {
+                        // directional form: rename(serialize = "a", deserialize = "b")
+                        if meta.input.peek(syn::token::Paren) {
+                            meta.parse_nested_meta(|m| {
+                                let key = m
+                                    .path
+                                    .get_ident()
+                                    .map(|i| i.to_string())
+                                    .unwrap_or_default();
+                                let v: syn::LitStr = m.value()?.parse()?;
+                                match key.as_str() {
+                                    "serialize" => {
+                                        flags.renames_serialize.push(v.value());
+                                        Ok(())
+                                    }
+                                    "deserialize" => {
+                                        flags.renames_deserialize.push(v.value());
+                                        Ok(())
+                                    }
+                                    _ => Err(
+                                        m.error(format!("unsupported nested rename key `{key}`"))
+                                    ),
+                                }
+                            })?;
+                            Ok(())
+                        } else {
+                            flags.renames.push(value_lit()?);
+                            Ok(())
+                        }
                     }
                     "alias" => {
                         flags.aliases.push(value_lit()?);
                         Ok(())
                     }
-                    // rename_all_fields / from / try_from / into / bound /
-                    // remote / crate: pinned-irrelevant, consumed and ignored.
+                    // bound / crate: pinned-irrelevant, consumed and ignored.
                     _ => {
                         if meta.input.peek(syn::Token![=]) {
                             let _: syn::Lit = meta.value()?.parse()?;
@@ -201,7 +303,9 @@ impl SerdeFlags {
                     }
                 };
                 result
-            });
+            }) {
+                errs.push(e.to_string());
+            }
         }
         flags
     }
@@ -245,15 +349,17 @@ pub(crate) struct ScanEntry {
 }
 
 impl ScanEntry {
-    /// Member type strings, used as the reachability-graph edges.
-    pub(crate) fn member_types(&self) -> Vec<String> {
+    /// Member type strings with a FIELD LABEL ("field name" or
+    /// "Variant::field"), used as the reachability-graph edges so a
+    /// malformed/unsupported type string can be reported naming the field.
+    pub(crate) fn member_types(&self) -> Vec<(String, String)> {
         let mut out = Vec::new();
         for f in &self.fields {
-            out.push(f.ty.clone());
+            out.push((format!("field {}", f.name), f.ty.clone()));
         }
         for v in &self.variants {
             for f in &v.fields {
-                out.push(f.ty.clone());
+                out.push((format!("variant {}::{}", v.name, f.name), f.ty.clone()));
             }
         }
         out
@@ -314,14 +420,19 @@ pub(crate) fn effective_wire(
     }
 }
 
-pub(crate) fn fields_to_members(fields: &syn::Fields, rename_all: Option<&str>) -> Vec<Member> {
+pub(crate) fn fields_to_members(
+    fields: &syn::Fields,
+    rename_all: Option<&str>,
+    errs: &mut Vec<String>,
+) -> Vec<Member> {
     match fields {
         syn::Fields::Named(named) => named
             .named
             .iter()
             .map(|f| {
-                let name = f.ident.as_ref().unwrap().to_string();
-                let flags = SerdeFlags::from_attrs(&f.attrs);
+                // unraw: `r#where` / `r#type` travel as `where` / `type`
+                let name = f.ident.as_ref().unwrap().unraw().to_string();
+                let flags = SerdeFlags::from_attrs(&f.attrs, errs);
                 let wire = effective_wire(&name, flags.rename(), rename_all);
                 Member {
                     name,
@@ -336,7 +447,7 @@ pub(crate) fn fields_to_members(fields: &syn::Fields, rename_all: Option<&str>) 
             .iter()
             .enumerate()
             .map(|(i, f)| {
-                let flags = SerdeFlags::from_attrs(&f.attrs);
+                let flags = SerdeFlags::from_attrs(&f.attrs, errs);
                 Member {
                     name: i.to_string(),
                     wire: i.to_string(),
@@ -365,14 +476,30 @@ pub(crate) fn collect_items(
     items: &[Item],
     out: &mut BTreeMap<String, ScanEntry>,
     aliases: &mut BTreeMap<String, String>,
+    file: &Path,
+    errs: &mut Vec<String>,
 ) {
+    /// Prefix raw `from_attrs` errors with the file path and item name so
+    /// the failure names its source location (errors are never discarded).
+    fn contextualize(errs: &mut Vec<String>, base: usize, file: &Path, item: &str) {
+        let raw: Vec<String> = errs.drain(base..).collect();
+        for e in raw {
+            errs.push(format!("{}: {item}: {e}", file.display()));
+        }
+    }
     for item in items {
         match item {
             Item::Struct(s) => {
-                let container = SerdeFlags::from_attrs(&s.attrs);
-                let members = fields_to_members(&s.fields, container.rename_all.as_deref());
+                let name = s.ident.unraw().to_string();
+                let base = errs.len();
+                let container = SerdeFlags::from_attrs(&s.attrs, errs);
+                // serde_derive ast.rs:96-99 — struct fields take the
+                // container's rename_all rule (rename_all_fields is
+                // enum-only in serde: it is REJECTED on structs).
+                let members = fields_to_members(&s.fields, container.rename_all.as_deref(), errs);
+                contextualize(errs, base, file, &format!("struct {name}"));
                 let kind = shape_of_fields(&s.fields);
-                out.entry(s.ident.to_string()).or_insert(ScanEntry {
+                out.entry(name).or_insert(ScanEntry {
                     kind,
                     container,
                     fields: members,
@@ -380,26 +507,36 @@ pub(crate) fn collect_items(
                 });
             }
             Item::Enum(e) => {
-                let container = SerdeFlags::from_attrs(&e.attrs);
+                let name = e.ident.unraw().to_string();
+                let base = errs.len();
+                let container = SerdeFlags::from_attrs(&e.attrs, errs);
                 let rule = container.rename_all.as_deref();
                 let variants = e
                     .variants
                     .iter()
                     .map(|v| {
-                        let flags = SerdeFlags::from_attrs(&v.attrs);
-                        // variant-level rename_all (rare) governs its fields,
-                        // else the container rule applies
-                        let field_rule = flags.rename_all.as_deref().or(rule);
+                        let flags = SerdeFlags::from_attrs(&v.attrs, errs);
+                        // serde_derive ast.rs:92-96 — a variant's FIELD
+                        // names use the VARIANT-level rename_all if
+                        // present, else the container's rename_all_fields
+                        // (NOT the container rename_all, which governs
+                        // VARIANT NAMES only).
+                        let field_rule = flags
+                            .rename_all
+                            .as_deref()
+                            .or(container.rename_all_fields.as_deref());
+                        let vname = v.ident.unraw().to_string();
                         VariantRec {
-                            name: v.ident.to_string(),
-                            wire: effective_wire(&v.ident.to_string(), flags.rename(), rule),
+                            name: vname.clone(),
+                            wire: effective_wire(&vname, flags.rename(), rule),
                             shape: shape_of_fields(&v.fields),
-                            fields: fields_to_members(&v.fields, field_rule),
+                            fields: fields_to_members(&v.fields, field_rule, errs),
                             flags,
                         }
                     })
                     .collect();
-                out.entry(e.ident.to_string()).or_insert(ScanEntry {
+                contextualize(errs, base, file, &format!("enum {name}"));
+                out.entry(name).or_insert(ScanEntry {
                     kind: "enum",
                     container,
                     fields: Vec::new(),
@@ -410,13 +547,13 @@ pub(crate) fn collect_items(
             // expand them (e.g. `pub type FieldPath = Vec<String>`).
             Item::Type(t) => {
                 aliases
-                    .entry(t.ident.to_string())
+                    .entry(t.ident.unraw().to_string())
                     .or_insert_with(|| ty_to_string(&t.ty));
             }
             // Inline modules: recurse so no type definition is missed.
             Item::Mod(m) => {
                 if let Some((_, inner)) = &m.content {
-                    collect_items(inner, out, aliases);
+                    collect_items(inner, out, aliases, file, errs);
                 }
             }
             _ => {}
@@ -533,20 +670,21 @@ pub(crate) fn expr_to_string(expr: &syn::Expr) -> String {
 
 /// Recursively collect every `*.rs` file under `root`, skipping any
 /// directory named `tests` (test modules do not define wire types).
-pub(crate) fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
+/// Directory-read errors PROPAGATE with the offending path — nothing is
+/// skipped silently except `tests` dirs.
+pub(crate) fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+    let entries =
+        fs::read_dir(dir).map_err(|e| format!("cannot read directory {}: {e}", dir.display()))?;
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
             if path.file_name().and_then(|n| n.to_str()) == Some("tests") {
                 continue;
             }
-            collect_rs_files(&path, out);
+            collect_rs_files(&path, out)?;
         } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
             out.push(path);
         }
     }
+    Ok(())
 }

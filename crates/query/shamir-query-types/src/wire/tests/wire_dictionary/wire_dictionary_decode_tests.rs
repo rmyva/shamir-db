@@ -20,6 +20,8 @@
 use rmp::encode::{write_array_len, write_bool, write_map_len, write_nil, write_str, write_uint};
 use shamir_collections::TMap;
 use shamir_types::types::value::QueryValue;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use crate::admin::{CreateIndexOp, CreateTableOp};
 use crate::batch::{
@@ -569,7 +571,15 @@ fn tx_begin_bare_integer_isolation_value_is_invalid_type_error() {
     write_uint(&mut buf, 2).unwrap(); // bare integer — NOT a legal enum value here
     let err = rmp_serde::from_slice::<DbRequest>(&buf)
         .expect_err("a bare integer isolation value must not decode through the buffered enum");
-    let message = err.to_string();
+    // KIND: serde-generated error → Error::Syntax
+    // (rmp-serde-1.3.1/src/decode.rs:82-86 `de::Error::custom`).
+    let message = match &err {
+        rmp_serde::decode::Error::Syntax(message) => message.clone(),
+        other => panic!("expected Error::Syntax for the bare integer enum value, got {other:?}"),
+    };
+    // TEXT (single mechanism distinguisher): "invalid type" proves the
+    // buffered-enum value rejection (ContentDeserializer::deserialize_enum
+    // wants string-or-map) — not an Option/type error on the field.
     assert!(
         message.contains("invalid type"),
         "expected an invalid-type error for the bare integer enum value, got: {message}"
@@ -657,32 +667,137 @@ fn tx_begin_isolation_variant_index_via_map_form_decodes() {
 // 4. Negative cases — exact error class assertions
 // ---------------------------------------------------------------------------
 
-/// BatchRequest's field count at the pinned snapshot. Kept in sync by the
-/// scan test (CHECK 1 pins the snapshot's field list); verified against
-/// ops/batch/req/batch_request.rs:51-175 (13 declared fields, 0..=12).
-const BATCH_REQUEST_FIELD_COUNT: usize = 13;
+/// Snapshot-derived BatchRequest field count. The snapshot JSON
+/// (`docs/guide-docs/client-server-protocol-spec/wire-dictionary.json`, CHECK 1
+/// of the scan test pins it against the sources) is the ground truth for the
+/// declaration count, so the out-of-range probe in 4a is computed from it
+/// instead of a hand-pinned constant (previously
+/// `const BATCH_REQUEST_FIELD_COUNT: usize = 13`).
+#[derive(serde::Deserialize)]
+struct WireSnapshot {
+    /// type name → declaration entry; only `fields`/`variants` lengths are
+    /// read here (the snapshot's `roots` key is ignored: no
+    /// `deny_unknown_fields`).
+    types: BTreeMap<String, WireSnapshotType>,
+}
 
-/// 4a. Integer key 13 is out of range for BatchRequest's 13 fields
-/// (indices 0..=12). deny_unknown_fields structs reject the out-of-range
-/// index with an invalid-value error naming the field index at next_key
-/// time.
+#[derive(serde::Deserialize)]
+struct WireSnapshotType {
+    #[serde(default)]
+    fields: Vec<serde_json::Value>,
+    #[serde(default)]
+    variants: Vec<serde_json::Value>,
+}
+
+fn snapshot_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .expect("crate sits three levels below the repo root")
+        .join("docs/guide-docs/client-server-protocol-spec/wire-dictionary.json")
+}
+
+/// BatchRequest's declared field count, read live from the snapshot.
+fn snapshot_batch_request_field_count() -> u64 {
+    let raw = std::fs::read_to_string(snapshot_path())
+        .expect("wire-dictionary.json must exist next to docs/guide-docs");
+    let snapshot: WireSnapshot = serde_json::from_str(&raw)
+        .expect("wire-dictionary.json must parse as {types: {…: {fields?, variants?}}}");
+    let entry = snapshot
+        .types
+        .get("BatchRequest")
+        .expect("snapshot must declare BatchRequest");
+    assert!(
+        entry.variants.is_empty(),
+        "BatchRequest is a struct, not an enum — snapshot says otherwise"
+    );
+    entry.fields.len() as u64
+}
+
+/// 4a. Integer key `field_count + PROBE_MARGIN` is out of range for
+/// BatchRequest's fields (indices `0..=field_count-1`, deny_unknown_fields).
+/// To prove the negative isolates the INDEX — not the integer-keyed form or
+/// the map shape — the same byte-building code produces both frames:
+/// first a fully valid NAMED-key control map (decoded positively with the
+/// typed oracle below), then the byte-identical frame with EXACTLY ONE key
+/// changed: the first map key becomes the probe integer.
+///
+/// The error KIND assertion targets the concrete rmp-serde error enum: every
+/// serde-generated error (invalid_type/invalid_value/missing_field/custom)
+/// funnels through `impl de::Error for Error::custom`
+/// (rmp-serde-1.3.1/src/decode.rs:82-86) and lands in `Error::Syntax(String)`
+/// — Display prints the message verbatim, so a single text assert still
+/// distinguishes the identifier-visitor rejection ("field index", the derived
+/// u64 out-of-range guard) from a missing-field or type error.
 #[test]
 fn batch_request_rejects_out_of_range_integer_key() {
-    let mut buf = Vec::new();
-    write_map_len(&mut buf, 1).unwrap();
-    write_uint(&mut buf, BATCH_REQUEST_FIELD_COUNT as u64).unwrap(); // out of range: valid indices are 0..=12
-    write_nil(&mut buf).unwrap();
-    let err = rmp_serde::from_slice::<BatchRequest>(&buf)
-        .expect_err("the first out-of-range integer key must not decode into a 13-field struct");
-    let message = err.to_string();
-    assert!(
-        message.contains("invalid value") && message.contains("13"),
-        "expected an invalid-value error naming index 13, got: {message}"
+    /// Far above any valid declaration index (13 here), far below the u64
+    /// key space that could alias anything; added to the snapshot-derived
+    /// field count to form the out-of-range probe index.
+    const PROBE_MARGIN: u64 = 1_000;
+
+    // Build the control frame, or — with `first_key_is_probe` — the SAME
+    // frame with exactly one byte-level change: the first map key is the
+    let build_frame = |first_key_is_probe: bool| -> Vec<u8> {
+        let mut buf = Vec::new();
+        write_map_len(&mut buf, 2).unwrap(); // keys: id + queries
+        if first_key_is_probe {
+            write_uint(
+                &mut buf,
+                snapshot_batch_request_field_count() + PROBE_MARGIN,
+            )
+            .unwrap();
+        } else {
+            write_str(&mut buf, "id").unwrap(); // BatchRequest 0
+        }
+        write_str(&mut buf, "batch-1").unwrap(); // QueryValue::Str
+        write_str(&mut buf, "queries").unwrap(); // BatchRequest 7 (REQUIRED, no default)
+        write_map_len(&mut buf, 0).unwrap(); // empty queries map
+        buf
+    };
+
+    let probe_index = snapshot_batch_request_field_count() + PROBE_MARGIN;
+    let buf = build_frame(true);
+    let err = rmp_serde::from_slice::<BatchRequest>(&buf).expect_err(
+        "an out-of-range integer key must not decode into the deny_unknown_fields struct",
     );
+    // KIND: serde's derived field-identifier error is a `custom` error →
+    // Error::Syntax (rmp-serde-1.3.1/src/decode.rs:82-86). Bind the message
+    // for the panic text.
+    let message = match &err {
+        rmp_serde::decode::Error::Syntax(message) => message.clone(),
+        other => {
+            panic!("expected Error::Syntax for the out-of-range index {probe_index}, got {other:?}")
+        }
+    };
+    // TEXT (single mechanism distinguisher): "field index" proves the derived
+    // identifier visitor rejected the u64 as out of range — NOT a missing
+    // field or a type error on the value.
     assert!(
         message.contains("field index"),
-        "expected the field-index expectation in the error, got: {message}"
+        "expected the field-index range rejection for index {probe_index}, got: {message}"
     );
+
+    // Positive control: the byte-identical map with the STRING key decodes,
+    // typed-equal to the named decode — proving the negative isolates the
+    // out-of-range index alone.
+    let control = build_frame(false);
+    let expected = BatchRequest {
+        id: QueryValue::Str("batch-1".to_string()),
+        name: None,
+        transactional: false,
+        isolation: None,
+        durability: None,
+        index_visibility: None,
+        visibility_wait: None,
+        queries: TMap::default(),
+        return_all: true,
+        return_only: None,
+        limits: BatchLimits::default(),
+        interner_epochs: TMap::default(),
+        result_encoding: ResultEncoding::Name,
+    };
+    assert_indexed_matches_named(&control, &expected);
 }
 
 /// 4a positive control: the same shape with a VALID key (0 = `id`, a
@@ -728,7 +843,15 @@ fn query_entry_integer_key_is_an_error_not_a_silent_skip() {
     write_nil(&mut buf).unwrap();
     let err = rmp_serde::from_slice::<QueryEntry>(&buf)
         .expect_err("integer keys never match a flattened field");
-    let message = err.to_string();
+    // KIND: serde-generated error → Error::Syntax
+    // (rmp-serde-1.3.1/src/decode.rs:82-86 `de::Error::custom`).
+    let message = match &err {
+        rmp_serde::decode::Error::Syntax(message) => message.clone(),
+        other => panic!("expected Error::Syntax for the integer flat-map key, got {other:?}"),
+    };
+    // TEXT (single mechanism distinguisher): "invalid type" proves the
+    // String-key buffering of the flattened BatchOp rejected the integer KEY
+    // as a type error — not a missing-field error.
     assert!(
         message.contains("invalid type"),
         "expected an invalid-type error for the integer key, got: {message}"
@@ -774,7 +897,15 @@ fn db_request_integer_tag_key_is_missing_field_error() {
     write_str(&mut buf, "ping").unwrap();
     let err = rmp_serde::from_slice::<DbRequest>(&buf)
         .expect_err("the internally tagged key must be the string \"op\"");
-    let message = err.to_string();
+    // KIND: serde-generated error → Error::Syntax
+    // (rmp-serde-1.3.1/src/decode.rs:82-86 `de::Error::custom`).
+    let message = match &err {
+        rmp_serde::decode::Error::Syntax(message) => message.clone(),
+        other => panic!("expected Error::Syntax for the integer tag key, got {other:?}"),
+    };
+    // TEXT (single mechanism distinguisher): "missing field" proves the
+    // integer tag key was buffered and never matched — NOT a type error on
+    // the tag value.
     assert!(
         message.contains("missing field") && message.contains("op"),
         "expected a missing-field `op` error, got: {message}"
