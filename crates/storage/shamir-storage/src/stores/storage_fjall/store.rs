@@ -246,6 +246,72 @@ impl Store for FjallStore {
         })
     }
 
+    /// Forward range scan using fjall's `keyspace.range(...)` — seeks
+    /// directly to the lower bound in the LSM tree, O(log N + K).
+    /// Replaces the default `iter_stream` + filter impl, which was
+    /// O(total keyspace) per call. Mirrors
+    /// `iter_range_stream_reverse`, walking upward: the cursor
+    /// advances past each batch's last key via `Bound::Excluded`.
+    fn iter_range_stream(
+        &self,
+        start_inclusive: Option<Bytes>,
+        end_inclusive: Option<Bytes>,
+        batch_size: usize,
+    ) -> Pin<Box<dyn Stream<Item = Result<Vec<(RecordKey, Bytes)>, DbError>> + Send>> {
+        let keyspace = self.keyspace.clone();
+        let start_bytes = start_inclusive.map(|b| b.to_vec());
+        let end_bytes = end_inclusive.map(|b| b.to_vec());
+
+        Box::pin(stream! {
+            if batch_size == 0 { return; }
+            // An inverted range is empty (as under the default filter impl);
+            // never hand it to the LSM iterator.
+            if let (Some(s), Some(e)) = (&start_bytes, &end_bytes) {
+                if s > e { return; }
+            }
+            // Cursor walks upward; lower bound advances each batch.
+            let mut cursor: Option<Vec<u8>> = None;
+
+            loop {
+                let keyspace_clone = keyspace.clone();
+                let cur = cursor.clone();
+                let lower_init = start_bytes.clone();
+                let upper_init = end_bytes.clone();
+
+                let batch: DbResult<Vec<(RecordKey, Bytes)>> = task::spawn_blocking(move || {
+                    let lower: Bound<Vec<u8>> = match (&cur, &lower_init) {
+                        (Some(c), _) => Bound::Excluded(c.clone()),
+                        (None, Some(s)) => Bound::Included(s.clone()),
+                        (None, None) => Bound::Unbounded,
+                    };
+                    let upper: Bound<Vec<u8>> = match &upper_init {
+                        Some(e) => Bound::Included(e.clone()),
+                        None => Bound::Unbounded,
+                    };
+
+                    let mut items = Vec::new();
+                    for guard in keyspace_clone.range((lower, upper)).take(batch_size) {
+                        let (key, val) = guard
+                            .into_inner()
+                            .map_err(|e| DbError::Storage(e.to_string()))?;
+                        // §1.1: zero-copy conversion (see `get`).
+                        items.push((RecordKey::from(Bytes::from(key)), Bytes::from(val)));
+                    }
+                    Ok(items)
+                })
+                .await
+                .map_err(|e| DbError::Internal(e.to_string()))?;
+
+                let batch = batch?;
+                if batch.is_empty() {
+                    break;
+                }
+                cursor = batch.last().map(|(k, _)| k.to_vec());
+                yield Ok(batch);
+            }
+        })
+    }
+
     /// Submit a mixed batch via fjall `OwnedWriteBatch`.
     ///
     /// Raw concurrent reads can observe a partially applied batch; see

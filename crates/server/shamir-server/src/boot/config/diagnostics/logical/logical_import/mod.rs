@@ -12,4 +12,3 @@ mod stage;
 pub use args::LogicalImportArgs;
 pub use driver::{import, ImportReport};
 pub use error::LogicalImportError;
-pub use load::stage_load::IMPORT_TX_COMMITS;

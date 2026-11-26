@@ -42,6 +42,12 @@ pub struct ImportReport {
     pub bytes: u64,
     /// False for an idempotent retry of an already-published target.
     pub published: bool,
+    /// `commit_tx` batch commits issued by the record-load stage (0 for an
+    /// idempotent retry, which does not load records).
+    pub tx_commits: u64,
+    /// Highest staged bytes observed at any load flush decision point (0 for
+    /// an idempotent retry).
+    pub peak_staged_bytes: u64,
 }
 
 /// Offline import. Not cancel-safe as a future: the caller must retain and
@@ -60,7 +66,9 @@ pub async fn import(
         return Ok(report);
     }
     prepare_target_name(&args.target)?;
+    let preflight_started = Instant::now();
     let preflight = Preflight::run(&args.input, &args, &cancel)?;
+    phase("preflight", preflight_started, "");
     progress(&format!(
         "preflight verified: {} identities, {} repositories, {} tables",
         preflight.identities.len(),
@@ -92,6 +100,7 @@ pub async fn import(
             // before that); wait for their detached flusher tasks to release
             // the stage's fjall locks so the discard's remove cannot hit a
             // locked file on Windows. Fail closed: discard aborted on timeout.
+            let close_started = Instant::now();
             wait_stores_released(stage.path(), STORE_RELEASE_TIMEOUT)
                 .await
                 .map_err(|locked| {
@@ -104,6 +113,7 @@ pub async fn import(
                             .join(", ")
                     ))
                 })?;
+            phase("close_wait", close_started, "stage=discard");
             stage.discard()?;
             Err(e)
         }
@@ -145,6 +155,7 @@ async fn import_into_stage(
     // still hold the stage's fjall locks (users subdir included); wait until
     // every store is lock-free BEFORE the fresh validation open, so the open
     // can never race a live store. Fail closed on timeout.
+    let close_started = Instant::now();
     wait_stores_released(stage.path(), STORE_RELEASE_TIMEOUT)
         .await
         .map_err(|locked| {
@@ -157,6 +168,7 @@ async fn import_into_stage(
                     .join(", ")
             ))
         })?;
+    phase("close_wait", close_started, "stage=validation");
     // Stage validation reads from a FRESH open of the staged directory, so
     // "validation passed" can never again mean "the loading engine still had
     // the records in memory".
@@ -207,8 +219,15 @@ async fn import_into_stage(
             ))
         }
     };
+    let hash_started = Instant::now();
+    let artifact_digest = artifact_sha256(&args.input, cancel)?;
+    phase(
+        "receipt_hash",
+        hash_started,
+        &format!("bytes={}", preflight.report.bytes),
+    );
     let receipt = Receipt {
-        artifact_sha256: artifact_sha256(&args.input, cancel)?,
+        artifact_sha256: artifact_digest,
         source_db: preflight.database.name.clone(),
         imported_db: loaded.db_name.clone(),
         schema_only: args.schema_only,
@@ -228,6 +247,8 @@ async fn import_into_stage(
         items: preflight.report.items,
         bytes: preflight.report.bytes,
         published: true,
+        tx_commits: loaded.tx_commits,
+        peak_staged_bytes: loaded.peak_staged_bytes,
     })
 }
 
@@ -263,8 +284,15 @@ async fn retry_existing(
         .as_db
         .clone()
         .unwrap_or_else(|| preflight.database.name.clone());
+    let hash_started = Instant::now();
+    let artifact_digest = artifact_sha256(&args.input, cancel)?;
+    phase(
+        "receipt_hash",
+        hash_started,
+        &format!("bytes={}", preflight.report.bytes),
+    );
     if !receipt.matches(
-        &artifact_sha256(&args.input, cancel)?,
+        &artifact_digest,
         &preflight.database.name,
         &db_name,
         args.schema_only,
@@ -315,6 +343,8 @@ async fn retry_existing(
         items: preflight.report.items,
         bytes: preflight.report.bytes,
         published: false,
+        tx_commits: 0,
+        peak_staged_bytes: 0,
     }))
 }
 

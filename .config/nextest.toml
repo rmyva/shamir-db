@@ -172,7 +172,7 @@ success-output = "immediate"
 # The 64 MiB logical-dump budget test prints its LOGICAL_DUMP_PHASE /
 # LOGICAL_IMPORT_PHASE timings; a passing run must show them too.
 [[profile.default.overrides]]
-filter = "package(shamir-server) and test(streaming_64mib_export_import_verify_meets_budgets_and_framing)"
+filter = "package(shamir-server) and test(streaming_64mib_export_import_verify_meet_budgets_and_framing)"
 success-output = "immediate"
 
 # Whole functions binary (tests/functions/lifecycle) compiles WASM (cranelift, CPU-bound) in
@@ -223,7 +223,7 @@ test-group = "http-rest-e2e"
 # The 64 MiB logical-dump budget test prints its LOGICAL_DUMP_PHASE /
 # LOGICAL_IMPORT_PHASE timings; a passing run must show them too.
 [[profile.ci.overrides]]
-filter = "package(shamir-server) and test(streaming_64mib_export_import_verify_meets_budgets_and_framing)"
+filter = "package(shamir-server) and test(streaming_64mib_export_import_verify_meet_budgets_and_framing)"
 success-output = "immediate"
 
 # The lib tests that boot a real server over loopback (WS and handshake e2e)

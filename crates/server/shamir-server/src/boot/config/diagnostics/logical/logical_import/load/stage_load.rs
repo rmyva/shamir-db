@@ -5,7 +5,6 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use shamir_db::access::{principal64, Actor};
@@ -41,11 +40,31 @@ const RECORDS_PER_FLUSH: u32 = 500;
 /// the sole writer, so Snapshot isolation cannot conflict.
 const RECORDS_PER_TX: u32 = 512;
 
-/// doc(hidden) test seam: number of `commit_tx` batch commits issued by the
-/// record-load stage. Reveals whether the load batches (<= ~records/512)
-/// or commits per record.
-#[doc(hidden)]
-pub static IMPORT_TX_COMMITS: AtomicU64 = AtomicU64::new(0);
+/// Staged-bytes cap per import transaction. One `commit_tx` becomes one
+/// `WalEntryV2`, and one entry is one WAL frame; frames over 64 MiB are
+/// rejected (`MAX_FRAME_BYTES`, shamir-wal `segment/frame_reader.rs`). The
+/// staged value bytes are `to_bytes()` encodings and the dump caps every row
+/// at 16 MiB (`FRAME_LIMIT`, shamir-sync codec.rs), so a single row always
+/// fits; the 32 MiB cap leaves ≥2× headroom for op/index/entry/interner-delta
+/// overhead inside the frame.
+const RECORD_TX_MAX_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Counters and peak staged bytes of one record-load attempt.
+#[derive(Default)]
+struct LoadStats {
+    records: u64,
+    tx_commits: u64,
+    peak_staged_bytes: u64,
+}
+
+/// Sub-timer accumulators (u64 ms) of one record-load attempt.
+#[derive(Default)]
+struct LoadTimings {
+    decode_ms: u64,
+    stage_ms: u64,
+    commit_ms: u64,
+    interner_flush_ms: u64,
+}
 
 pub(crate) struct Loaded {
     pub(crate) home: ShamirDb,
@@ -54,6 +73,10 @@ pub(crate) struct Loaded {
     pub(crate) owner_ids: BTreeMap<String, u64>,
     /// Records written during the streaming record-load phase.
     pub(crate) records: u64,
+    /// `commit_tx` batch commits issued by the record-load stage.
+    pub(crate) tx_commits: u64,
+    /// Highest staged bytes observed at any flush decision point.
+    pub(crate) peak_staged_bytes: u64,
 }
 
 /// The staged directory must look like a fresh server data dir: the same
@@ -122,9 +145,8 @@ pub(crate) async fn run(
         definitions_started,
         &format!("repositories={} tables={}", pf.repos.len(), pf.tables.len()),
     );
-    let load_started = Instant::now();
-    let (records, interners) = load_records(&home, &db_name, artifact, cancel).await?;
-    phase("record_load", load_started, &format!("records={records}"));
+    let (records, interners, tx_commits, peak_staged_bytes) =
+        load_records(&home, &db_name, artifact, cancel).await?;
 
     let persist_started = Instant::now();
     for (repo, interner) in &interners {
@@ -148,6 +170,8 @@ pub(crate) async fn run(
         db_name,
         owner_ids,
         records,
+        tx_commits,
+        peak_staged_bytes,
     })
 }
 
@@ -248,15 +272,66 @@ async fn create_table(
         })
 }
 
+/// Per-repo caches and open transactions of one record-load attempt.
+#[derive(Default)]
+struct LoadCaches {
+    tables: BTreeMap<String, TableManager>,
+    interners: BTreeMap<String, InternerManager>,
+    pending: BTreeMap<String, u32>,
+    repos: BTreeMap<String, RepoInstance>,
+    txs: BTreeMap<String, (TxContext, SnapshotGuard, u32, u64)>,
+}
+
 /// Stream the Records section through `TableManager::set_tx` inside one
-/// per-repo transaction per [`RECORDS_PER_TX`] records, carrying the exact
-/// exported 16-byte raw key and the converted value. Returns the record
-/// count and the per-repo interners (their final persist runs in `run`).
+/// per-repo transaction per [`RECORDS_PER_TX`] records or
+/// [`RECORD_TX_MAX_BYTES`] staged bytes, carrying the exact exported 16-byte
+/// raw key and the converted value. Returns the record count, the per-repo
+/// interners (their final persist runs in `run`) and the attempt's commit/
+/// peak counters. Prints the `record_load` phase line on BOTH success and
+/// failure/cancel exit paths (timings accumulated up to the failure point).
 async fn load_records(
     home: &ShamirDb,
     db_name: &str,
     artifact: &Path,
     cancel: &CancellationToken,
+) -> Result<(u64, BTreeMap<String, InternerManager>, u64, u64), LogicalImportError> {
+    let started = Instant::now();
+    let mut timings = LoadTimings::default();
+    let mut stats = LoadStats::default();
+    let result =
+        load_records_inner(home, db_name, artifact, cancel, &mut timings, &mut stats).await;
+    phase(
+        "record_load",
+        started,
+        &format!(
+            "records={} commits={} peak_bytes={} decode_ms={} stage_ms={} commit_ms={} \
+             interner_flush_ms={}",
+            stats.records,
+            stats.tx_commits,
+            stats.peak_staged_bytes,
+            timings.decode_ms,
+            timings.stage_ms,
+            timings.commit_ms,
+            timings.interner_flush_ms
+        ),
+    );
+    result.map(|(records, interners)| {
+        (
+            records,
+            interners,
+            stats.tx_commits,
+            stats.peak_staged_bytes,
+        )
+    })
+}
+
+async fn load_records_inner(
+    home: &ShamirDb,
+    db_name: &str,
+    artifact: &Path,
+    cancel: &CancellationToken,
+    timings: &mut LoadTimings,
+    stats: &mut LoadStats,
 ) -> Result<(u64, BTreeMap<String, InternerManager>), LogicalImportError> {
     let db = home
         .get_db(db_name)
@@ -264,53 +339,46 @@ async fn load_records(
     let file = std::fs::File::open(artifact)?;
     let mut reader = DumpReader::new(CancelledRead::new(file, cancel.clone()))
         .map_err(|e| artifact_err(e, cancel))?;
-    let mut tables: BTreeMap<String, TableManager> = BTreeMap::new();
-    let mut interners: BTreeMap<String, InternerManager> = BTreeMap::new();
-    let mut pending: BTreeMap<String, u32> = BTreeMap::new();
-    let mut repos: BTreeMap<String, RepoInstance> = BTreeMap::new();
-    let mut txs: BTreeMap<String, (TxContext, SnapshotGuard, u32)> = BTreeMap::new();
-    let mut records: u64 = 0;
+    let mut caches = LoadCaches::default();
     while let Some(item) = reader.next_item().map_err(|e| artifact_err(e, cancel))? {
         let PortableItem::Record(record) = item else {
             continue;
         };
-        load_record(
-            &db,
-            record,
-            &mut tables,
-            &mut interners,
-            &mut pending,
-            &mut repos,
-            &mut txs,
-        )
-        .await?;
-        records += 1;
+        load_record(&db, record, &mut caches, cancel, timings, stats).await?;
+        stats.records += 1;
     }
     // Commit every still-open per-repo batch: the final, possibly partial,
     // transaction of each repository touched by the stream.
-    for (repo_name, (tx, guard, _pending)) in txs {
-        let repo = repos.get(&repo_name).ok_or_else(|| {
+    for (repo_name, (tx, guard, _pending, _staged)) in caches.txs {
+        // A cancelled import must not issue another commit: the stage is
+        // discarded by the driver's error path and a later retry cleans any
+        // stale stage, so stopping here loses nothing.
+        if cancel.is_cancelled() {
+            return Err(LogicalImportError::Cancelled);
+        }
+        let repo = caches.repos.get(&repo_name).ok_or_else(|| {
             load(format!(
                 "repository '{repo_name}' disappeared before its final commit"
             ))
         })?;
+        let commit_started = Instant::now();
         repo.commit_tx(tx)
             .await
             .map_err(|e| load(format!("cannot commit import batch: {e}")))?;
-        IMPORT_TX_COMMITS.fetch_add(1, Ordering::Relaxed);
+        timings.commit_ms += commit_started.elapsed().as_millis() as u64;
+        stats.tx_commits += 1;
         drop(guard);
     }
-    Ok((records, interners))
+    Ok((stats.records, caches.interners))
 }
 
 async fn load_record(
     db: &shamir_db::engine::db_instance::db_instance::DbInstance,
     record: RecordItem,
-    tables: &mut BTreeMap<String, TableManager>,
-    interners: &mut BTreeMap<String, InternerManager>,
-    pending: &mut BTreeMap<String, u32>,
-    repos: &mut BTreeMap<String, RepoInstance>,
-    txs: &mut BTreeMap<String, (TxContext, SnapshotGuard, u32)>,
+    caches: &mut LoadCaches,
+    cancel: &CancellationToken,
+    timings: &mut LoadTimings,
+    stats: &mut LoadStats,
 ) -> Result<(), LogicalImportError> {
     let key: [u8; 16] = record.raw_key.try_into().map_err(|_| {
         load(format!(
@@ -318,19 +386,20 @@ async fn load_record(
             record.repository, record.table
         ))
     })?;
+    let decode_started = Instant::now();
     let value = into_query_value(record.value)
         .map_err(|e| load(format!("record value cannot be converted: {e}")))?;
-    let repo = match repos.get(&record.repository) {
+    let repo = match caches.repos.get(&record.repository) {
         Some(cached) => cached.clone(),
         None => {
             let repo = db
                 .get_repo(&record.repository)
                 .ok_or_else(|| load(format!("repository '{}' disappeared", record.repository)))?;
-            repos.insert(record.repository.clone(), repo.clone());
+            caches.repos.insert(record.repository.clone(), repo.clone());
             repo
         }
     };
-    let repo_interner = match interners.get(&record.repository) {
+    let repo_interner = match caches.interners.get(&record.repository) {
         Some(cached) => cached.clone(),
         None => {
             let manager = repo.repo_interner().await.map_err(|e| {
@@ -339,7 +408,9 @@ async fn load_record(
                     record.repository
                 ))
             })?;
-            interners.insert(record.repository.clone(), manager.clone());
+            caches
+                .interners
+                .insert(record.repository.clone(), manager.clone());
             manager
         }
     };
@@ -349,15 +420,24 @@ async fn load_record(
         .map_err(|e| load(format!("cannot load interner: {e}")))?;
     let inner = query_value_to_inner_with(&value, &|key| intern_string_key(interner, key))
         .map_err(|e| load(format!("record value cannot be interned: {e}")))?;
+    timings.decode_ms += decode_started.elapsed().as_millis() as u64;
+    // Encoded size, computed exactly once: the staged value bytes are the
+    // `to_bytes()` InnerValue encoding. `to_bytes` cannot produce an empty
+    // body for the import's values (the zero-length-body refusal in shamir-tx
+    // mvcc store.rs concerns tombstones, which the dump never emits).
+    let body_len = inner
+        .to_bytes()
+        .map(|b| b.len() as u64)
+        .map_err(|e| load(format!("record value cannot be encoded: {e}")))?;
     let table_key = format!("{}/{}", record.repository, record.table);
-    let table = match tables.get(&table_key) {
+    let table = match caches.tables.get(&table_key) {
         Some(cached) => cached.clone(),
         None => {
             let manager = db
                 .get_table(&record.repository, &record.table)
                 .await
                 .map_err(|e| load(format!("cannot open table '{table_key}': {e}")))?;
-            tables.insert(table_key.clone(), manager.clone());
+            caches.tables.insert(table_key.clone(), manager.clone());
             manager
         }
     };
@@ -365,44 +445,78 @@ async fn load_record(
     // here, not borrowed from the map. The raw-key set path bypasses the
     // query builder by design: a keyed upsert must carry the exact 16-byte
     // record id, which no query construction can express.
-    let (mut tx, guard, tx_pending) = match txs.remove(&record.repository) {
-        Some(entry) => entry,
-        None => {
-            // The import is the sole writer; Snapshot isolation is safe.
-            let (tx, guard) = repo.begin_tx(IsolationLevel::Snapshot).await.map_err(|e| {
-                load(format!(
-                    "cannot begin import transaction for '{}': {e}",
-                    record.repository
-                ))
-            })?;
-            (tx, guard, 0)
+    let (mut tx, mut guard, mut tx_pending, mut tx_staged) =
+        match caches.txs.remove(&record.repository) {
+            Some(entry) => entry,
+            None => {
+                let (tx, guard) = pending_tx(&repo).await?;
+                (tx, guard, 0, 0)
+            }
+        };
+    // Flush BEFORE staging when the batch is full by count or bytes: a
+    // cancelled import must not issue another commit (on cancel the stage is
+    // discarded by the driver's error path and a retry cleans any stale
+    // stage, so stopping here loses nothing). A single row whose body alone
+    // exceeds RECORD_TX_MAX_BYTES still gets written in its own tx: dump rows
+    // are capped at 16 MiB (codec.rs FRAME_LIMIT), far under the 64 MiB WAL
+    // frame limit, so it can never breach the frame on its own.
+    if tx_pending > 0
+        && (tx_pending >= RECORDS_PER_TX || tx_staged + body_len + 16 > RECORD_TX_MAX_BYTES)
+    {
+        stats.peak_staged_bytes = stats.peak_staged_bytes.max(tx_staged);
+        // A cancelled import must not issue another commit (see above).
+        if cancel.is_cancelled() {
+            return Err(LogicalImportError::Cancelled);
         }
-    };
+        let commit_started = Instant::now();
+        repo.commit_tx(tx)
+            .await
+            .map_err(|e| load(format!("cannot commit import batch: {e}")))?;
+        timings.commit_ms += commit_started.elapsed().as_millis() as u64;
+        stats.tx_commits += 1;
+        // Dropping the guard releases the committed snapshot back to GC.
+        drop(guard);
+        let (next_tx, next_guard) = pending_tx(&repo).await?;
+        tx = next_tx;
+        guard = next_guard;
+        tx_pending = 0;
+        tx_staged = 0;
+    }
+    let stage_started = Instant::now();
     table
         .set_tx(RecordId(key), &inner, Some(&mut tx))
         .await
         .map_err(|e| load(format!("cannot write record: {e}")))?;
-    let tx_pending = tx_pending + 1;
-    if tx_pending >= RECORDS_PER_TX {
-        repo.commit_tx(tx)
-            .await
-            .map_err(|e| load(format!("cannot commit import batch: {e}")))?;
-        IMPORT_TX_COMMITS.fetch_add(1, Ordering::Relaxed);
-        // Dropping the guard releases the committed snapshot back to GC.
-        drop(guard);
-    } else {
-        txs.insert(record.repository.clone(), (tx, guard, tx_pending));
-    }
-    let count = pending.entry(record.repository.clone()).or_insert(0);
+    timings.stage_ms += stage_started.elapsed().as_millis() as u64;
+    // 16 = raw key length; per-row overhead constants are unnecessary at
+    // this granularity (the 32 MiB headroom covers op/index/entry overhead).
+    tx_staged += body_len + 16;
+    tx_pending += 1;
+    stats.peak_staged_bytes = stats.peak_staged_bytes.max(tx_staged);
+    caches.txs.insert(
+        record.repository.clone(),
+        (tx, guard, tx_pending, tx_staged),
+    );
+    let count = caches.pending.entry(record.repository.clone()).or_insert(0);
     *count += 1;
     if *count >= RECORDS_PER_FLUSH {
+        let flush_started = Instant::now();
         repo_interner
             .persist()
             .await
             .map_err(|e| load(format!("cannot persist interner: {e}")))?;
+        timings.interner_flush_ms += flush_started.elapsed().as_millis() as u64;
         *count = 0;
     }
     Ok(())
+}
+
+/// Fresh transaction for a repository: the import is the sole writer, so
+/// Snapshot isolation is safe.
+async fn pending_tx(repo: &RepoInstance) -> Result<(TxContext, SnapshotGuard), LogicalImportError> {
+    repo.begin_tx(IsolationLevel::Snapshot)
+        .await
+        .map_err(|e| load(format!("cannot begin import transaction: {e}")))
 }
 
 /// Re-read and re-hash the whole input after loading; any drift from the
