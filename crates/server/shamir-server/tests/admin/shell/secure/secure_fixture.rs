@@ -539,50 +539,46 @@ pub(in crate::shell_tests) fn run_secret_process_timeout_scanned(
     let current_dir = current_dir.map(Path::to_path_buf);
     let extra_env = extra_env.to_vec();
 
-    let outcome = fixture.rt.run(async move {
-        tokio::time::timeout(timeout, async move {
-            let mut command = server_command();
-            command
-                .args(&argv)
-                .env(env_key, env_value)
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .kill_on_drop(true);
-            #[cfg(unix)]
-            command.env("HOME", &home_dir);
-            #[cfg(windows)]
-            command.env("USERPROFILE", &home_dir);
-            command.current_dir(&home_dir);
-            if let Some(dir) = &current_dir {
-                command.current_dir(dir);
-            }
-            for (key, value) in &extra_env {
-                command.env(key, value);
-            }
-            let mut child = command.spawn().expect("spawn shell child");
-            // stdin-only; close the pipe for EOF. An early-exit refusal closes
-            // the pipe first, so only `BrokenPipe` is tolerated downstream.
-            if let Some(mut stdin) = child.stdin.take() {
-                match &secret {
-                    Some(secret) => {
-                        write_secret_stdin(&mut stdin, secret.as_bytes()).await;
-                    }
-                    None => drop(stdin),
+    let outcome = fixture.rt.run_timeout(timeout, async move {
+        let mut command = server_command();
+        command
+            .args(&argv)
+            .env(env_key, env_value)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+        #[cfg(unix)]
+        command.env("HOME", &home_dir);
+        #[cfg(windows)]
+        command.env("USERPROFILE", &home_dir);
+        command.current_dir(&home_dir);
+        if let Some(dir) = &current_dir {
+            command.current_dir(dir);
+        }
+        for (key, value) in &extra_env {
+            command.env(key, value);
+        }
+        let mut child = command.spawn().expect("spawn shell child");
+        // stdin-only; close the pipe for EOF. An early-exit refusal closes
+        // the pipe first, so only `BrokenPipe` is tolerated downstream.
+        if let Some(mut stdin) = child.stdin.take() {
+            match &secret {
+                Some(secret) => {
+                    write_secret_stdin(&mut stdin, secret.as_bytes()).await;
                 }
+                None => drop(stdin),
             }
-            let output = child
-                .wait_with_output()
-                .await
-                .expect("shell child waits with output");
-            (
-                output.status.code().unwrap_or(-1),
-                output.stdout,
-                output.stderr,
-            )
-        })
-        .await
-        .expect("shell child exceeded its deadline")
+        }
+        let output = child
+            .wait_with_output()
+            .await
+            .expect("shell child waits with output");
+        (
+            output.status.code().unwrap_or(-1),
+            output.stdout,
+            output.stderr,
+        )
     });
     fixture.guard.note("shell exit", outcome.0.to_string());
     ShellRun {

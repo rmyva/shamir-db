@@ -277,7 +277,7 @@ pub(super) enum BackupCli {
     Restore,
     /// Explained only: take a stopped-server snapshot.
     Snapshot,
-    /// Backup schedule state; unsupported in this release.
+    /// Backup schedule state.
     Schedule {
         #[command(subcommand)]
         action: ScheduleCli,
@@ -286,7 +286,7 @@ pub(super) enum BackupCli {
 
 #[derive(clap::Subcommand)]
 pub(super) enum ScheduleCli {
-    /// Show the configured schedule; unsupported in this release.
+    /// Show the configured schedule.
     Show,
 }
 
@@ -303,6 +303,33 @@ pub(super) enum SchemaMigrationCli {
 pub(super) enum ExportCli {
     /// Explained only: the server's offline logical-export command.
     Logical,
+    /// Online logical export job (SCRAM only).
+    Online {
+        #[command(subcommand)]
+        action: OnlineExportCli,
+    },
+}
+
+#[derive(clap::Subcommand)]
+pub(super) enum OnlineExportCli {
+    Start {
+        database: String,
+        #[arg(long)]
+        repo: Option<String>,
+        #[arg(long)]
+        table: Option<String>,
+        #[arg(long)]
+        schema_only: bool,
+        #[arg(long)]
+        include_artifacts: bool,
+        #[arg(long)]
+        yes: bool,
+    },
+    Status,
+    Cancel {
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -461,6 +488,13 @@ pub(super) fn command_id(command: &Command) -> &'static str {
         Command::Export {
             action: ExportCli::Logical,
         } => "export logical",
+        Command::Export {
+            action: ExportCli::Online { action },
+        } => match action {
+            OnlineExportCli::Start { .. } => "export online start",
+            OnlineExportCli::Status => "export online status",
+            OnlineExportCli::Cancel { .. } => "export online cancel",
+        },
         Command::Import {
             action: ImportCli::Logical,
         } => "import logical",

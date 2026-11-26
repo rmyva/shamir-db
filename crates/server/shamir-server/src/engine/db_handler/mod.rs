@@ -31,5 +31,7 @@ pub(crate) use handlers::{admin, subscribe_handler, visibility_handlers};
 pub(crate) use crate::security::user_directory::derive_scram_record;
 pub use config::{CursorLimitsCap, NodeMode, QueryLimitsCap, SlowQueryConfig, TxLimitsCap};
 pub use handler::{DbRequest, DbResponse, ShamirDbHandler};
+pub(in crate::engine) use handler::{DisconnectCancel, MutationTasks};
+pub(crate) use handler::{ExportActivityProjection, ExportJobActivityGuard};
 pub use handlers::admin::AdminGlue;
 pub(crate) use repo_audit::CancelRefusalAudit;

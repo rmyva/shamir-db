@@ -12,6 +12,14 @@
 //! tests pin that side of the contract with the cell-map size as the oracle
 //! (`TableCatalog::table_cell_count`, which is compiled for this crate's own
 //! unit tests).
+//!
+//! The shard acquisition of an ABSENT name is checked — not here, but by the
+//! sibling test `catalog_registration_order_tests.rs
+//! ::registration_of_an_absent_name_waits_for_the_tables_shard`,
+//! which holds the `tables` dashmap entry guard from another thread through
+//! the crate-private `cfg(test)` `tables_entry_guard_for_test` seam; the
+//! config/entry boundary itself is not observed (this file uses only public
+//! reads).
 
 use shamir_types::types::common::{new_dash_map, THasher};
 use tokio::sync::OnceCell;

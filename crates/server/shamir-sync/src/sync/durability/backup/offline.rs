@@ -34,17 +34,25 @@ use thiserror::Error;
 
 use shamir_collections::new_fx_set_wc;
 
-use super::online::manifest::{self as online_manifest, BackupKind, ManifestV2};
+use super::online::manifest::{self as online_manifest, BackupKind};
 use super::restore::fsync_dir;
 use super::snapshot_lease;
 use crate::format_stamp::{observe_stamp_for_backup, BackupStampObservation, StampError};
 
+mod copy_gate;
+mod plain_open;
 mod source_lock;
 #[cfg(test)]
 mod tests;
+mod timestamp;
 mod v2_verify;
 #[cfg(test)]
 pub(super) use v2_verify::exact_spelling_mismatch;
+/// The exact decoded manifest a successful verification already produced,
+/// handed to the caller without a second parse of `manifest.json`.
+/// `pub(in ...::backup)` — restore.rs is the intended consumer. Lives in the
+/// v2_verify child module next to the verifiers that produce it.
+pub(in crate::sync::durability::backup) use v2_verify::VerifiedManifest;
 
 /// Size of the fixed, reused buffer streaming hash reads are chunked
 /// through — chosen so a large fjall SST/journal file is hashed without
@@ -59,6 +67,11 @@ const HASH_STREAM_BUFFER_SIZE: usize = 1024 * 1024;
 /// imports it inward.
 pub const SNAPSHOT_LEASE_FILE_NAME: &str = ".shamir-snapshot.lock";
 
+pub(crate) use copy_gate::{create_copy_output, stream_copy, CopyGateError, RestoreCopyLedger};
+use plain_open::open_plain_file;
+pub(crate) use plain_open::open_plain_snapshot_file;
+pub use timestamp::{utc_timestamp, utc_timestamp_at};
+
 /// Stream `path`'s full contents through a fixed-size buffer into a running SHA-256 hasher,
 /// returning `(digest, size_bytes)`. Produces a byte-identical result to
 /// `sha256(&fs::read(path)?)`, but never holds more than [`HASH_STREAM_BUFFER_SIZE`] bytes of file
@@ -66,7 +79,7 @@ pub const SNAPSHOT_LEASE_FILE_NAME: &str = ".shamir-snapshot.lock";
 /// size. `cancel` is consulted once per chunk BEFORE that chunk is read; `true` aborts with
 /// `Interrupted` rather than hashing a whole large file out.
 fn hash_file_streaming(path: &Path, cancel: &dyn Fn() -> bool) -> std::io::Result<([u8; 32], u64)> {
-    let mut file = fs::File::open(path)?;
+    let mut file = open_plain_file(path)?;
     let mut buf = vec![0u8; HASH_STREAM_BUFFER_SIZE];
     let mut hasher = Sha256::new();
     let mut size_bytes = 0u64;
@@ -343,27 +356,6 @@ pub struct ManifestVerifyReport {
     pub consistency: Option<online_manifest::ConsistencySection>,
 }
 
-/// The exact decoded manifest a successful verification already produced,
-/// handed to the caller without a second parse of `manifest.json`.
-/// `pub(super)` — restore.rs is the intended consumer.
-#[derive(Debug)]
-pub(super) enum VerifiedManifest {
-    /// A v1 (offline stop-and-copy) manifest.
-    V1(Manifest),
-    /// A v2 (online) manifest.
-    V2(ManifestV2),
-}
-
-impl VerifiedManifest {
-    /// The manifest's file list, verbatim as verified.
-    pub(super) fn files(&self) -> &[ManifestFileEntry] {
-        match self {
-            VerifiedManifest::V1(manifest) => &manifest.files,
-            VerifiedManifest::V2(manifest) => &manifest.files,
-        }
-    }
-}
-
 /// Recursively copy `from` → `to/<timestamp>/`. The timestamp is
 /// `YYYYMMDD_HHMMSS` in UTC (sortable, human-readable).
 ///
@@ -414,7 +406,19 @@ pub fn backup(from: &Path, to: &Path) -> Result<BackupReport, BackupError> {
 
     let mut bytes = 0u64;
     let mut files = 0u64;
-    copy_dir_recursive(from, &dest_dir, &mut bytes, &mut files, true, true)?;
+    // No ledger: the walk WRITES the manifest afterwards, so there is
+    // nothing to compare against yet and no unlisted-file refusal may fire.
+    // The gate can therefore only produce `Io` here.
+    copy_dir_recursive(from, &dest_dir, &mut bytes, &mut files, true, true, None).map_err(
+        |error| match error {
+            CopyGateError::Io(io) => BackupError::Io(io),
+            // Unreachable while `ledger` is `None` (the gate is compiled
+            // out on that path); refuse fail-closed rather than guessing.
+            other => BackupError::ManifestInvalid(format!(
+                "internal error: restore-only copy gate fired during backup: {other:?}"
+            )),
+        },
+    )?;
 
     let manifest_path = write_manifest(&dest_dir)?;
 
@@ -615,11 +619,11 @@ pub(super) fn verify_manifest_with_lookup(
             snapshot_dir.join(MANIFEST_FILE_NAME),
         )),
         snapshot_lease::SourceSnapshot::Unmanaged { canonical } => {
-            verify_manifest_impl(&canonical).map(|(report, _)| report)
+            verify_manifest_impl(&canonical).map(|(report, _, _)| report)
         }
         snapshot_lease::SourceSnapshot::Managed { canonical, lease } => {
             let _source_lease = lease;
-            verify_manifest_impl(&canonical).map(|(report, _)| report)
+            verify_manifest_impl(&canonical).map(|(report, _, _)| report)
         }
     }
 }
@@ -643,7 +647,7 @@ pub fn verify_exported_manifest(snapshot_dir: &Path) -> Result<ManifestVerifyRep
             Err(BackupError::ManagedSnapshotNotExported(canonical))
         }
         snapshot_lease::Resolution::Unmanaged(canonical) => {
-            verify_manifest_impl(&canonical).map(|(report, _)| report)
+            verify_manifest_impl(&canonical).map(|(report, _, _)| report)
         }
     }
 }
@@ -655,7 +659,7 @@ pub fn verify_exported_manifest(snapshot_dir: &Path) -> Result<ManifestVerifyRep
 /// Verify-only callers should use [`verify_manifest`].
 pub(super) fn verify_manifest_for_restore(
     snapshot_dir: &Path,
-) -> Result<(ManifestVerifyReport, VerifiedManifest), BackupError> {
+) -> Result<(ManifestVerifyReport, VerifiedManifest, String), BackupError> {
     verify_manifest_impl(snapshot_dir)
 }
 
@@ -735,13 +739,24 @@ pub fn try_snapshot_delete_lease(root: &Path) -> io::Result<Option<File>> {
 /// [`verify_retention_candidate`] do not).
 fn verify_manifest_impl(
     snapshot_dir: &Path,
-) -> Result<(ManifestVerifyReport, VerifiedManifest), BackupError> {
+) -> Result<(ManifestVerifyReport, VerifiedManifest, String), BackupError> {
     let manifest_path = snapshot_dir.join(MANIFEST_FILE_NAME);
-    if !manifest_path.exists() {
-        return Err(BackupError::ManifestMissing(manifest_path));
-    }
-    let raw = fs::read(&manifest_path)?;
-    verify_manifest_raw(snapshot_dir, &raw)
+    let mut file = open_plain_file(&manifest_path).map_err(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            BackupError::ManifestMissing(manifest_path.clone())
+        } else {
+            BackupError::Io(error)
+        }
+    })?;
+    let mut raw = Vec::new();
+    file.read_to_end(&mut raw)?;
+    // Round-2 finding 1c: the SHA-256 of the EXACT manifest bytes this
+    // verification consumed, handed to the caller so a later reader of the
+    // same pathname (restore's step-3 copy) can prove it copied those bytes
+    // and not a re-read replacement. Crate-internal only.
+    let manifest_digest = hex::encode(Sha256::digest(&raw));
+    let (report, manifest) = verify_manifest_raw(snapshot_dir, &raw)?;
+    Ok((report, manifest, manifest_digest))
 }
 
 /// The verifier core over already-read manifest bytes; [`verify_manifest`]
@@ -755,7 +770,9 @@ fn verify_manifest_raw(
     raw: &[u8],
 ) -> Result<(ManifestVerifyReport, VerifiedManifest), BackupError> {
     tracing::trace!(target: "shamir_sync::snapshot_verify", "snapshot manifest loaded");
-    if peek_manifest_format_version(raw) == Some(online_manifest::MANIFEST_FORMAT_VERSION_V2) {
+    if v2_verify::peek_manifest_format_version(raw)
+        == Some(online_manifest::MANIFEST_FORMAT_VERSION_V2)
+    {
         let (report, manifest) = v2_verify::verify_manifest_v2(snapshot_dir, raw)?;
         return Ok((report, VerifiedManifest::V2(manifest)));
     }
@@ -869,52 +886,6 @@ fn reject_unsafe_manifest_path(entry_path: &str) -> Result<(), BackupError> {
     Ok(())
 }
 
-/// `YYYYMMDD_HHMMSS` UTC. Pure-Rust without `chrono` to keep deps light.
-pub fn utc_timestamp() -> String {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    utc_timestamp_at(secs)
-}
-
-/// F-68 (#895, cluster D): format an arbitrary unix-epoch-seconds value the
-/// same way [`utc_timestamp`] formats "now". Split out so a test can
-/// compute the stamp for a KNOWN instant (e.g. "now" and "now + 1s")
-/// without racing `SystemTime::now()` a second time — see
-/// `tests::restore_tests::preexisting_temp_dir_name_collision_still_reports_already_exists`,
-/// which pre-creates a collision directory at BOTH `now` and `now + 1s` so
-/// the test is deterministic regardless of which UTC second `restore()`'s
-/// own internal `utc_timestamp()` call lands in.
-pub fn utc_timestamp_at(secs: u64) -> String {
-    let (y, mo, d, h, mi, s) = unix_to_ymd_hms(secs);
-    format!("{y:04}{mo:02}{d:02}_{h:02}{mi:02}{s:02}")
-}
-
-/// Convert a unix epoch second into (year, month, day, hour, minute, second)
-/// in UTC. Algorithm: civil_from_days from Howard Hinnant's date library
-/// (public domain). Adapted to Rust ints.
-fn unix_to_ymd_hms(secs: u64) -> (i32, u32, u32, u32, u32, u32) {
-    let days = (secs / 86_400) as i64;
-    let s = (secs % 86_400) as u32;
-    let h = s / 3600;
-    let mi = (s % 3600) / 60;
-    let se = s % 60;
-
-    // Hinnant's civil_from_days, valid for any day in [-12687428, 11248737].
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let mo = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
-    let y = (if mo <= 2 { y + 1 } else { y }) as i32;
-    (y, mo, d, h, mi, se)
-}
-
 /// `pub(crate)` — reused by `restore.rs` to copy a snapshot into a
 /// temporary sibling directory before the atomic swap into `data_dir`.
 ///
@@ -924,6 +895,12 @@ fn unix_to_ymd_hms(secs: u64) -> (i32, u32, u32, u32, u32, u32) {
 /// gets its own directory-entry fsync, not just the top-level destination a
 /// caller passes in. Cache exclusion applies only to the root invocation;
 /// nested directories named `cache` remain ordinary user data.
+///
+/// `ledger` binds the walk to the verified manifest (round-2 finding 1,
+/// `copy_gate.rs`): `Some` on the restore path (hash + entry comparison in
+/// the copy pass; unlisted regular files refuse), `None` on the backup path
+/// (backup WRITES the manifest after the walk — nothing to compare
+/// against, nothing may refuse).
 pub(crate) fn copy_dir_recursive(
     src: &Path,
     dst: &Path,
@@ -931,37 +908,69 @@ pub(crate) fn copy_dir_recursive(
     files: &mut u64,
     exclude_cache: bool,
     top_level: bool,
-) -> std::io::Result<()> {
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
+    ledger: Option<&RestoreCopyLedger>,
+) -> Result<(), CopyGateError> {
+    for entry in fs::read_dir(src).map_err(CopyGateError::Io)? {
+        let entry = entry.map_err(CopyGateError::Io)?;
         let path = entry.path();
         let file_name = entry.file_name();
         if exclude_cache && top_level && file_name == "cache" {
             continue;
         }
+        // The verifiers reject non-Unicode names, and the ledger keys by the
+        // lossy relative form: a name that is not valid Unicode could alias a
+        // listed entry, so the restore walk refuses it before creating output.
+        if let Some(ledger) = ledger {
+            if file_name.to_str().is_none() {
+                return Err(CopyGateError::UnmanifestedFile(ledger.relative(&path)));
+            }
+        }
         let target = dst.join(&file_name);
-        let ft = entry.file_type()?;
+        let ft = entry.file_type().map_err(CopyGateError::Io)?;
         if ft.is_dir() {
-            fs::create_dir_all(&target)?;
-            copy_dir_recursive(&path, &target, bytes, files, exclude_cache, false)?;
+            fs::create_dir_all(&target).map_err(CopyGateError::Io)?;
+            copy_dir_recursive(&path, &target, bytes, files, exclude_cache, false, ledger)?;
         } else if ft.is_file() {
-            let n = fs::copy(&path, &target)?;
-            // F-12 (#802): fsync the just-copied file so its bytes reach
-            // stable storage before this function returns — `fs::copy`
-            // leaves them in the OS page cache, not yet durable. Since
-            // `fs::copy` doesn't hand back an open file handle, re-open the
-            // destination for write (NOT `.create(true)`/`.truncate(true)`,
-            // which would wipe what was just copied) and sync it. A failed
-            // FILE sync propagates (content durability IS the point —
-            // matching the wal_segment.rs/segment_meta.rs precedent where
-            // the file's own `sync_all` is a hard error, unlike the
-            // best-effort directory fsync). This single change fixes
-            // file-durability for BOTH `backup()` and `restore()`'s step-3
-            // copy, which share this function.
-            fs::OpenOptions::new()
-                .write(true)
-                .open(&target)?
-                .sync_all()?;
+            // The opened source handle is the one copied and hashed.
+            // RESIDUAL WINDOW (round-2 finding 1e): a parent component
+            // swapped between this walk's `read_dir` and the leaf open
+            // below needs an openat-class (dirfd-relative) primitive this
+            // code base does not have — the leaf open is path-based, so the
+            // per-file binding covers the leaf's bytes, not the directory
+            // chain above it.
+            let mut input = open_plain_file(&path).map_err(|e| match (&ledger, e.kind()) {
+                // Truthful typed refusal where the ledger exists: the
+                // no-follow open refused the leaf as a non-regular object
+                // (symlink/reparse point/directory). The backup path has
+                // no ledger and no manifest-relative path — generic Io.
+                (Some(ledger), io::ErrorKind::InvalidData) => CopyGateError::NotARegularFile {
+                    path: ledger.relative(&path),
+                },
+                _ => CopyGateError::Io(e),
+            })?;
+            let input_metadata = input.metadata().map_err(CopyGateError::Io)?;
+            let opened_size = input_metadata.len();
+            // `fs::copy` kept the source permissions; the streamed copy must
+            // too (a 0600 key must not become 0644 under the umask).
+            let source_permissions = input_metadata.permissions();
+            let mut output =
+                create_copy_output(&target, &source_permissions).map_err(CopyGateError::Io)?;
+            // Finding 1a/1b: copy+hash in one pass, gate on the verified
+            // ledger entry before this file counts as copied (`copy_gate.rs`).
+            let gate = ledger.map(|ledger| (ledger, ledger.relative(&path)));
+            let (n, _staged_digest) = stream_copy(
+                &mut input,
+                &mut output,
+                opened_size,
+                gate.as_ref().map(|(ledger, rel)| (*ledger, rel.as_str())),
+            )?;
+            output
+                .set_permissions(source_permissions)
+                .map_err(CopyGateError::Io)?;
+            output.sync_all().map_err(CopyGateError::Io)?;
+            // F-12 (#812): the copy's own handle is synced in place, so the
+            // copied bytes are durable before this returns (both `backup()`
+            // and `restore()`'s step-3 copy share this function).
             *bytes += n;
             *files += 1;
         } else {
@@ -987,14 +996,4 @@ pub(crate) fn copy_dir_recursive(
     // copy too, since it shares this function.
     fsync_dir(dst);
     Ok(())
-}
-
-/// Cheap format-version peek so v2 snapshots route to the v2 verifier
-/// while v1 keeps its own manifest rules (design 4.5).
-fn peek_manifest_format_version(raw: &[u8]) -> Option<u32> {
-    let value: serde_json::Value = serde_json::from_slice(raw).ok()?;
-    value
-        .get("format_version")?
-        .as_u64()
-        .map(|version| version as u32)
 }

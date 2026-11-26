@@ -44,6 +44,10 @@ use crate::tables_registry::TablesRegistry;
 use crate::user_directory::ScramDerivationGate;
 
 use super::helpers::{boot_now_ns, default_node_id, REPL_RECONCILE_INTERVAL};
+
+/// Bound for draining the detached mutation workers and the online-export
+/// service in a launch rollback arm (the boot error still wins afterwards).
+const ROLLBACK_WORKER_DRAIN: Duration = Duration::from_secs(10);
 use super::http::BootGuard;
 use super::listeners::{spawn_listeners, ListenerEnv, SpawnedListeners};
 use super::load_metrics::bind_load_source;
@@ -650,6 +654,30 @@ impl ServerLauncher {
                 .await;
                 // The boot error wins: cleanup failures are logged, never
                 // returned in its place.
+                // Bounded drain of the detached workers the failed boot already
+                // owns: the handler's mutation workers and the online-export
+                // service (its `start` refuses after the cancel above). The
+                // boot error still wins: drain failures are logged, never
+                // returned in its place.
+                handler_owned_tracker.close();
+                if tokio::time::timeout(ROLLBACK_WORKER_DRAIN, handler_owned_tracker.wait())
+                    .await
+                    .is_err()
+                {
+                    tracing::error!(
+                        "launch rollback: mutation workers still running after the drain bound"
+                    );
+                }
+                if let Some(export) = online_export.as_ref() {
+                    if !tokio::time::timeout(ROLLBACK_WORKER_DRAIN, export.wait_idle())
+                        .await
+                        .unwrap_or(false)
+                    {
+                        tracing::error!(
+                            "launch rollback: the online export worker is still draining"
+                        );
+                    }
+                }
                 log_rollback_cleanup("listener bind", &cleanup);
                 join_meta_snapshot("listener bind", meta_snapshot_task).await;
                 if let Some(reaper) = interactive_tx_reaper {
@@ -795,6 +823,30 @@ impl ServerLauncher {
                     &mut cleanup,
                 )
                 .await;
+                // Bounded drain of the detached workers the failed boot already
+                // owns: the handler's mutation workers and the online-export
+                // service (its `start` refuses after the cancel above). The
+                // boot error still wins: drain failures are logged, never
+                // returned in its place.
+                handler_owned_tracker.close();
+                if tokio::time::timeout(ROLLBACK_WORKER_DRAIN, handler_owned_tracker.wait())
+                    .await
+                    .is_err()
+                {
+                    tracing::error!(
+                        "launch rollback: mutation workers still running after the drain bound"
+                    );
+                }
+                if let Some(export) = online_export.as_ref() {
+                    if !tokio::time::timeout(ROLLBACK_WORKER_DRAIN, export.wait_idle())
+                        .await
+                        .unwrap_or(false)
+                    {
+                        tracing::error!(
+                            "launch rollback: the online export worker is still draining"
+                        );
+                    }
+                }
                 log_rollback_cleanup("observability bind", &cleanup);
                 join_meta_snapshot("observability bind", meta_snapshot_task).await;
                 if let Some(reaper) = interactive_tx_reaper {
@@ -866,6 +918,8 @@ impl ServerLauncher {
             cursor_reaper,
             online_export,
             owned_mutation_tasks: Some(handler_owned_tracker),
+            tx_release_tails: handler_concrete.tx_registry().release_tails(),
+            tx_registry: handler_concrete.tx_registry(),
             repl_supervisor: supervisor,
             repl_supervisor_task: Some(repl_supervisor_task),
             shamir,

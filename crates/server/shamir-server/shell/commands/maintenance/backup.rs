@@ -57,6 +57,7 @@ pub(in crate::shell) fn project_status(v: &QueryValue) -> Result<serde_json::Val
                 | "repos_in_snapshot"
                 | "repos_created_during"
                 | "last_error"
+                | "schedule"
         ) {
             return Err(ShellError::Server);
         }

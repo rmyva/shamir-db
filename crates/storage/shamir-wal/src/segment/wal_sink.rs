@@ -18,12 +18,8 @@ use crate::wal_segment::WalSegment;
 // off; the flag is never armed outside tests, so production cost is one
 // relaxed load per fsync.
 static FILE_FAIL_NEXT_SYNC: AtomicBool = AtomicBool::new(false);
-// Test-only seal-fsync fault (RV-WAL-3B29232E): fails the next SEAL fsync in
-// `SegmentSet::seal_and_rotate` — models the fsync failing after the frames
-// were written, exactly the outcome the WAL cannot prove rolled back (the
-// window's tickets settle UNKNOWN → indeterminate). Compiled unconditionally
-// because the consumer is a CROSS-CRATE test (shamir-engine).
-static FILE_FAIL_NEXT_SEAL_SYNC: AtomicBool = AtomicBool::new(false);
+// Test-only seal-fsync fault (RV-WAL-3B29232E) lives on the individual
+// SegmentSet/WAL instance; it is not shared between repositories.
 static FILE_PAUSE_NEXT_SYNC: AtomicBool = AtomicBool::new(false);
 static FILE_SYNC_PAUSED: Notify = Notify::const_new();
 static FILE_SYNC_RESUME: Notify = Notify::const_new();
@@ -36,18 +32,20 @@ async fn file_sync_pause_point() {
 }
 
 impl WalSink {
-    /// Test-only: fail the next SEAL fsync inside `SegmentSet::seal_and_rotate`
-    /// — the fsync fires AFTER the segment's frames were written, so the
-    /// outcome is unprovable (tickets go UNKNOWN). Cross-crate test seam (see
-    /// the static above for why this is not `cfg(test)`).
+    /// Test-only: fail this file-backed sink's next SEAL fsync inside
+    /// `SegmentSet::seal_and_rotate`. The fault belongs to this repository's
+    /// WAL instance and is consumed once after frames are written.
     #[doc(hidden)]
-    pub fn arm_fail_next_seal_sync_for_test() {
-        FILE_FAIL_NEXT_SEAL_SYNC.store(true, Ordering::Release);
+    pub fn arm_fail_next_seal_sync_for_test(&self) {
+        match self {
+            Self::File(segments) => segments.arm_fail_next_seal_sync_for_test(),
+            Self::Mem(_) => panic!("seal fsync failure is File-only"),
+        }
     }
 
     /// Test-only: take the pending seal-fsync fault flag (one-shot).
-    pub(crate) fn take_fail_next_seal_sync_for_test() -> bool {
-        FILE_FAIL_NEXT_SEAL_SYNC.swap(false, Ordering::AcqRel)
+    pub(crate) fn take_fail_next_seal_sync_for_test(flag: &AtomicBool) -> bool {
+        flag.swap(false, Ordering::AcqRel)
     }
 
     /// Test-only: park the next File-sink `sync()` until

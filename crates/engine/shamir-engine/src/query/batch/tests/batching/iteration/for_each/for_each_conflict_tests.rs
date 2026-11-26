@@ -335,8 +335,14 @@ async fn transactional_body_indeterminate_commit_stops_the_loop_with_wal_require
     };
     let req = wrap_for_each(fe);
 
-    shamir_wal::WalSink::arm_fail_next_seal_sync_for_test();
-    let result = execute_batch(&req, &resolver, None, None, Actor::System, "test").await;
+    let wal = repo.wal_group().await.unwrap();
+    wal.arm_fail_next_seal_sync_for_test();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        execute_batch(&req, &resolver, None, None, Actor::System, "test"),
+    )
+    .await
+    .expect("ForEach indeterminate execution must finish within 120 seconds");
 
     let err = result.expect_err("an indeterminate outcome must fail the loop");
     assert_eq!(

@@ -38,6 +38,7 @@ use shamir_query_builder::ddl;
 use crate::engine::repo::repo_types::BoxRepoFactory;
 use crate::engine::repo::RepoConfig;
 use crate::engine::table::TableConfig;
+use crate::query::batch::{BatchError, BatchRequest, BatchResponse};
 use crate::shamir_db::{PrincipalInfo, PrincipalResolver, ShamirDb};
 use shamir_types::access::{
     principal64_from_username, Actor, ResourceMeta, ResourcePath, OWNER_SYSTEM,
@@ -765,8 +766,6 @@ async fn access_tree_depth_caps_the_hierarchy() {
 
 #[tokio::test]
 async fn access_tree_dispatch_admin_gate_denies_non_admin() {
-    use crate::query::batch::{BatchError, BatchRequest, BatchResponse};
-
     let shamir = ShamirDb::init_memory().await.unwrap();
     shamir.create_db("testdb").await.expect("create_db");
     let config =

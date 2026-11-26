@@ -199,13 +199,15 @@ pub fn start_export(database: impl Into<String>) -> StartExport {
     }
 }
 
-/// Builder for [`StartExportOp`]. The online export job itself is
-/// disabled in this release (see the operations guide): these ops are
-/// typed against the agreed wire contract only.
+/// Builder for [`StartExportOp`]. The online export job itself is live
+/// in this release: these ops drive the running job, not just the
+/// agreed wire contract.
 ///
 /// Infallible by design: there are no required optional fields, so
-/// `build()` cannot fail. No scope validation (e.g. `table` requires
-/// `repo`) exists in this phase — not here and not yet on the server.
+/// `build()` cannot fail. Scope validation lives on the SERVER, not
+/// here: `table` without `repo` builds fine, and the server's export
+/// scope check (`boot/config/diagnostics/logical/export_online/scope.rs`)
+/// rejects it at start with `online_export_invalid_scope`.
 pub struct StartExport {
     database: String,
     repo: Option<String>,
@@ -224,8 +226,9 @@ impl StartExport {
     /// Restrict the export to one table inside `.repo(..)`.
     ///
     /// The `table`-without-`repo` pairing is part of the wire contract,
-    /// but no scope check enforces it in this phase (the online job is
-    /// disabled); this builder accepts any combination.
+    /// but the BUILDER accepts any combination; the server's export
+    /// scope check rejects `table` without `repo` at start
+    /// (`online_export_invalid_scope`).
     pub fn table(mut self, table: impl Into<String>) -> Self {
         self.table = Some(table.into());
         self

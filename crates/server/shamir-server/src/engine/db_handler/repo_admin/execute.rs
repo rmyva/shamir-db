@@ -348,7 +348,7 @@ impl ShamirDbHandler {
         let control_op =
             single_cancel.is_some() || single_cancel_tx.is_some() || single_cancel_cursor.is_some();
         // Keep the request slot through response encoding on tracked paths.
-        let in_flight;
+        let mut in_flight;
         let mut typed_canonical_refusal = false;
         let final_response = if let Some(id) = single_cancel {
             // Cancel must reach saturated work even if its session has no slots
@@ -370,7 +370,7 @@ impl ShamirDbHandler {
                 Err(()) => return server_busy_response(),
             };
             let exec_id = in_flight.id();
-            let cancel = in_flight.cancel_handle();
+            let cancel = std::sync::Arc::clone(in_flight.cancel_handle());
 
             // Listing is tracked but never parks behind the shared byte budget.
             // Other requests register first so operators can see and wake them.
@@ -389,7 +389,7 @@ impl ShamirDbHandler {
             if needs_budget {
                 budget_guard = self
                     .byte_budget
-                    .acquire_cancellable(reservation_bytes, cancel)
+                    .acquire_cancellable(reservation_bytes, &cancel)
                     .await;
             }
             if needs_budget && budget_guard.is_none() {
@@ -439,8 +439,11 @@ impl ShamirDbHandler {
                 let maintenance_enrolled =
                     self.maintenance.is_some() && batch_needs_maintenance_admission(&batch);
                 let exec_result = if maintenance_enrolled {
-                    // Acquire before spawning, then move both permits into the
-                    // detachable worker so disconnect cannot admit overlapping writes.
+                    // Acquire before spawning, then move the permits AND the
+                    // in-flight activity guard (with its per-session request
+                    // slot) into the detachable worker: on disconnect the
+                    // waiter's future drops, and the worker must keep the
+                    // request tracked and cancellable for its whole execution.
                     let Ok(slot) = self.try_owned_mutation_slot() else {
                         return server_busy_response();
                     };
@@ -452,37 +455,85 @@ impl ShamirDbHandler {
                     let worker_batch = batch.clone();
                     let worker_actor = actor.clone();
                     let worker_policy = self.execution_policy();
-                    let worker_cancel = std::sync::Arc::clone(cancel);
+                    let worker_cancel = std::sync::Arc::clone(&cancel);
+                    let worker_in_flight = in_flight;
+                    // Boot-replay registry (item 5): the lifecycle record
+                    // must happen INSIDE the owned, maintenance-admitted
+                    // operation — the reply side can be dropped by a
+                    // disconnect while the worker's DropTable already
+                    // succeeded, which would leave the table in the
+                    // registry and let a restart recreate it.
+                    let worker_registry = self
+                        .admin
+                        .as_ref()
+                        .and_then(|admin| admin.tables_registry.clone());
                     let worker = self.owned_mutation_tasks().spawn(
                         async move {
-                            let _slot = slot;
-                            let _maintenance = maintenance;
-                            db.execute_with_policy_and_repo_observer_and_cancel(
-                                worker_actor,
-                                &worker_db_name,
-                                &worker_batch,
-                                worker_policy,
-                                repo_observer,
-                                Some(worker_cancel),
-                            )
-                            .await
+                            let (_slot, _maintenance, _in_flight) =
+                                (slot, maintenance, worker_in_flight);
+                            let result = db
+                                .execute_with_policy_and_repo_observer_and_cancel(
+                                    worker_actor,
+                                    &worker_db_name,
+                                    &worker_batch,
+                                    worker_policy,
+                                    repo_observer,
+                                    Some(worker_cancel),
+                                )
+                                .await;
+                            if result.is_ok() {
+                                persist_table_lifecycle(
+                                    worker_registry.as_deref(),
+                                    &worker_db_name,
+                                    &worker_batch,
+                                );
+                            }
+                            (result, _in_flight)
                         }
                         .in_current_span(),
                     );
-                    match worker.await {
-                        Ok(result) => result,
-                        Err(error) => {
-                            tracing::error!(
-                                panicked = error.is_panic(),
-                                request_exec_id = exec_id.0,
-                                "mutation worker failed",
-                            );
-                            return static_error(
-                                "internal_error",
-                                "cannot complete database request",
-                            );
+                    // Explicit disconnect cancellation: if this waiter (the
+                    // connection's request future) is dropped mid-execution,
+                    // the shared cancel handle fires through the guard below.
+                    // The guard is DISARMED on every normal exit of the
+                    // await (worker result, worker panic, spawn refusal):
+                    // the engine does not necessarily leave the handle
+                    // terminal — a batch rejected during authorization or
+                    // planning returns while it is still `Running` — so an
+                    // armed drop there would mask the real error with
+                    // `cancelled`.
+                    let disconnect_cancel =
+                        crate::db_handler::DisconnectCancel::new(std::sync::Arc::clone(&cancel));
+                    let exec_result = match worker {
+                        Some(worker) => match worker.await {
+                            Ok((result, returned)) => {
+                                in_flight = returned;
+                                disconnect_cancel.disarm();
+                                result
+                            }
+                            Err(error) => {
+                                tracing::error!(
+                                    panicked = error.is_panic(),
+                                    request_exec_id = exec_id.0,
+                                    "mutation worker failed",
+                                );
+                                disconnect_cancel.disarm();
+                                return static_error(
+                                    "internal_error",
+                                    "cannot complete database request",
+                                );
+                            }
+                        },
+                        // Shutdown closed worker admission; refuse instead of
+                        // starting work the flush cannot wait for. No worker
+                        // exists, so the guard must not fire on the drop.
+                        None => {
+                            disconnect_cancel.disarm();
+                            return server_busy_response();
                         }
-                    }
+                    };
+                    drop(disconnect_cancel);
+                    exec_result
                 } else {
                     self.db
                         .execute_with_policy_and_repo_observer_and_cancel(
@@ -524,13 +575,19 @@ impl ShamirDbHandler {
                                     "slow query",
                                 );
                             }
-                            persist_table_lifecycle(
-                                self.admin
-                                    .as_ref()
-                                    .and_then(|admin| admin.tables_registry.as_deref()),
-                                db_name,
-                                &batch,
-                            );
+                            // Maintenance-enrolled batches already recorded
+                            // their table lifecycle inside the owned worker
+                            // (item 5); a dropped waiter must not double-run
+                            // (nor skip) the registry update.
+                            if !maintenance_enrolled {
+                                persist_table_lifecycle(
+                                    self.admin
+                                        .as_ref()
+                                        .and_then(|admin| admin.tables_registry.as_deref()),
+                                    db_name,
+                                    &batch,
+                                );
+                            }
                             let activation_failed = subscribe_handler::activate_subscriptions(
                                 conn,
                                 &self.db,

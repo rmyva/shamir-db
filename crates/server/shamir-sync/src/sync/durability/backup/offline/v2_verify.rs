@@ -2,6 +2,8 @@
 //! verify"): child module of `offline.rs`, one primary item
 //! ([`verify_manifest_v2`]). Pure file inspection — no engine open.
 
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,7 +12,7 @@ use shamir_collections::new_fx_set_wc;
 
 use super::super::online::manifest::{self as online_manifest, BackupKind};
 use super::{
-    hash_file_streaming, is_cache_manifest_path, BackupError, ManifestVerifyReport,
+    hash_file_streaming, is_cache_manifest_path, BackupError, HashCancelled, ManifestVerifyReport,
     MANIFEST_FILE_NAME,
 };
 
@@ -76,6 +78,57 @@ pub(super) fn decode_manifest_v2(raw: &[u8]) -> Result<online_manifest::Manifest
     Ok(decoded)
 }
 
+#[cfg(test)]
+thread_local! {
+    static WAL_REHASH_ACTIVE: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(test)]
+struct WalRehashTestGuard;
+
+#[cfg(test)]
+impl WalRehashTestGuard {
+    fn enter() -> Self {
+        WAL_REHASH_ACTIVE.with(|active| active.set(true));
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for WalRehashTestGuard {
+    fn drop(&mut self) {
+        WAL_REHASH_ACTIVE.with(|active| active.set(false));
+    }
+}
+
+/// True only while the verifier is executing the WAL-loop re-hash. The
+/// retention cancellation test uses this cfg(test) probe so the cancel fires
+/// inside the exact re-hash site regardless of short non-EOF file reads.
+#[cfg(test)]
+pub(super) fn wal_rehash_active_for_test() -> bool {
+    WAL_REHASH_ACTIVE.with(Cell::get)
+}
+
+/// Wrap a streaming-hash error with path context WITHOUT losing a typed
+/// cancellation: `hash_file_streaming` marks the retention cancel hook's
+/// abort with a [`HashCancelled`] payload inside the `io::Error`, and the
+/// retention classifier (`retention/preflight.rs::classify_verifier_error`)
+/// decides on exactly that payload. Re-wrapping the error into a fresh
+/// string payload would turn a deliberate cancellation into an ordinary
+/// incomplete read.
+fn hash_error(context: String, error: std::io::Error) -> BackupError {
+    if error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<HashCancelled>())
+    {
+        return BackupError::Io(error);
+    }
+    BackupError::Io(std::io::Error::new(
+        error.kind(),
+        format!("{context}: {error}"),
+    ))
+}
+
 /// Payload half of [`verify_manifest_v2`] over the ALREADY-decoded manifest
 /// from [`decode_manifest_v2`] (one parse, no re-read): stamp agreement,
 /// confinement, tree walk and re-hash, WAL rules, file-set check.
@@ -135,12 +188,8 @@ pub(super) fn verify_decoded_manifest_v2(
             }
         }
         let file_path = confined_snapshot_path(snapshot_dir, &entry.path)?;
-        let (digest, actual_size) = hash_file_streaming(&file_path, cancel).map_err(|e| {
-            BackupError::Io(std::io::Error::new(
-                e.kind(),
-                format!("manifest entry {}: {e}", entry.path),
-            ))
-        })?;
+        let (digest, actual_size) = hash_file_streaming(&file_path, cancel)
+            .map_err(|e| hash_error(format!("manifest entry {}", entry.path), e))?;
         let actual_sha256 = hex::encode(digest);
         if actual_size != entry.size_bytes || actual_sha256 != entry.sha256 {
             return Err(BackupError::ChecksumMismatch {
@@ -215,12 +264,15 @@ pub(super) fn verify_decoded_manifest_v2(
                 }
                 declared_wal_names.insert(format!("{:08}.wal", segment.seq));
                 let segment_path = confined_snapshot_path(snapshot_dir, &segment.file)?;
-                let (digest, size) = hash_file_streaming(&segment_path, cancel).map_err(|e| {
-                    BackupError::Io(std::io::Error::new(
-                        e.kind(),
-                        format!("wal segment {}: {e}", segment.file),
-                    ))
-                })?;
+                // The test marker covers only the hash itself, not the digest
+                // and sidecar checks that follow.
+                let hashed = {
+                    #[cfg(test)]
+                    let _wal_rehash_test_guard = WalRehashTestGuard::enter();
+                    hash_file_streaming(&segment_path, cancel)
+                };
+                let (digest, size) =
+                    hashed.map_err(|e| hash_error(format!("wal segment {}", segment.file), e))?;
                 let actual = hex::encode(digest);
                 if actual != segment.sha256 || size != segment.size {
                     return Err(BackupError::ChecksumMismatch {
@@ -614,4 +666,45 @@ pub(super) fn collect_relative_file_paths(
         }
     }
     Ok(())
+}
+
+/// Cheap format-version peek so v2 snapshots route to the v2 verifier
+/// while v1 keeps its own manifest rules (design 4.5).
+pub(super) fn peek_manifest_format_version(raw: &[u8]) -> Option<u32> {
+    let value: serde_json::Value = serde_json::from_slice(raw).ok()?;
+    value
+        .get("format_version")?
+        .as_u64()
+        .map(|version| version as u32)
+}
+
+/// The exact decoded manifest a successful verification already produced,
+/// handed to the caller without a second parse of `manifest.json`.
+/// `pub(super)` — restore.rs is the intended consumer, via the offline
+/// re-export. One enum per version so consumers derive the version's
+/// rules (inventory exemptions) from the variant, never a second decode.
+#[derive(Debug)]
+pub(in crate::sync::durability::backup) enum VerifiedManifest {
+    /// A v1 (offline stop-and-copy) manifest.
+    V1(super::Manifest),
+    /// A v2 (online) manifest.
+    V2(online_manifest::ManifestV2),
+}
+
+impl VerifiedManifest {
+    /// The manifest's file list, verbatim as verified.
+    pub(in crate::sync::durability::backup) fn files(&self) -> &[super::ManifestFileEntry] {
+        match self {
+            VerifiedManifest::V1(manifest) => &manifest.files,
+            VerifiedManifest::V2(manifest) => &manifest.files,
+        }
+    }
+
+    /// Whether this manifest's VERSION exempts the root `backup.meta.json`
+    /// sidecar from the on-disk inventory (v2: yes, v1: no) — the same
+    /// rule each verifier applies, derived here from the variant itself
+    /// so the restore-side ledger can mirror its verifier exactly.
+    pub(in crate::sync::durability::backup) fn allows_backup_meta(&self) -> bool {
+        matches!(self, VerifiedManifest::V2(_))
+    }
 }

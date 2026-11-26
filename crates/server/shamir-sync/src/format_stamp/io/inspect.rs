@@ -1,6 +1,7 @@
 //! Read-only classification of the stamp location (design 2.5).
 
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 
 use crate::format_stamp::codec::{decode, STAMP_FILE_NAME, STAMP_TMP_NAME};
@@ -25,16 +26,23 @@ pub enum StampState {
 /// corrupt (fail closed: the epoch cannot be determined).
 pub fn inspect(dir: &Path) -> StampState {
     let stamp_path = dir.join(STAMP_FILE_NAME);
-    if !stamp_path.exists() {
-        return StampState::Absent {
-            leftover_tmp: dir.join(STAMP_TMP_NAME).exists(),
+    let Ok(mut file) = crate::sync::durability::backup::open_plain_snapshot_file(&stamp_path)
+    else {
+        return match fs::symlink_metadata(&stamp_path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => StampState::Absent {
+                leftover_tmp: dir.join(STAMP_TMP_NAME).exists(),
+            },
+            _ => StampState::Corrupt {
+                kind: CorruptKind::ShortFile,
+            },
         };
-    }
-    let Ok(bytes) = fs::read(&stamp_path) else {
+    };
+    let mut bytes = Vec::new();
+    if file.read_to_end(&mut bytes).is_err() {
         return StampState::Corrupt {
             kind: CorruptKind::ShortFile,
         };
-    };
+    }
     match decode(&bytes, dir) {
         Ok(stamp) => StampState::Valid(stamp),
         Err(StampError::Corrupt { kind, .. }) => StampState::Corrupt { kind },

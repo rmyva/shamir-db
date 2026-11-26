@@ -368,6 +368,10 @@ impl<'a> QueryRunner<'a> {
             // for why hoisting it out of the loop is sound. `plan` is then
             // reused (via a fresh `&mut` reborrow) by every iteration below.
             self.scope.check()?;
+            // KNOWN LIMIT (task #2007 5f): a typed empty-alias `server_busy` passes
+            // through nested wrappers unchanged; the fixed error envelope cannot tell
+            // "nothing published" from "partly published", so a mixed batch must not
+            // be retried on this code.
             let wrap_for_each_body_err = |e: BatchError| match e {
                 e if is_typed_refusal(&e) => e,
                 limit_error @ (BatchError::ExecutionTimedOut { .. }
@@ -389,6 +393,11 @@ impl<'a> QueryRunner<'a> {
                 .await
                 .map_err(wrap_for_each_body_err)?;
 
+            // KNOWN LIMIT (task #2007 5g): with the engine result meter ON, a cap
+            // below the ForEach container shell (`ResultSize::SHELL` + empty result)
+            // rejects the container HERE, before iteration 0, as
+            // `LimitExceeded(ResultBytes)` — not later as a whole-response
+            // `result_too_large`.
             if self.scope.enforce_result_size() {
                 self.scope.charge_bytes(
                     ResultSize::result(&QueryResult::default()).saturating_add(ResultSize::SHELL),

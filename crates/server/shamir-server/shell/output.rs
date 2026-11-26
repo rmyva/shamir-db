@@ -119,13 +119,16 @@ pub(crate) enum ShellError {
     /// The node is a follower: application-schema status is refused there
     /// (`schema_migration_follower_read_only`).
     SchemaMigrationFollowerReadOnly,
-    /// The command depends on a capability this release does not carry
-    /// (R2d backup schedule state, R3 online export); never a placeholder
-    /// success (`unsupported_prerequisite`).
-    PendingCapability,
-    /// A node-local online-copy operation failed on I/O (destination setup or
-    /// the runner thread): `backup_io_error`.
+    /// An I/O error inside the online-backup runner (`backup_io_error`).
     BackupIo,
+    /// An online export was refused because the shared export slot is busy.
+    ExportBusy,
+    /// The export runner is unavailable or not configured.
+    ExportUnavailable,
+    /// Batch export status/cancel cannot address a job started in another session.
+    ExportSessionOnly,
+    /// No export job is visible to this session.
+    ExportNotFound,
 }
 
 impl ShellError {
@@ -182,8 +185,11 @@ impl ShellError {
             ShellError::BackupUnavailable => "backup_unavailable",
             ShellError::OnlineBackupFollowerReadOnly => "online_backup_follower_read_only",
             ShellError::SchemaMigrationFollowerReadOnly => "schema_migration_follower_read_only",
-            ShellError::PendingCapability => "unsupported_prerequisite",
             ShellError::BackupIo => "backup_io_error",
+            ShellError::ExportBusy => "online_export_already_running",
+            ShellError::ExportSessionOnly => "export_session_only",
+            ShellError::ExportUnavailable => "online_export_unavailable",
+            ShellError::ExportNotFound => "online_export_not_found",
         }
     }
 
@@ -303,12 +309,11 @@ impl ShellError {
             ShellError::SchemaMigrationFollowerReadOnly => {
                 "this node is a read-only replica and has no consistent migration-journal view; ask the leader"
             }
-            ShellError::PendingCapability => {
-                "this command depends on a capability that is not part of this release and is never reported as a success"
-            }
-            ShellError::BackupIo => {
-                "the online copy failed on an I/O error on the server node; its own message text is never reproduced"
-            }
+            ShellError::BackupIo => "the online copy failed on an I/O error on the server node; its own message text is never reproduced",
+            ShellError::ExportSessionOnly => "an export job belongs to the session that started it",
+            ShellError::ExportBusy => "an online export job is already running on this server; wait for it to finish or cancel it",
+            ShellError::ExportUnavailable => "online export is not configured or unavailable on this node",
+            ShellError::ExportNotFound => "no online export job is visible to this session",
         }
     }
 
@@ -320,6 +325,7 @@ impl ShellError {
             | ShellError::MissingTty
             | ShellError::InvalidRecordId
             | ShellError::InvalidMode => 1,
+            ShellError::ExportSessionOnly => 1,
             ShellError::Connection => 2,
             ShellError::Authentication => 3,
             ShellError::Denied | ShellError::TokenRequestDenied => 4,
@@ -342,7 +348,10 @@ impl ShellError {
             | ShellError::BackupUnavailable
             | ShellError::OnlineBackupFollowerReadOnly
             | ShellError::SchemaMigrationFollowerReadOnly
-            | ShellError::BackupIo => 5,
+            | ShellError::BackupIo
+            | ShellError::ExportBusy
+            | ShellError::ExportUnavailable
+            | ShellError::ExportNotFound => 5,
             ShellError::Unsupported
             | ShellError::Plaintext
             | ShellError::Token
@@ -359,8 +368,7 @@ impl ShellError {
             | ShellError::SecretTooLong
             | ShellError::SecretSourceConflict
             | ShellError::RootMutation
-            | ShellError::ConfirmationRequired
-            | ShellError::PendingCapability => 6,
+            | ShellError::ConfirmationRequired => 6,
             #[cfg(windows)]
             ShellError::SecretFdWindows => 6,
             ShellError::Timeout | ShellError::HeadWallTime => 7,

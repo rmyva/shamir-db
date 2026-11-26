@@ -95,13 +95,16 @@ struct ScheduleCell {
     generation: u64,
     info: ScheduleInfo,
     last_run: Option<ScheduledLastRun>,
-    next_run_unix_ns: Option<u64>,
+    /// u128 on purpose: the runner's publish closure is the u64 adapter and
+    /// it no longer clamps, so an interval beyond u64::MAX nanos keeps its
+    /// real stamp; `None` (published as ns == 0) means "no next run".
+    next_run_unix_ns: Option<u128>,
 }
 
 pub(crate) struct ScheduleStateSnapshot {
     pub info: ScheduleInfo,
     pub last_run: Option<ScheduledLastRun>,
-    pub next_run_unix_ns: Option<u64>,
+    pub next_run_unix_ns: Option<u128>,
     pub scheduled_runs: [u64; 5],
     pub scheduled_failure_streak: u64,
     pub retention_deleted_total: u64,
@@ -130,7 +133,6 @@ struct BackupMetricsState {
     retention_deleted: AtomicU64,
     retention_failed: AtomicU64,
     retention_untouched: AtomicU64,
-    schedule: ArcSwapOption<ScheduleCell>,
 }
 
 impl BackupMetricsState {
@@ -157,14 +159,12 @@ impl BackupMetricsState {
             retention_deleted: AtomicU64::new(0),
             retention_failed: AtomicU64::new(0),
             retention_untouched: AtomicU64::new(0),
-            schedule: ArcSwapOption::empty(),
         }
     }
 }
 
 static STATE: LazyLock<BackupMetricsState> = LazyLock::new(BackupMetricsState::new);
 static SOURCE_INSTALLED: OnceLock<()> = OnceLock::new();
-static SCHEDULE_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// Process-wide durable meta handle used to persist the last-success stamp.
 ///
@@ -258,105 +258,140 @@ pub fn backup_metrics_snapshot() -> BackupMetricsSnapshot {
     }
 }
 
-/// Installing a schedule starts it with no last-run and no next-run record.
-pub(crate) fn install_schedule_info(info: ScheduleInfo) -> u64 {
-    // Generations start at 1; exhausting a u64 counter is unreachable.
-    let generation = SCHEDULE_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
-    STATE.schedule.store(Some(Arc::new(ScheduleCell {
-        generation,
-        info,
-        last_run: None,
-        next_run_unix_ns: None,
-    })));
-    generation
+/// PER-REGISTRY schedule state (item 3): the live-schedule cell and its
+/// generation counter live here — one instance owned by each
+/// [`OnlineBackupRegistry`] — never in a process global, so two servers in
+/// one process report their own schedule sections. The registry shares this
+/// handle with its scheduler (`spawn`) and its runner thread; the adapter
+/// (`admin_port`) reads it for the BackupStatus `schedule` section.
+pub(crate) struct ScheduleState {
+    cell: ArcSwapOption<ScheduleCell>,
+    generation: AtomicU64,
 }
 
-/// Replace the live cell with an updated copy through one compare-and-swap
-/// loop. With `owner` the update applies only while that generation is still
-/// installed; without it, to whatever schedule is installed.
-fn update_schedule_cell(owner: Option<u64>, apply: impl Fn(&mut ScheduleCell)) {
-    STATE.schedule.rcu(|current| match current {
-        Some(cell) if owner.is_none_or(|generation| generation == cell.generation) => {
-            let mut next = (**cell).clone();
-            apply(&mut next);
-            Some(Arc::new(next))
+impl Default for ScheduleState {
+    fn default() -> Self {
+        Self {
+            cell: ArcSwapOption::empty(),
+            generation: AtomicU64::new(0),
         }
-        other => other.clone(),
-    });
+    }
 }
 
-/// Only the live scheduler may publish the next-run cell.
-pub(crate) fn note_next_run_unix_ns(generation: u64, ns: u64) {
-    update_schedule_cell(Some(generation), |cell| {
-        cell.next_run_unix_ns = (ns != 0).then_some(ns);
-    });
-}
+impl ScheduleState {
+    /// Installing a schedule starts it with no last-run and no next-run
+    /// record. Generations start at 1 and are PER-REGISTRY: they order
+    /// replacement schedulers of THIS registry only (an older scheduler's
+    /// exit never clears a newer one of the same registry, and never touches
+    /// another registry's cell).
+    pub(crate) fn install_schedule_info(&self, info: ScheduleInfo) -> u64 {
+        let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
+        self.cell.store(Some(Arc::new(ScheduleCell {
+            generation,
+            info,
+            last_run: None,
+            next_run_unix_ns: None,
+        })));
+        generation
+    }
 
-/// Only the live scheduler starts scheduled runs, so this is the live
-/// schedule's last-run record. The registry does not know the generation: a
-/// run admitted by a scheduler that was replaced while the run was in flight
-/// still publishes into the new schedule (in-process replacement only).
-pub(crate) fn note_schedule_last_run(run: ScheduledLastRun) {
-    update_schedule_cell(None, |cell| cell.last_run = Some(run.clone()));
-}
+    /// Replace the live cell with an updated copy through one
+    /// compare-and-swap loop. With `owner` the update applies only while that
+    /// generation is still installed; without it, to whatever schedule is
+    /// installed.
+    fn update(&self, owner: Option<u64>, apply: impl Fn(&mut ScheduleCell)) {
+        self.cell.rcu(|current| match current {
+            Some(cell) if owner.is_none_or(|generation| generation == cell.generation) => {
+                let mut next = (**cell).clone();
+                apply(&mut next);
+                Some(Arc::new(next))
+            }
+            other => other.clone(),
+        });
+    }
 
-/// Publish the scheduled run's own typed outcome at the registry's FINAL
-/// publication (before `running = false`), using a stable, path-free vocabulary.
-/// A failure keeps the once-only log with identical message and fields.
-pub(crate) fn note_scheduled_run_outcome(
-    outcome: &Result<BackupReport, OnlineBackupError>,
-    started_at_unix_ns: u128,
-) {
-    let (result, stage, reason) = match outcome {
-        Ok(_) => ("completed", "done".to_string(), None),
-        Err(error) => {
-            let rendered = error.stage_and_reason();
-            let (stage, reason) = match rendered.split_once(": ") {
-                Some((stage, reason)) => (stage.to_string(), Some(reason.to_string())),
-                None => (rendered.clone(), None),
-            };
-            tracing::warn!(
-                stage = stage.as_str(),
-                reason = reason.as_deref().unwrap_or(""),
-                "scheduled backup run failed"
-            );
-            let result = if matches!(error, OnlineBackupError::Cancelled { .. }) {
-                "cancelled"
-            } else {
-                "failed"
-            };
-            (result, stage, reason)
-        }
-    };
-    note_schedule_last_run(ScheduledLastRun {
-        started_at_unix_ns,
-        result,
-        stage,
-        reason,
-    });
-}
+    /// Only the live scheduler may publish the next-run cell.
+    pub(crate) fn note_next_run_unix_ns(&self, generation: u64, ns: u128) {
+        self.update(Some(generation), |cell| {
+            cell.next_run_unix_ns = (ns != 0).then_some(ns);
+        });
+    }
 
-/// An older scheduler's exit must not clear a newer generation.
-pub(crate) fn clear_schedule_state_if(generation: u64) {
-    STATE.schedule.rcu(|current| match current {
-        Some(cell) if cell.generation == generation => None,
-        other => other.clone(),
-    });
-}
+    /// Only the live scheduler starts scheduled runs, so this is the live
+    /// schedule's last-run record. The runner does not know the generation: a
+    /// run admitted by a scheduler that was replaced while the run was in
+    /// flight still publishes into the new schedule (in-registry replacement
+    /// only).
+    pub(crate) fn note_schedule_last_run(&self, run: ScheduledLastRun) {
+        self.update(None, |cell| cell.last_run = Some(run.clone()));
+    }
 
-/// A status read takes plain loads only: the metrics snapshot's scrape-time
-/// `fetch_min` write-back must not run on a BackupStatus read.
-pub(crate) fn schedule_state() -> Option<ScheduleStateSnapshot> {
-    let cell = STATE.schedule.load_full()?;
-    Some(ScheduleStateSnapshot {
-        info: cell.info.clone(),
-        last_run: cell.last_run.clone(),
-        next_run_unix_ns: cell.next_run_unix_ns,
-        scheduled_runs: std::array::from_fn(|i| STATE.scheduled_runs[i].load(Ordering::Relaxed)),
-        scheduled_failure_streak: STATE.scheduled_failure_streak.load(Ordering::Acquire),
-        retention_deleted_total: STATE.retention_deleted.load(Ordering::Relaxed),
-        retention_failed_total: STATE.retention_failed.load(Ordering::Relaxed),
-    })
+    /// Publish the scheduled run's own typed outcome at the registry's FINAL
+    /// publication (before `running = false`), using a stable, path-free
+    /// vocabulary. A failure keeps the once-only log with identical message
+    /// and fields.
+    ///
+    /// The failure warning is deliberately NOT emitted here: this runs under
+    /// the registry's `RunRecord` lock, and a (potentially slow) tracing
+    /// subscriber must never extend that admission lock. The failure's
+    /// `(stage, reason)` pair is returned so the CALLER logs it after
+    /// releasing the lock, under the registry's own target.
+    pub(crate) fn note_scheduled_run_outcome(
+        &self,
+        outcome: &Result<BackupReport, OnlineBackupError>,
+        started_at_unix_ns: u128,
+    ) -> Option<(String, Option<String>)> {
+        let (result, stage, reason) = match outcome {
+            Ok(_) => ("completed", "done".to_string(), None),
+            Err(error) => {
+                let rendered = error.stage_and_reason();
+                let (stage, reason) = match rendered.split_once(": ") {
+                    Some((stage, reason)) => (stage.to_string(), Some(reason.to_string())),
+                    None => (rendered.clone(), None),
+                };
+                let result = if matches!(error, OnlineBackupError::Cancelled { .. }) {
+                    "cancelled"
+                } else {
+                    "failed"
+                };
+                (result, stage, reason)
+            }
+        };
+        self.note_schedule_last_run(ScheduledLastRun {
+            started_at_unix_ns,
+            result,
+            stage: stage.clone(),
+            reason: reason.clone(),
+        });
+        outcome.is_err().then_some((stage, reason))
+    }
+
+    /// An older scheduler's exit must not clear a newer generation.
+    pub(crate) fn clear_schedule_state_if(&self, generation: u64) {
+        self.cell.rcu(|current| match current {
+            Some(cell) if cell.generation == generation => None,
+            other => other.clone(),
+        });
+    }
+
+    /// A status read takes plain loads only: the metrics snapshot's
+    /// scrape-time `fetch_min` write-back must not run on a BackupStatus
+    /// read. The run/retention counters stay process-cumulative metrics
+    /// (§4.8); only the schedule cell itself is per-registry.
+    pub(crate) fn snapshot(&self) -> Option<ScheduleStateSnapshot> {
+        let cell = self.cell.load_full()?;
+        Some(ScheduleStateSnapshot {
+            info: cell.info.clone(),
+            last_run: cell.last_run.clone(),
+            next_run_unix_ns: cell.next_run_unix_ns,
+            scheduled_runs: std::array::from_fn(|i| {
+                STATE.scheduled_runs[i].load(Ordering::Relaxed)
+            }),
+            scheduled_failure_streak: STATE.scheduled_failure_streak.load(Ordering::Acquire),
+            retention_deleted_total: STATE.retention_deleted.load(Ordering::Relaxed),
+            retention_failed_total: STATE.retention_failed.load(Ordering::Relaxed),
+        })
+    }
 }
 
 fn install_snapshot_source() {

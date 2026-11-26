@@ -37,7 +37,18 @@ impl OnlineBackupAdminPort for OnlineBackupRegistry {
     }
 
     async fn status(&self) -> Result<QueryValue, OnlineBackupAdminError> {
-        Ok(snapshot_value(&self.status()))
+        let value = snapshot_value(&self.status());
+        // The `schedule` section comes from THIS registry's own schedule
+        // cell (item 3): a registry without a schedule reports no section,
+        // even when a sibling registry in the same process has one.
+        let mut value = match value {
+            QueryValue::Map(value) => value,
+            other => return Ok(other),
+        };
+        if let Some(schedule) = self.schedule_cell().snapshot() {
+            value.insert("schedule".to_string(), schedule_section_value(&schedule));
+        }
+        Ok(QueryValue::Map(value))
     }
 
     async fn cancel(&self) -> Result<QueryValue, OnlineBackupAdminError> {
@@ -109,9 +120,6 @@ fn snapshot_value(snapshot: &BackupStatusSnapshot) -> QueryValue {
             "last_error".to_string(),
             QueryValue::Str(last_error.clone()),
         );
-    }
-    if let Some(schedule) = super::metrics::schedule_state() {
-        value.insert("schedule".to_string(), schedule_section_value(&schedule));
     }
     QueryValue::Map(value)
 }

@@ -109,6 +109,16 @@ sudo systemctl start shamir-db
 
 Restore = stop service → `cp -r /backups/<timestamp>/* /var/lib/shamir-db/` → start.
 
+## Monitoring assets
+
+| File | Purpose |
+|------|---------|
+| `grafana/shamir-dashboard.json` | Grafana dashboard (schema v39) with process, load, auth, query, WAL, replication, visibility and admission views. |
+| `alerts/shamir.rules.yml` | Prometheus alert rules for WAL retention, replica lag, query errors, visibility blockers, authentication and admission saturation. |
+| `alerts/shamir-backup.rules.yml` | Backup-schedule alerts; kept separate to avoid duplicate backup alerts. |
+
+Common alert thresholds and installation instructions live in `alerts/shamir.rules.yml`; backup freshness/failure/retention expressions live in `alerts/shamir-backup.rules.yml`. Configure Prometheus `rule_files` with both files and validate/reload; import or provision `grafana/shamir-dashboard.json`.
+
 ## Scrape with Prometheus
 
 ```yaml
@@ -117,34 +127,21 @@ scrape_configs:
   - job_name: 'shamir-db'
     static_configs:
       - targets: ['shamir-db.internal:9090']
+rule_files:
+  - /etc/prometheus/rules/shamir.rules.yml
+  - /etc/prometheus/rules/shamir-backup.rules.yml
 ```
 
 Standard `process_*` series populate Grafana's
 [Process Exporter dashboard](https://grafana.com/grafana/dashboards/?search=process)
-out of the box.
+out of the box. The ShamirDB dashboard is `grafana/shamir-dashboard.json`.
 
-## Common alerts
+## Alerts
 
-```yaml
-# Liveness gone
-- alert: ShamirDbDown
-  expr: up{job="shamir-db"} == 0
-  for: 30s
-  labels: { severity: critical }
-
-# RAM pressure
-- alert: ShamirDbHighMemory
-  expr: process_resident_memory_bytes{job="shamir-db"} > 3.5e9
-  for: 5m
-  labels: { severity: warning }
-
-# Disk filling — alert when audit log dir crosses 80 % of expected
-# steady-state for the configured retention
-- alert: ShamirDbAuditDiskHigh
-  expr: node_filesystem_avail_bytes{mountpoint="/var/lib/shamir-db"} < 5e9
-  for: 5m
-  labels: { severity: warning }
-```
+Load `alerts/shamir.rules.yml` for ShamirDB operational rules and
+`alerts/shamir-backup.rules.yml` for backup freshness, failure-streak and
+retention rules. The backup file remains the sole source of backup alerts; do
+not duplicate them in application rules. See [§10 of the operations guide](../docs/guide-docs/guide/07-operations.md) for Prometheus `rule_files` wiring and Grafana provisioning/import steps.
 
 ## See also
 

@@ -1,9 +1,15 @@
 use tokio::sync::Barrier;
-use tokio_util::task::TaskTracker;
 
 use super::*;
 
 /// Mutant: remove the mutation_worker_join stage (or move it after the flush) → the flush probe fires while the worker is still parked → this test fails.
+///
+/// Not covered here: a REAL export worker queued behind a parked blocking pool.
+/// `OnlineExport::start` itself reads the settings catalogue through Fjall
+/// jobs submitted to the blocking pool, so the pool cannot be parked before
+/// `start` returns; that case needs a per-service rendezvous between the
+/// preparation and the worker submission (known limit of the export-tails
+/// component).
 #[test]
 fn shutdown_joins_owned_mutation_worker_before_flush() {
     on_big_stack(|| async {
@@ -25,7 +31,7 @@ async fn run_owned_mutation_worker_order() {
     create_private_dir(&data_dir).expect("private data directory");
     create_private_dir(&backups).expect("private backup directory");
 
-    let mut handle = timeout(
+    let handle = timeout(
         BOUND,
         ServerLauncher::new(backup_config(data_dir, backups))
             .with_bootstrap(BootstrapMode::Skip)
@@ -36,22 +42,31 @@ async fn run_owned_mutation_worker_order() {
     .expect("launch server fixture");
     guard.mark("launcher booted");
 
-    let tracker = Arc::new(TaskTracker::new());
+    // The launcher-installed production tracker: admission goes through the
+    // real fence (`MutationTasks::spawn`), the same instance the shutdown
+    // joins.
+    let tracker = Arc::clone(
+        handle
+            .owned_mutation_tasks
+            .as_ref()
+            .expect("the launcher-installed production mutation tracker"),
+    );
     let started = Arc::new(Barrier::new(2));
     let release = Arc::new(Barrier::new(2));
-    let worker = tracker.spawn({
-        let started = Arc::clone(&started);
-        let release = Arc::clone(&release);
-        async move {
-            timeout(BOUND, started.wait())
-                .await
-                .expect("worker start barrier bounded");
-            timeout(BOUND, release.wait())
-                .await
-                .expect("worker release barrier bounded");
-        }
-    });
-    handle.owned_mutation_tasks = Some(Arc::clone(&tracker));
+    let worker = tracker
+        .spawn({
+            let started = Arc::clone(&started);
+            let release = Arc::clone(&release);
+            async move {
+                timeout(BOUND, started.wait())
+                    .await
+                    .expect("worker start barrier bounded");
+                timeout(BOUND, release.wait())
+                    .await
+                    .expect("worker release barrier bounded");
+            }
+        })
+        .expect("the production admission fence must admit before shutdown");
     timeout(BOUND, started.wait())
         .await
         .expect("worker-start handshake bounded");

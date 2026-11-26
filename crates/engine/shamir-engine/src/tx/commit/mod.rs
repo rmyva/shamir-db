@@ -1,4 +1,5 @@
 pub(crate) mod acknowledgement;
+pub(crate) mod cold_open;
 pub(crate) mod core;
 pub(crate) mod pipeline;
 pub(crate) mod rename_fence;

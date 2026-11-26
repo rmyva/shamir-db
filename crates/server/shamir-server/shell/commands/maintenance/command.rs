@@ -32,8 +32,6 @@ pub(in crate::shell) enum MaintenanceCommand {
     BackupStatus,
     /// `backup cancel` — cancel the running online copy.
     BackupCancel { yes: bool },
-    /// `backup schedule show` — the scheduling view (not carried yet).
-    BackupScheduleShow,
     /// `version stamp` — the P1 format-stamp status view.
     VersionStamp,
     /// `version migrate` — explained-only format migration manual.
@@ -107,9 +105,7 @@ impl MaintenanceCommand {
 
     /// The local answer for commands the shell handles without a request.
     /// `None` means the command is remote and goes through [`execute`].
-    /// The explained-only manuals return their payload; the schedule view
-    /// is a capability this release does not carry, so it returns the
-    /// typed `PendingCapability` refusal instead of a placeholder success.
+    /// The explained-only manuals return their payload.
     pub(in crate::shell) fn local(&self) -> Option<Result<Value, ShellError>> {
         match self {
             MaintenanceCommand::BackupStart { .. }
@@ -119,7 +115,6 @@ impl MaintenanceCommand {
             | MaintenanceCommand::SchemaMigrationStatus { .. }
             | MaintenanceCommand::DiagWal
             | MaintenanceCommand::DiagDurability { .. } => None,
-            MaintenanceCommand::BackupScheduleShow => Some(Err(ShellError::PendingCapability)),
             MaintenanceCommand::VersionMigrate => Some(Explained::VersionMigrate.payload()),
             MaintenanceCommand::ExportLogical => Some(Explained::ExportLogical.payload()),
             MaintenanceCommand::ImportLogical => Some(Explained::ImportLogical.payload()),

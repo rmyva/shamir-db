@@ -1,5 +1,7 @@
 //! CancelRequest looks up ownership without taking a registry writer lock.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -47,6 +49,50 @@ impl ShamirDbHandler {
             }
         }
     }
+
+    /// Test-only: install the CONSUMED-ONCE pause that parks the inline
+    /// record-lock release (tail admission already closed) just after the
+    /// drop-guard exists but BEFORE the release future's first poll, so a
+    /// test can drop the cancel dispatch mid-guard and observe the guard's
+    /// detached fallback. After the rendezvous the dispatch stays parked until
+    /// the test aborts it. Shared across handler clones (`Arc`), per
+    /// instance; `take`n on the one firing.
+    #[cfg(test)]
+    pub(in crate::engine::db_handler) fn with_cancel_release_pause(
+        self,
+        tx_handle: u64,
+        reached: Arc<tokio::sync::Barrier>,
+    ) -> Self {
+        *self
+            .cancel_counters
+            .release_pause
+            .lock()
+            .expect("release pause mutex poisoned") = Some((tx_handle, reached));
+        self
+    }
+
+    /// The pause itself: fires at most ONCE, for the configured handle only.
+    #[cfg(test)]
+    pub(in crate::engine::db_handler) async fn pause_inline_release_once(&self, tx_handle: u64) {
+        // Take the barrier OUT of the guard and drop the guard BEFORE the
+        // await: a `std::sync::MutexGuard` must never be held across `.await`.
+        let reached = {
+            let mut guard = self
+                .cancel_counters
+                .release_pause
+                .lock()
+                .expect("release pause mutex poisoned");
+            guard.take().and_then(|(configured_handle, reached)| {
+                (configured_handle == tx_handle).then_some(reached)
+            })
+        };
+        if let Some(reached) = reached {
+            reached.wait().await;
+            // Stay parked after the rendezvous: the test aborts this dispatch
+            // while the guard is alive and the release is not yet polled.
+            std::future::pending::<()>().await;
+        }
+    }
 }
 
 use crate::engine::db_handler::handler::{session_actor, ShamirDbHandler};
@@ -77,12 +123,22 @@ pub(super) fn cancel_entry(entry: &RequestEntry) -> CancelOutcome {
 /// 1 `already_finished`, 2 `already_committing`, 3 `not_cancellable`.
 pub(in crate::engine::db_handler) struct CancelCounters {
     results: [AtomicU64; 4],
+    /// Test-only CONSUMED-ONCE pause: parks the inline record-lock release
+    /// (`release_tx_locks`, tail admission already closed) just after its
+    /// drop-guard exists but before the release future's first poll, so a
+    /// test can drop the cancel dispatch mid-guard and observe the guard's
+    /// detached fallback. Keyed by tx handle; shared across all handler
+    /// clones through this `Arc` (per instance).
+    #[cfg(test)]
+    release_pause: std::sync::Mutex<Option<(u64, Arc<tokio::sync::Barrier>)>>,
 }
 
 impl CancelCounters {
     pub(in crate::engine::db_handler) fn new() -> Self {
         Self {
             results: std::array::from_fn(|_| AtomicU64::new(0)),
+            #[cfg(test)]
+            release_pause: std::sync::Mutex::new(None),
         }
     }
 
@@ -239,8 +295,9 @@ impl ShamirDbHandler {
     /// awaited); a momentary hold by the commit path answers
     /// `already_committing` instead, since that handle is already reserved.
     /// An idle one has its Level-3 record locks released by a task the cancel
-    /// call awaits (the release survives the abort of the call, but a failed
-    /// release is only logged while the call still awaits it), since dropping
+    /// call awaits (the locks are gone before the reply; the release survives
+    /// the abort of the call, and a failed release is only logged while the
+    /// call still awaits it), since dropping
     /// the `Arc` frees none of them.
     pub(in crate::engine::db_handler) async fn cancel_tx(
         &self,
@@ -249,12 +306,7 @@ impl ShamirDbHandler {
     ) -> DbResponse {
         let (target_user_id, target, committing_row) = match self.tx_registry.peek(tx_handle) {
             TxParkedState::Open(tx) => (*tx.owner_user_id(), Some(tx), None),
-            // A `Committing` reservation parks no `Arc`; its projection row is
-            // the only ownership record. Retain its identity across auth.
-            TxParkedState::Committing => match self.tx_registry.activity_row(tx_handle) {
-                Some(row) => (*row.user_id(), None, Some(row)),
-                None => return self.cancel_reply(CancelOutcome::AlreadyFinished),
-            },
+            TxParkedState::Committing(tx) => (*tx.owner_user_id(), None, Some(tx)),
             TxParkedState::Gone => return self.cancel_reply(CancelOutcome::AlreadyFinished),
         };
         if target_user_id != session.user_id && !self.may_manage_other_users_work(session).await {
@@ -267,11 +319,8 @@ impl ShamirDbHandler {
         }
         let outcome = match (target, committing_row) {
             (Some(tx), _) => self.cancel_parked_tx(tx_handle, tx).await,
-            (None, Some(row)) => match (
-                self.tx_registry.peek(tx_handle),
-                self.tx_registry.activity_row(tx_handle),
-            ) {
-                (TxParkedState::Committing, Some(current)) if Arc::ptr_eq(&row, &current) => {
+            (None, Some(tx)) => match self.tx_registry.peek(tx_handle) {
+                TxParkedState::Committing(current) if Arc::ptr_eq(&tx, &current) => {
                     CancelOutcome::AlreadyCommitting
                 }
                 _ => CancelOutcome::AlreadyFinished,
@@ -295,7 +344,10 @@ impl ShamirDbHandler {
             // transaction that is gone, or replaced by another one, is not a
             // request to leave alone: it answers `already_finished`.
             return match self.tx_registry.peek(tx_handle) {
-                TxParkedState::Committing => CancelOutcome::AlreadyCommitting,
+                TxParkedState::Committing(current) if Arc::ptr_eq(&current, &tx) => {
+                    CancelOutcome::AlreadyCommitting
+                }
+                TxParkedState::Committing(_) => CancelOutcome::AlreadyFinished,
                 TxParkedState::Open(current) if Arc::ptr_eq(&current, &tx) => {
                     CancelOutcome::NotCancellable
                 }
@@ -311,30 +363,96 @@ impl ShamirDbHandler {
                 }
                 None => CancelOutcome::AlreadyFinished,
             },
-            TxParkedState::Committing => CancelOutcome::AlreadyCommitting,
+            TxParkedState::Committing(current) if Arc::ptr_eq(&current, &tx) => {
+                CancelOutcome::AlreadyCommitting
+            }
+            TxParkedState::Committing(_) => CancelOutcome::AlreadyFinished,
             TxParkedState::Gone => CancelOutcome::AlreadyFinished,
         }
     }
 
     /// The operator-cancel path's own release of the Level-3 record locks the
-    /// cancelled context still holds, awaited so that on the ordinary path the
-    /// locks are gone before the cancel reply returns (a failed release is
-    /// logged only while this call still awaits the task). Every other end of an interactive
-    /// transaction is covered by the registry's `Drop` release, and a repeated
-    /// release of the same transaction is a harmless no-op because
-    /// `MvccStore::release_locks` removes only holders whose `tx_version`
-    /// matches.
+    /// cancelled context still holds. The release runs as a release tail
+    /// registered with the transaction registry's owner and this call AWAITS
+    /// its completion, so on the ordinary path the locks are gone before the
+    /// cancel reply returns; a failed or cancelled release task is logged
+    /// while this call still awaits it (a repeated release of the same
+    /// transaction is a harmless no-op because `MvccStore::release_locks`
+    /// removes only holders whose `tx_version` matches).
+    ///
+    /// GUARANTEE (exact). Tracked ends: the awaited tail join on the
+    /// ordinary path, and the inline await below on the closed-admission
+    /// path. Detached-on-drop ends: (a) the guard's fallback — if THIS
+    /// dispatch future is dropped while the inline await is pending, the
+    /// drop-guard spawns the not-yet-polled release DETACHED (with a
+    /// `warn!`; a `Drop` cannot await), the same recorded trade-off as the
+    /// registry `Drop` path in `tx_abort_release.rs`; (b) the registry
+    /// `Drop` release (here it cannot retry: the context was `take()`n out
+    /// of the transaction, so `InteractiveTx::drop` sees `None`); (c) the
+    /// `tails == None` branch, detached by design (a registry built without
+    /// an owner). What can still be lost: a fallback or registry-`Drop`
+    /// release that runs when NO tokio runtime is alive (its spawn fails
+    /// after a `warn!`) — the locks then go with the process — and a
+    /// detached tail (a)/(c) can overlap the shutdown flush, since nothing
+    /// tracks it.
     async fn release_tx_locks(&self, tx_handle: u64, parked: TxContext, tx: &InteractiveTx) {
         let release = tx.abort_release();
         // The cancel dispatch can be dropped with its caller. Keep the lock
-        // release alive independently; dropping a JoinHandle detaches the
-        // task, while normal dispatch still waits for completion before reply.
+        // release alive independently; the handoff is atomic with shutdown
+        // admission (`spawn_lossless` registers under the same lock as the
+        // close latch and hands the future BACK on refusal) — a detached task
+        // here would let a shutdown flush and close the stores while the
+        // release is still writing.
         let release = Arc::clone(release);
-        if let Err(error) = tokio::spawn(async move { release(parked).await }).await {
-            if error.is_panic() {
-                tracing::error!(tx_handle, error = %error, "transaction lock-release task panicked");
-            } else {
-                tracing::warn!(tx_handle, error = %error, "transaction lock-release task was cancelled; accepted cancellation and removed handle remain in effect, but runtime shutdown may stop lock release");
+        let tails = self.tx_registry.release_tails();
+        let work = async move { release(parked).await };
+        match tails {
+            Some(tails) => match tails.spawn_lossless(work) {
+                Ok(join) => {
+                    if let Err(error) = join.await {
+                        if !error.is_cancelled() {
+                            tracing::warn!(tx_handle, %error, "cancel release task failed");
+                        } else {
+                            tracing::warn!(
+                                tx_handle,
+                                "cancel release task was cancelled before it finished; the \
+                                 transaction context went with it, so the registry's Drop \
+                                 cannot retry the record-lock release"
+                            );
+                        }
+                    }
+                }
+                // Tail admission closed by shutdown: run the release inline
+                // under this call rather than dropping it (a dropped release
+                // leaves the record locks held until the process exits). The
+                // guard completes the release even if THIS dispatch future
+                // is dropped mid-await: a `Drop` cannot await, so the only
+                // means left is a detached spawn (see the GUARANTEE above).
+                Err(work) => {
+                    let mut guard = InlineReleaseGuard {
+                        work: Some(Box::pin(work)),
+                        tx_handle,
+                    };
+                    #[cfg(test)]
+                    self.pause_inline_release_once(tx_handle).await;
+                    guard
+                        .work
+                        .as_mut()
+                        .expect("the guard holds the inline release until it completes")
+                        .as_mut()
+                        .await;
+                    guard.work = None;
+                }
+            },
+            None => {
+                // No registry owner (a registry built without one): keep the
+                // historical detached behaviour rather than losing the lock
+                // release entirely.
+                tracing::warn!(
+                    tx_handle,
+                    "release tail untracked; the lock release runs detached"
+                );
+                tokio::spawn(work);
             }
         }
     }
@@ -391,5 +509,43 @@ impl ShamirDbHandler {
             &outcome,
         );
         self.cancel_reply(outcome)
+    }
+}
+
+/// Completes an inline record-lock release even when the cancel dispatch
+/// that owns it is dropped mid-await. The guard keeps the release future
+/// pinned INSIDE itself while it is awaited; if the dispatch is dropped
+/// before completion, the guard's `Drop` takes the future back out and
+/// spawns it DETACHED — a `Drop` cannot await, and dropping the future
+/// would drop the taken `TxContext` with it, losing the record locks for
+/// the process's whole remaining lifetime. If no runtime is alive at that
+/// moment, the spawn is impossible and the loss is logged (`warn!`), never
+/// panicking (same terminal case as `spawn_abort_release`). A completed
+/// release clears the slot so the `Drop` does nothing.
+struct InlineReleaseGuard<F: Future<Output = ()> + Send + 'static> {
+    work: Option<Pin<Box<F>>>,
+    tx_handle: u64,
+}
+
+impl<F: Future<Output = ()> + Send + 'static> Drop for InlineReleaseGuard<F> {
+    fn drop(&mut self) {
+        let Some(work) = self.work.take() else {
+            return;
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                tracing::warn!(
+                    self.tx_handle,
+                    "cancel dispatch dropped mid-release; the record-lock release \
+                     continues detached (untracked)"
+                );
+                runtime.spawn(work);
+            }
+            Err(_) => tracing::warn!(
+                self.tx_handle,
+                "cancel dispatch dropped outside a tokio runtime: its record locks \
+                 go with the process"
+            ),
+        }
     }
 }

@@ -29,6 +29,10 @@ pub(crate) mod table_store;
 mod transactions;
 
 pub(crate) use crate::repo::journal::backend::durability_handle::ChangefeedHandle;
+// Cold opens handed off by dropped callers (`tx/commit/core/catalog_access.rs`)
+// register here; `RepoInstance::shutdown_clean` drains the owner before
+// commit quiescence.
+pub(crate) use lifecycle::ColdOpenTasks;
 
 /// Manages a single repository and its tables.
 ///
@@ -164,6 +168,7 @@ impl RepoInstance {
             receipt_worker: Arc::new(OnceCell::new()),
             worker_lifecycle: Some(Arc::new(ForegroundLifecycle::new())),
             replication_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            cold_opens: Arc::new(ColdOpenTasks::new()),
             wal_segment_bytes: crate::repo::durability_policy::effective_wal_segment_bytes(),
             #[cfg(test)]
             journal_publish_hook: Arc::new(arc_swap::ArcSwapOption::empty()),

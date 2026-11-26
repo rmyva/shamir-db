@@ -84,7 +84,7 @@ const MAX_DB_NAME_BYTES: usize = 255;
 /// bytes), plus the three non-`admin:` labels `read`, `write` and `tx_open`
 /// the server mints. 64 leaves headroom for a new label while still bounding
 /// the cell, and every label of that file must pass (see
-/// `tests/activity_field_tests.rs`, which pins the whole list).
+/// `../tests/commands/access/activity_field_tests.rs`, which pins the whole list).
 const MAX_OP_KIND_BYTES: usize = 64;
 
 /// Exactly the transports `transport_label` in the server emits.
@@ -474,7 +474,7 @@ fn request_state_name(state: ActivityRequestState) -> &'static str {
 }
 
 #[cfg(test)]
-#[path = "tests/activity_field_tests.rs"]
+#[path = "../tests/commands/access/activity_field_tests.rs"]
 mod activity_field_tests;
 
 /// The fixed lowercase name of one cancellation outcome.

@@ -8,16 +8,16 @@ use serde_json::{json, Value as Json};
 
 use super::grammar::{
     command_id, ActivityCli, AuthKind, BackupCli, Command, DbCommand, DiagCli, ExportCli,
-    FunctionCommand, GroupCommand, ImportCli, IndexCommand, Mode, Outcome, ProfileCommand,
-    RepoCommand, RightsCommand, ScheduleCli, SchemaMigrationCli, ShellArgs, TableCommand,
-    UserCommand,
+    FunctionCommand, GroupCommand, ImportCli, IndexCommand, Mode, OnlineExportCli, Outcome,
+    ProfileCommand, RepoCommand, RightsCommand, ScheduleCli, SchemaMigrationCli, ShellArgs,
+    TableCommand, UserCommand,
 };
 use super::session::{
     check_secret_conflict, establish_profile, guarded, with_session, Ctx, Session,
 };
 use super::state_args::{DataCommand, ReplicationCommand, VersionCommand};
 use crate::shell::commands::{
-    AccessCommand, ActivityCommand, Catalogue, MaintenanceCommand, StateCommand,
+    AccessCommand, ActivityCommand, Catalogue, JobsCommand, MaintenanceCommand, StateCommand,
 };
 use crate::shell::connect;
 use crate::shell::connect::{Profile, SessionClient};
@@ -112,7 +112,11 @@ pub(super) fn dispatch(
         Command::Connect { name, auth } => {
             let auth = auth.unwrap_or(shell.auth);
             // Drop the old connection before any profile, prompt or dial.
-            *session = Some(Session { auth, live: None });
+            *session = Some(Session {
+                auth,
+                live: None,
+                job_database: None,
+            });
             let outcome = establish_profile(
                 shell,
                 mode,
@@ -126,6 +130,7 @@ pub(super) fn dispatch(
                 *session = Some(Session {
                     auth,
                     live: Some((profile, client)),
+                    job_database: None,
                 });
                 note(shell.verbose, "connected");
                 json!({ "connected": true })
@@ -367,7 +372,16 @@ pub(super) fn dispatch(
                     BackupCli::Snapshot => MaintenanceCommand::BackupSnapshot,
                     BackupCli::Schedule {
                         action: ScheduleCli::Show,
-                    } => MaintenanceCommand::BackupScheduleShow,
+                    } => {
+                        return jobs_outcome(
+                            shell,
+                            mode,
+                            session,
+                            runtime,
+                            ctx,
+                            JobsCommand::ScheduleShow,
+                        )
+                    }
                 },
             )
         }
@@ -386,19 +400,41 @@ pub(super) fn dispatch(
                 },
             )
         }
-        Command::Export {
-            action: ExportCli::Logical,
-        } => {
-            return maintenance_outcome(
-                shell,
-                mode,
-                session,
-                runtime,
-                ctx,
-                id,
-                MaintenanceCommand::ExportLogical,
-            )
-        }
+        Command::Export { action } => match action {
+            ExportCli::Logical => {
+                return maintenance_outcome(
+                    shell,
+                    mode,
+                    session,
+                    runtime,
+                    ctx,
+                    id,
+                    MaintenanceCommand::ExportLogical,
+                )
+            }
+            ExportCli::Online { action } => {
+                let jobs = match action {
+                    OnlineExportCli::Start {
+                        database,
+                        repo,
+                        table,
+                        schema_only,
+                        include_artifacts,
+                        yes,
+                    } => JobsCommand::ExportStart {
+                        database,
+                        repo,
+                        table,
+                        schema_only,
+                        include_artifacts,
+                        yes,
+                    },
+                    OnlineExportCli::Status => JobsCommand::ExportStatus,
+                    OnlineExportCli::Cancel { yes } => JobsCommand::ExportCancel { yes },
+                };
+                return jobs_outcome(shell, mode, session, runtime, ctx, jobs);
+            }
+        },
         Command::Import {
             action: ImportCli::Logical,
         } => {
@@ -564,12 +600,59 @@ fn maintenance_outcome(
     (id, action.op(), outcome)
 }
 
+fn jobs_outcome(
+    shell: &ShellArgs,
+    mode: Mode,
+    session: &mut Option<Session>,
+    runtime: &tokio::runtime::Runtime,
+    ctx: &mut Ctx<'_>,
+    action: JobsCommand,
+) -> Outcome {
+    let id = action.id();
+    if mode == Mode::Batch
+        && matches!(
+            &action,
+            JobsCommand::ExportStatus | JobsCommand::ExportCancel { .. }
+        )
+    {
+        return (id, None, Err(ShellError::ExportSessionOnly));
+    }
+    if action.wants_confirm() {
+        if let Err(err) = ctx.confirm(mode, action.yes(), CONFIRM_PROMPT) {
+            return (id, Some(action.op()), Err(err));
+        }
+    }
+    // Owned clone: `with_session` needs `&mut session` below.
+    let job_database = session
+        .as_ref()
+        .and_then(|state| state.job_database.clone());
+    let routing_db_required = action.requires_routing_db();
+    let outcome = with_session(shell, mode, session, runtime, routing_db_required, ctx).and_then(
+        |(profile, client)| {
+            runtime.block_on(guarded(action.execute(
+                client,
+                job_database.as_deref(),
+                profile.database.as_deref(),
+                mode == Mode::Batch,
+            )))
+        },
+    );
+    // An interactive start RECORDS the database of the job this session
+    // started; its later status/cancel address that database
+    // (`jobs.rs::status_envelope`).
+    if let (JobsCommand::ExportStart { database, .. }, Mode::Interactive, Ok(_)) =
+        (&action, mode, &outcome)
+    {
+        if let Some(state) = session.as_mut() {
+            state.job_database = Some(database.clone());
+        }
+    }
+    (id, Some(action.op()), outcome)
+}
+
 /// Local confirmation for one destructive command. An explicit `--yes` is
-/// taken as given; batch mode has no confirmation source, so an unconfirmed
-/// `activity cancel` is the fixed typed `ConfirmationRequired` refusal
-/// BEFORE any dial or request; interactive mode writes one fixed prompt,
-/// reads one bounded line and accepts ONLY an exact `yes` (anything else,
-/// including EOF or an invalid line, is the same refusal).
+/// accepted; batch mode without it is refused before any request, while
+/// interactive mode requires the fixed `yes` prompt.
 fn confirm_cancel(
     mode: Mode,
     action: &ActivityCommand,

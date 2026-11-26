@@ -57,6 +57,7 @@ use crate::server::{release_stores, BootstrapMode, ReleaseOutcome, ServerLaunche
 
 mod late_budget;
 mod owned_mutation_join;
+mod zero_budget_release;
 
 const TEST_NAME: &str = "shutdown_deadline_does_not_abandon_the_scheduled_worker";
 const PUBLIC_TEST: &str = "public_shutdown_bounds_meta_snapshot_join_without_outer_deadline";
@@ -439,54 +440,6 @@ async fn run_normal_order() {
          waited for: {:?}",
         shutdown.repository_failures()
     );
-}
-
-/// The LATE teardown stages must spend the ACTUAL remaining shutdown budget and
-/// report what they could not settle.
-///
-/// The runtime has ONE blocking thread and this test parks it; the 3 s outer
-/// budget is too short to rely on earlier teardown. The meta-snapshot wait
-/// reserves time for release and reporting, the release wait reserves final
-/// report slack, so each stage verdict is appended before outer expiry.
-///
-/// * the meta-snapshot verdict (step 6): the snapshot did not settle, so the
-///   `server_meta` store may still be locked;
-/// * a store-release verdict (step 9) naming the positive budget it really had —
-///   instead of the 10 s constant — with the pool-starved reason from its
-///   submitted probe.
-///
-/// Mutants this kills:
-/// * the meta join awaited UNBOUNDED (`let _ = snap.handle.await`): the
-///   teardown never reaches step 9 at all, so neither stage verdict appears;
-/// * step 9 passing `STORE_RELEASE_TIMEOUT` unchanged: the barrier parks for
-///   the whole 10 s constant, the outer deadline expires inside it, and the
-///   report carries only the generic `graceful shutdown exceeded deadline`
-///   message and no store-release line.
-///
-/// The report must also come back while the pool is STILL parked: a teardown
-/// that waits for the pool instead of for its budget returns after the pool is
-/// released, which the `finished` flag catches.
-#[test]
-fn zero_budget_store_release_reports_unknown_without_claiming_a_probe_ran() {
-    let mut report = shamir_db::ShutdownReport::default();
-    crate::server::server_handle::report_unsubmitted_release_probe_for_test(
-        &mut report,
-        "no shutdown budget remained",
-    );
-
-    let [error] = report.errors() else {
-        panic!("the zero-budget release stage must append one report error: {report:?}");
-    };
-    assert!(error.contains("no probe result was obtained"), "{error}");
-    assert!(error.contains("no probe was started"), "{error}");
-    assert!(error.contains("UNKNOWN"), "{error}");
-    assert!(
-        error.contains("immediate relaunch") && error.contains("`Locked`"),
-        "{error}"
-    );
-    assert!(!error.contains("probe ran"), "{error}");
-    assert!(!report.is_clean(), "the report must be unclean: {report:?}");
-    assert_eq!(report.exit_code(), 70, "unclean report: {report:?}");
 }
 
 /// Public `ServerHandle::shutdown()` has no outer deadline, yet the stages that

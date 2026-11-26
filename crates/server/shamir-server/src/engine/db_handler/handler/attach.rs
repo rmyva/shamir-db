@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use super::super::config::SlowQueryConfig;
 use super::core::ShamirDbHandler;
+use super::export_activity::ExportActivityProjection;
 use crate::boot::config::diagnostics::logical::export_online::OnlineExport;
 use crate::security::tokens::TokenService;
 use shamir_db::engine::db_instance::logical_export::MaintenanceGate;
@@ -25,6 +26,12 @@ pub(in crate::engine::db_handler) struct OperatorBootContext {
 
 impl ShamirDbHandler {
     pub(crate) fn with_online_export(mut self, service: Arc<OnlineExport>) -> Self {
+        // Project the live export job into this handler's activity view
+        // (same table, same scope/privacy rules as every other job). A
+        // second attach attempt cannot overwrite the once-set projection.
+        service.set_activity_projection(std::sync::Arc::new(ExportActivityProjection::new(
+            std::sync::Arc::clone(&self.activity_requests),
+        )));
         self.online_export = Some(service);
         self
     }

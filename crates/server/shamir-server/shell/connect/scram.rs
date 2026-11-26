@@ -406,6 +406,15 @@ fn server_code(code: &str) -> ShellError {
         "backup_unavailable" => ShellError::BackupUnavailable,
         "backup_io_error" => ShellError::BackupIo,
         "online_backup_follower_read_only" => ShellError::OnlineBackupFollowerReadOnly,
+        "online_export_already_running" => ShellError::ExportBusy,
+        "export_scope_denied" => ShellError::Denied,
+        // Invalid form/scope, unsupported scope, unavailable scope, and the
+        // internal codec error deliberately use the fixed generic server outcome.
+        "online_export_invalid_scope" | "online_export_unsupported" | "online_export_scope_unavailable"
+        | "online_export_invalid_form" | "internal_error" => ShellError::Server,
+        "online_export_unavailable" | "online_export_not_configured" => ShellError::ExportUnavailable,
+        "online_export_not_found" => ShellError::ExportNotFound,
+
         "schema_migration_follower_read_only" => ShellError::SchemaMigrationFollowerReadOnly,
         // The VICTIM side of a cooperative cancellation: this session's own
         // batch was cancelled by another operator. Its effects may be partial,

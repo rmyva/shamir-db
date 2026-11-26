@@ -13,6 +13,8 @@
 // moved. Do NOT add `core/mod.rs`: these are plain file declarations only.
 #[path = "core/harness.rs"]
 mod harness;
+#[path = "core/interactive.rs"]
+mod interactive;
 #[path = "core/output.rs"]
 mod output;
 #[path = "core/runtime.rs"]
@@ -46,8 +48,8 @@ mod state_data_token_subset;
 mod access_activity_access;
 #[path = "access_activity/activity.rs"]
 mod access_activity_activity;
-#[path = "access_activity/manage_root_holder.rs"]
-mod access_activity_manage_root_holder;
+#[path = "access_activity/holders/mod.rs"]
+mod access_activity_holders;
 #[path = "access_activity/mutations.rs"]
 mod access_activity_mutations;
 #[path = "access_activity/rights_gaps.rs"]
@@ -60,10 +62,12 @@ mod access_activity_parked_cancel;
 mod access_activity_raw_scram;
 #[path = "maintenance/backup.rs"]
 mod maintenance_backup;
-#[path = "maintenance/diag.rs"]
+#[path = "maintenance/explain/diag.rs"]
 mod maintenance_diag;
-#[path = "maintenance/explain.rs"]
+#[path = "maintenance/explain/explain.rs"]
 mod maintenance_explain;
+#[path = "maintenance/export_online.rs"]
+mod maintenance_export_online;
 #[path = "maintenance/migrations.rs"]
 mod maintenance_migrations;
 #[path = "maintenance/policy.rs"]

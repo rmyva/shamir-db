@@ -990,5 +990,5 @@ async fn get_record_refuses_over_long_names_without_echoing_them() {
 
 // Cell-retention and slot-saturation tests of the point read live in a child
 // module so this file stays under the layout limit; it reuses these helpers.
-#[path = "handler/get_record_cell_growth_tests.rs"]
+#[path = "../handler/get_record_cell_growth_tests.rs"]
 mod cell_growth_tests;

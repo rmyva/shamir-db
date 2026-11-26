@@ -274,5 +274,5 @@ fn decimal(item: &QueryValue) -> Result<String, ShellError> {
 }
 
 #[cfg(test)]
-#[path = "tests/versions_projection_tests.rs"]
+#[path = "../../tests/commands/maintenance/versions_projection_tests.rs"]
 mod versions_projection_tests;

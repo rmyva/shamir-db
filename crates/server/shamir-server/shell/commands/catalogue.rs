@@ -525,5 +525,5 @@ fn principal(
 }
 
 #[cfg(test)]
-#[path = "tests/catalogue_budget_tests.rs"]
+#[path = "../tests/commands/catalogue_budget_tests.rs"]
 mod catalogue_budget_tests;

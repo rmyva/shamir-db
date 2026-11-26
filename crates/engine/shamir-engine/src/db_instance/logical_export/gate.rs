@@ -4,6 +4,11 @@ use futures::future::BoxFuture;
 use shamir_engine_table::writer_drain_barrier::{WriterDrainBarrier, WriterDrainGuard};
 use shamir_storage::error::{DbError, DbResult};
 use std::sync::atomic::{AtomicBool, Ordering};
+// The transition-counter seam is `#[cfg(any(test, feature = "test-util"))]`:
+// gate the import with the field, or a normal-feature `-D warnings` build
+// rejects it as unused.
+#[cfg(any(test, feature = "test-util"))]
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Notify;
@@ -27,6 +32,14 @@ use tokio::time::Instant;
 #[derive(Clone, Default)]
 pub struct MaintenanceGate {
     frozen: Arc<AtomicBool>,
+    /// Per-instance freeze-transition counters (test seam, `test-util`):
+    /// `.0` counts successful freeze raises in `with_deadline`, `.1`
+    /// counts guard-drop thaws — one rise and one thaw per admitted
+    /// freeze exit, zero of either when nothing froze. A denial test
+    /// reading both as zero proves NEVER-FROZE (a froze-and-thawed
+    /// mutant leaves a nonzero pair behind).
+    #[cfg(any(test, feature = "test-util"))]
+    transitions: Arc<(AtomicU64, AtomicU64)>,
     /// Wakes queued `wait_for_mutation` waiters on every thaw.
     /// `Notify::notify_waiters` stores no permit, so correctness relies on
     /// each waiter arming its `Notified` future (enable) BEFORE checking the
@@ -132,9 +145,19 @@ impl MaintenanceGate {
         self.frozen
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .map_err(|_| DbError::Conflict("logical export already in progress".into()))?;
+        #[cfg(any(test, feature = "test-util"))]
+        self.transitions.0.fetch_add(1, Ordering::Relaxed);
         // Construct before the first await: cancellation while draining releases.
+        #[cfg(not(any(test, feature = "test-util")))]
         let guard =
             MaintenanceGuard::new(Arc::clone(&self.frozen), Arc::clone(&self.thaw), deadline);
+        #[cfg(any(test, feature = "test-util"))]
+        let guard = {
+            let guard =
+                MaintenanceGuard::new(Arc::clone(&self.frozen), Arc::clone(&self.thaw), deadline);
+            guard.set_transition_counters(Arc::clone(&self.transitions));
+            guard
+        };
         tokio::time::timeout_at(deadline, async {
             self.writers.drain().await;
             guard.check_deadline()?;
@@ -142,5 +165,19 @@ impl MaintenanceGate {
         })
         .await
         .map_err(|_| DbError::Internal("logical export maintenance deadline exceeded".into()))?
+    }
+}
+
+impl MaintenanceGate {
+    /// Test seam (`test-util`): the per-instance freeze-transition counts
+    /// as `(rises, thaws)`. A refused operation leaves `(0, 0)`; an
+    /// admitted freeze exit (success, error, deadline, cancel, panic)
+    /// leaves exactly `(1, 1)` per gate instance state.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn freeze_transition_counts(&self) -> (u64, u64) {
+        (
+            self.transitions.0.load(Ordering::Relaxed),
+            self.transitions.1.load(Ordering::Relaxed),
+        )
     }
 }

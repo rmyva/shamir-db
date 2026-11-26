@@ -746,51 +746,250 @@ curl http://127.0.0.1:9090/info       # → msgpack: uptime, bound_addrs, ready
 
 ### `/metrics`
 
-Prometheus text format. `/metrics` требует рабочего Prometheus recorder; процессный recorder общий для одного процесса и устанавливается один раз. Если второй observability-enabled сервер в том же процессе не смог установить собственный recorder, он всё равно запускает listener с fallback без handle: его `/metrics` отвечает `503 Service Unavailable`, а не выдаёт метрики первого сервера. Метрики:
+`/metrics` требует рабочего Prometheus recorder; процессный recorder общий для одного процесса и устанавливается один раз. Если второй observability-enabled сервер в том же процессе не смог установить собственный recorder, он всё равно запускает listener с fallback без handle: его `/metrics` отвечает `503 Service Unavailable`, а не выдаёт метрики первого сервера.
 
-|| Метрика | Тип | Описание |
-||---|---|---|
-|| `process_cpu_seconds_total` | counter | CPU time |
-|| `process_resident_memory_bytes` | gauge | RSS |
-|| `process_open_fds` | gauge | Открытые файловые дескрипторы |
-|| `auth_attempts_total{result=…}` | counter | Аутентификации (success, bad_proof, locked_out, …) |
-|| `shamir_tx_started_total` | counter | Транзакции начатые |
-|| `shamir_tx_committed_total` | counter | Транзакции закоммиченные |
-|| `shamir_tx_aborted_ssi_total` | counter | SSI-конфликты |
-|| `shamir_tx_aborted_expired_total` | counter | Истёкшие tx |
-|| `shamir_gc_runs_total` | counter | GC-циклы |
-|| `shamir_gc_entries_deleted_total` | counter | GC-удаления |
-|| `shamir_visibility_ack_total{mode,result}` | counter | Acknowledgement outcomes: `mode=strict\|bounded`, `result=visible\|pending_timeout\|pending_reopen\|error` (VIS-4c) |
-|| `shamir_visibility_ack_wait_seconds_bucket{mode,result,le}` | gauge (cumulative histogram) | Duration of acknowledgements that ACTUALLY waited; the non-blocking fast path is counted only in `shamir_visibility_ack_total` |
-|| `shamir_visibility_ack_wait_seconds_count{mode,result}` | gauge | Observed waits per label set |
-|| `shamir_visibility_pending_total{reason,kind}` | counter | Pending outcomes: `reason=timeout\|reopen_required`, `kind=explicit_tx\|implicit_batch\|direct_write` |
-|| `shamir_visibility_read_wait_timeouts_total` | counter | AsOf reads that timed out waiting for visibility |
-|| `shamir_visibility_reconciliation_total{result}` | counter | `WaitForVisibility` outcomes |
-|| `shamir_visibility_reconciliation_wait_seconds_bucket{result,le}` | gauge | Reconciliation wait durations |
-|| `shamir_visibility_ack_waiters{db,repo}` | gauge | Acknowledgements currently parked (reuses the completion tracker's waiter registration) |
-|| `shamir_gate_*` | gauge | REPO-DIAGNOSTICS per-repo gate snapshot (allocation high water, visible floor, oldest blocker, …) |
-|| `shamir_wal_size_bytes{db,repo}` | gauge | Приблизительный размер WAL на диске: активный сегмент + запечатанные удержанные (Mem-бэкенд пишет 0) |
-|| `shamir_wal_segments{db,repo}` | gauge | Удержанные файлы сегментов WAL: запечатанные + один активный (Mem-бэкенд пишет 0) |
-|| `shamir_wal_truncation_lag_versions{db,repo}` | gauge | Отставание truncate: max committed version минус старейшая усекаемая версия |
-|| `shamir_group_commit_waiters{db,repo}` | gauge | Участники группового коммита, ожидающие покрытия WAL fsync |
-|| `shamir_wal_bytes_total{db,repo}` | counter | Байты полезной нагрузки WAL с момента создания каталога WAL |
-|| `shamir_wal_fsync_seconds{db,repo}` | histogram (`_bucket`/`_count`/`_sum`) | Длительность раунда sync-worker: replay снапшота + fsync приёмника (тот же интервал, что `shamir_wal_sync_duration_ns`); `le` и `_sum` — в секундах |
-|| `shamir_index_entries{db,repo,table,index}` | gauge | Записи в индексах, снимок за scrape (усечение до 64 таблиц / 32 индексов на репозиторий) |
-|| `shamir_index_build_seconds{db,repo,kind}` | histogram (`_bucket`/`_count`/`_sum`) | Длительность завершённой сборки индекса, в секундах |
-|| `shamir_index_rebuild_seconds{db,repo,kind}` | histogram (`_bucket`/`_count`/`_sum`) | Длительность завершённого rebuild (doctor/repair, миграция identity), в секундах |
-|| `shamir_interner_names{db,repo}` | gauge | Число интернированных имён полей |
-|| `shamir_interner_high_water{db,repo}` | gauge | Персистентный high-water mark интернера |
-|| `shamir_export_tables_truncated{db,repo}` | gauge (1/0) | Усечение по лимитам кардинальности активно |
-|| `shamir_export_tables_known{db,repo}` | gauge | Всего открытых таблиц, известных репозиторию |
-|| `shamir_backup_started_total{kind}` | counter | Запущенные online-backup прогоны (`kind=online`) |
-|| `shamir_backup_completed_total{kind}` | counter | Успешно завершённые online-backup прогоны (`kind=online`) |
-|| `shamir_backup_failed_total{kind,stage}` | counter | Неудачные online-backup прогоны по стадии сбоя (`stage=preparing\|captured\|copying\|sealing\|verifying`) |
-|| `shamir_backup_active` | gauge (0/1) | 1, пока online-backup выполняется |
-|| `shamir_backup_bytes_copied` | gauge (bytes) | Кумулятивные байты, скопированные завершёнными online-backup прогонами |
-|| `shamir_backup_duration_seconds` | gauge (seconds) | Длительность последней **успешной** online-backup копии (не выставляется до первого успеха) |
-|| `shamir_backup_writer_block_seconds{phase}` | gauge (seconds) | Последнее закрытое окно блокировки writer'ов (`phase=capture\|seal`), включая неудачные удержания; не выставляется до первого закрытого окна |
-|| `shamir_backup_pin_seconds` | gauge (seconds) | Длительность удержания truncation-pin; не экспортируется, пока не измеряется |
-|| `shamir_backup_wal_segments_copied_total` | counter | Скопированные сегменты WAL; не экспортируется, пока протокол не отдаёт счётчик сегментов |
+#### Процессы и сессии
+
+| Серия | Тип | Метки | Что измеряет | Норма | Отклонение и первая проверка |
+|---|---|---|---|---|---|
+| `process_cpu_seconds_total` | counter | нет | CPU-время процесса | `rate` по нагрузке | Рост — проверить профиль запросов и нагрузку |
+| `process_resident_memory_bytes` | gauge | нет | RSS процесса, байты | зависит от нагрузки | Рост — проверить утечки и размер ответов |
+| `process_open_fds` | gauge | нет | Открытые файловые дескрипторы | ниже лимита | Сверить `process_max_fds` и открытые соединения |
+| `process_max_fds` | gauge | нет | Лимит файловых дескрипторов | конфигурация ОС | Неожиданное значение — проверить лимиты процесса |
+| `process_virtual_memory_bytes` | gauge | нет | Виртуальная память, байты | по профилю процесса | Рост — проверить память процесса |
+| `process_virtual_memory_max_bytes` | gauge | нет | Максимум виртуальной памяти | лимит ОС | Сверить с настройками среды |
+| `process_start_time_seconds` | gauge | нет | Время старта процесса Unix | постоянное до рестарта | Изменение означает перезапуск |
+| `process_threads` | gauge | нет | Число потоков процесса | по нагрузке | Рост — проверить блокирующую работу |
+| `requests_in_flight` | gauge | нет | Запросы в обработке | зависит от нагрузки | Сверить с активными запросами и длительными операциями |
+| `shamir_active_requests` | gauge | нет | Активные запросы этого сервера | без устойчивого роста | Рост — проверить долгие запросы и отмену |
+| `shamir_active_sessions` | gauge | нет | Открытые сессии сервера | по числу клиентов | Неожиданный рост — проверить клиентские disconnect |
+| `shamir_active_transactions` | gauge | нет | Открытые интерактивные транзакции | кратковременно ненулевое | Проверить незавершённые транзакции |
+| `shamir_active_cursors` | gauge | нет | Открытые курсоры | по числу активных чтений | Проверить закрытие курсоров |
+| `shutdown_unclean_total` | counter | нет | Некорректные завершения процесса | прирост 0 | Проверить ошибки shutdown, flush и deadline |
+
+#### Аутентификация и токены
+
+| Серия | Тип | Метки | Что измеряет | Норма | Отклонение и первая проверка |
+|---|---|---|---|---|---|
+| `auth_attempts_total{result}` | counter | `result=success\|bad_proof\|locked_out\|unknown_user\|rate_limited\|unsupported_version\|policy\|io_or_decode` | Результаты native-аутентификации | ошибки редки | Разбить по результату, проверить трафик и credentials |
+| `shamir_token_auth_total{channel,result}` | counter | `channel=rest\|ws`; `result=success\|invalid\|forbidden\|rate_limited\|unavailable` | Результаты token-аутентификации | отказы редки | Проверить token gate и клиентские токены |
+| `shamir_token_request_denied_total{endpoint}` | counter | `endpoint` | Отказы по scope/policy | прирост 0 | Проверить scope и политику endpoint |
+| `shamir_token_active_ws` | gauge | нет | Сумма активных token-WS сокетов по всем токенам и владельцам; нет глобального лимита. На токен — не более `tokens.max_sockets_per_token` (по умолчанию 8), на владельца — не более `tokens.max_sockets_per_owner` (по умолчанию 32); верхняя граница gauge — число активных токенов × `max_sockets_per_token` | зависит от числа активных токенов | Проверить число WS-подключений и лимиты на токен/владельца |
+| `shamir_token_listener_plaintext_remote` | gauge | нет | Включён ли удалённый plaintext token listener | обычно серия отсутствует или 0 | Наличие серии означает неверную конфигурацию удалённого plaintext listener; проверить конфигурацию listener |
+| `shamir_token_request_duration_seconds{endpoint,quantile}` | gauge (summary-квантиль) | `endpoint`; `quantile=0.0|0.5|0.9|0.95|0.99|0.999|1.0` | Квантили длительности token-запросов (rolling summary экспортёра) | суб-секунды обычно | Рост p95/0.99 — проверить обработчик и хранилище |
+| `shamir_token_request_duration_seconds_count{endpoint}` | counter | `endpoint` | Число наблюдений длительности | соразмерно запросам | Сверить с потоком запросов |
+| `shamir_token_request_duration_seconds_sum{endpoint}` | gauge | `endpoint` | Сумма длительностей, секунды | пропорционально count | Сверить среднее время |
+
+Экспортёр (pinned 0.18.3) для этой серии рендерит summary, а не histogram, поэтому серии `_bucket` нет; источник — 0.16.2 `recorder.rs` (0.18.3 локально недоступен, поведение подтверждается живым scrape в CI).
+| `shamir_login_http_total{endpoint,result}` | counter | `endpoint=begin\|finish`; `result=challenge\|issued\|authentication_failed\|policy_denied\|rate_limited\|server_busy\|invalid_request` | Исходы HTTP login | ошибки и отказы редки | Проверить TLS/authority, клиентский поток и логи |
+| `shamir_login_http_begin_duration_seconds_bucket{le}` | gauge, кумулятивный bucket | `le`; границы 0.05, 0.055, 0.06, 0.065, 0.07, 0.075, 0.1, 0.25, 0.5, 1, 5, 120 секунд и `+Inf` | Время BEGIN login, кумулятивные bucket | сверять p95 с границами | Рост — проверить KDF и нагрузку |
+| `shamir_login_http_begin_duration_seconds_count` | counter | нет | Число наблюдений BEGIN | соразмерно запросам | Сверить с `result` BEGIN |
+| `shamir_login_http_begin_duration_seconds_sum` | gauge | нет | Сумма длительностей BEGIN, секунды | пропорционально count | Проверить p95 и нагрузку KDF |
+| `shamir_login_http_finish_duration_seconds_bucket{le}` | gauge, кумулятивный bucket | `le`; те же границы в секундах, что BEGIN, и `+Inf` | Время FINISH login | сверять p95 с границами | Рост — проверить proof и хранилище |
+| `shamir_login_http_finish_duration_seconds_count` | counter | нет | Число наблюдений FINISH | соразмерно запросам | Сверить с `result` FINISH |
+| `shamir_login_http_finish_duration_seconds_sum` | gauge | нет | Сумма длительностей FINISH, секунды | пропорционально count | Проверить p95 и нагрузку |
+| `shamir_login_http_pending` | gauge | нет | Текущие ожидающие записи | кратковременно ненулевое | Проверить завершение login и истечение записей |
+| `shamir_login_http_kdf_ineligible_users` | gauge | нет | Число пользователей, не подходящих для KDF | соответствует политике | Проверить состояние учётных записей |
+| `shamir_login_http_pair_slots` | gauge | нет | Занятые парные слоты | ниже ёмкости | Проверить bounded pair state |
+| `shamir_login_http_evictions{reason}` | counter | `reason=fair_share\|expired` | Вытеснения pending-записей | обычно 0 | Проверить лимиты и срок жизни записей |
+| `shamir_login_http_accounting_dropped{reason}` | counter | `reason=arrival_table_full\|credit_table_full\|pin_budget\|pair_quota\|pair_table_full` | Потерянный учёт запросов | прирост 0 | Проверить capacity таблиц и pair quota |
+| `shamir_login_http_audit_dropped` | counter | нет | Потерянные audit-события | прирост 0 | Проверить audit consumer и storage |
+| `shamir_post_auth_rate_limit_rejected_total` | counter | нет | Отказы посессионного лимита после auth | прирост 0 | Проверить паттерны запросов сессии |
+| `shamir_argon2_busy_refusals_total` | counter | нет | Отказы Argon2 admission/ожидания permit/часов | прирост 0 | Сначала проверить часы, затем capacity и blocking pool |
+| `shamir_argon2_permits_capacity` | gauge | нет | Ёмкость пула permit Argon2 | равна конфигурации | Проверить `argon2_concurrent_max` |
+| `shamir_argon2_permits_available` | gauge | нет | Свободные permit Argon2 | `0..capacity` | Устойчивый ноль — проверить admission и нагрузку |
+
+#### Транзакции и GC
+
+| Серия | Тип | Метки | Что измеряет | Норма | Отклонение и первая проверка |
+|---|---|---|---|---|---|
+| `shamir_tx_started_total` | gauge-снимок | нет | Начатые транзакции | по нагрузке | Сопоставить с завершениями |
+| `shamir_tx_committed_total` | gauge-снимок | нет | Зафиксированные транзакции | по нагрузке | Проверить ошибки commit |
+| `shamir_tx_aborted_ssi_total` | gauge-снимок | нет | SSI-аборты | редки | Проверить конфликтующую нагрузку |
+| `shamir_tx_aborted_expired_total` | gauge-снимок | нет | Истёкшие транзакции | редки | Проверить долгие транзакции |
+| `shamir_tx_aborted_storage_total` | gauge-снимок | нет | Аборты по ошибкам storage | 0 | Проверить WAL и логи storage |
+| `shamir_tx_aborted_unique_total` | counter | нет | Аборты по уникальности | редки | Проверить конфликтующие записи |
+| `shamir_tx_aborted_phantom_total` | counter | нет | Phantom-аборты | редки | Проверить параллельные транзакции |
+| `shamir_tx_materialization_deferred_total` | counter | нет | Commit с отложенной материализацией | не выше темпа транзакций | Проверить поток commit и материализацию |
+| `shamir_tx_post_wal_orphans_total` | counter | нет | Операции orphan после WAL | 0 | Проверить recovery и логи |
+| `shamir_gc_runs_total` | gauge-снимок | нет | Запуски GC | растёт по расписанию | Проверить запуск GC |
+| `shamir_gc_entries_deleted_total` | gauge-снимок | нет | Удалённые GC записи | зависит от churn | Проверить старые версии и GC |
+| `shamir_degraded_indexes_total` | gauge-снимок | нет | Деградированные индексы | 0 | Проверить ремонт индекса и журнал |
+
+#### Видимость и шлюз репозитория
+
+| Серия | Тип | Метки | Что измеряет | Норма | Отклонение и первая проверка |
+|---|---|---|---|---|---|
+| `shamir_gate_allocation_high_water{db,repo}` | gauge | `db,repo` | Высшую выделенную версию | монотонная граница | Сопоставить с commit и durable watermark |
+| `shamir_gate_visible_floor{db,repo}` | gauge | `db,repo` | Нижнюю видимую границу | движется за commit | Проверить blocker и recovery |
+| `shamir_gate_last_committed{db,repo}` | gauge | `db,repo` | Последнюю committed-версию | растёт при записи | Проверить WAL при остановке роста |
+| `shamir_gate_durable_watermark{db,repo}` | gauge | `db,repo` | Durable watermark | не опережает commit | Проверить fsync и WAL |
+| `shamir_gate_requires_reopen{db,repo}` | gauge | `db,repo` | Требование повторного открытия, 0/1 | 0 | При 1 выполнить recovery/reopen runbook |
+| `shamir_gate_visibility_waiters{db,repo}` | gauge | `db,repo` | Ожидающие видимости | обычно 0 | Проверить возраст блокирующей версии |
+| `shamir_gate_unsettled_versions{db,repo}` | gauge | `db,repo` | Неразрешённые версии | кратковременно мало | Проверить transaction и replay |
+| `shamir_gate_pending_versions{db,repo}` | gauge | `db,repo` | Версии, ожидающие GC/разрешения | обычно мало | Проверить состояние gate |
+| `shamir_gate_missing_versions{db,repo}` | gauge | `db,repo` | Отсутствующие версии | 0 | Проверить WAL recovery |
+| `shamir_gate_oldest_blocker_age_seconds{db,repo}` | gauge | `db,repo` | Возраст старейшего blocker | около 0 | Проверить `class`, версию, transaction/replay |
+| `shamir_gate_oldest_blocker_version{db,repo}` | gauge | `db,repo` | Версию старейшего blocker | 0 при отсутствии | Найти соответствующий blocker |
+| `shamir_gate_oldest_blocker_class{db,repo,class}` | gauge, one-hot | `db,repo,class=none\|active_tail\|orphan_awaiting_replay\|unresolved_ticket\|pending_unclassified\|unknown` | Класс blocker | `none=1` без blocker | Проверить указанную причину и recovery |
+| `shamir_gate_orphan_replay_consecutive_failures{db,repo}` | gauge | `db,repo` | Последовательные ошибки replay | 0 | Проверить recovery и журнал |
+| `shamir_gate_orphan_replay_attempts_total{db,repo}` | counter | `db,repo` | Попытки replay | по необходимости | Сопоставить с неуспешными replay |
+| `shamir_orphan_replay_failures_total{db,repo}` | counter | `db,repo` | Ошибки replay orphan | 0 | Проверить recovery и storage |
+| `shamir_visibility_ack_total{db,repo,mode,result}` | counter | `mode=strict\|bounded`; `result=visible\|pending_timeout\|pending_reopen\|error` | Исход ACK видимости | ошибки редки | Проверить blocker и mode |
+| `shamir_visibility_ack_wait_seconds_bucket{db,repo,mode,result,le}` | кумулятивный gauge-сэмпл | `db,repo,mode,result,le` | Длительность реально ожидавших ACK; кумулятивные bucket | быстрый путь не учитывается | Проверить blocker и ожидание |
+| `shamir_visibility_ack_wait_seconds_count{db,repo,mode,result}` | counter | `db,repo,mode,result` | Число реально ожидавших ACK | соразмерно ACK | Проверить mode/result и blocker |
+| `shamir_visibility_pending_total{db,repo,reason,kind}` | counter | `reason=timeout\|reopen_required`; `kind=explicit_tx\|implicit_batch\|direct_write` | Pending исходы видимости | обычно 0 | Проверить gate blocker и WAL |
+| `shamir_visibility_read_wait_timeouts_total{db,repo}` | counter | `db,repo` | Таймауты AsOf-ожидания | 0 | Проверить видимость запрошенной версии |
+| `shamir_visibility_reconciliation_total{db,repo,result}` | counter | `result=visible\|pending_timeout\|pending_reopen\|error` | Исходы reconciliation | pending редки | Проверить orphan replay и blocker |
+| `shamir_visibility_reconciliation_wait_seconds_bucket{db,repo,result,le}` | кумулятивный gauge-сэмпл | `db,repo,result,le` | Длительность reconciliation ожиданий | короткие ожидания | Проверить replay и blocker |
+| `shamir_visibility_reconciliation_wait_seconds_count{db,repo,result}` | counter | `db,repo,result` | Число reconciliation ожиданий | соразмерно исходам | Проверить результат и длительность |
+| `shamir_visibility_ack_waiters{db,repo}` | gauge | `db,repo` | ACK, припаркованные на completion tracker | 0 | Проверить gate blocker |
+
+При старте series zero-touch: `shamir_visibility_ack_total`, `shamir_visibility_ack_wait_seconds_bucket`, `shamir_visibility_ack_wait_seconds_count`, `shamir_visibility_pending_total`, `shamir_visibility_read_wait_timeouts_total`, `shamir_visibility_reconciliation_total`, `shamir_visibility_reconciliation_wait_seconds_count`, `shamir_visibility_reconciliation_wait_seconds_bucket` и `shamir_visibility_ack_waiters` рендерятся с нулевыми значениями без меток `db,repo`; затем появляются с `db,repo` по мере открытия репозиториев.
+
+#### WAL и долговечность
+
+| Серия | Тип | Метки | Что измеряет | Норма | Отклонение и первая проверка |
+|---|---|---|---|---|---|
+| `shamir_wal_size_bytes{db,repo}` | gauge | `db,repo` | Приблизительный размер удержанного WAL | ограничен retention | Проверить удержание сегментов |
+| `shamir_wal_segments{db,repo}` | gauge | `db,repo` | Удержанные WAL сегменты | единицы-десятки | Рост — проверить truncate |
+| `shamir_wal_truncation_lag_versions{db,repo}` | gauge | `db,repo` | Отставание truncate | небольшое | Проверить backlog и worker |
+| `shamir_group_commit_waiters{db,repo}` | gauge | `db,repo` | Ожидающих покрытия fsync | ниже параллелизма commit | Проверить latency fsync |
+| `shamir_wal_bytes_total{db,repo}` | counter | `db,repo` | Записанные байты WAL | растёт с записью | `rate` и сверка нагрузки |
+| `shamir_wal_fsync_seconds_bucket{db,repo,le}` | gauge, кумулятивный bucket | `db,repo,le` | Раунды sync-worker в секундах | обычно субмиллисекундные | Проверить storage latency |
+| `shamir_wal_fsync_seconds_count{db,repo}` | counter | `db,repo` | Число раундов sync-worker | по активности WAL | Сверить с write rate |
+| `shamir_wal_fsync_seconds_sum{db,repo}` | gauge | `db,repo` | Сумма длительностей fsync, секунды | соразмерно count | Проверить среднее и storage |
+| `shamir_wal_effective_commit{db,repo}` | gauge | `db,repo` | WAL commit tier: 0 buffered, 1 synced | заданная конфигурация | Проверить режим commit |
+| `shamir_replication_serve{db,repo}` | gauge | `db,repo` | Эффективный режим serving durability | 0 — durable | Сверить режим репликации |
+| `shamir_wal_backend_mem{db,repo}` | gauge | `db,repo` | WAL in-memory: 1 да, 0 нет/не инициализирован | ожидаемый backend | Проверить backend |
+| `shamir_wal_synced_lag_versions{db,repo}` | gauge | `db,repo` | Непокрытый span W−R | 0 | Проверить sync/recoverability |
+| `shamir_wal_watermark_w{db,repo}` | gauge | `db,repo` | Максимум записанной WAL версии W | следует за записями | Проверить WAL writer |
+| `shamir_wal_recoverable_through{db,repo}` | gauge | `db,repo` | Непрерывный recoverability prefix R | близко к W | Проверить sync и recovery |
+| `shamir_replication_confirmed_bound{db,repo}` | gauge | `db,repo` | Последняя подтверждённая pull-граница до clamp | в пределах W | Сверить follower receipt |
+| `shamir_replication_served_bound{db,repo}` | gauge | `db,repo` | Последняя отданная граница min(confirmed,W,R) | не выше recoverable | Проверить W/R и receipt |
+| `shamir_wal_pending_versions{db,repo}` | gauge | `db,repo` | Непокрытый span W−R | 0 | Проверить sync worker |
+| `shamir_wal_first_pending_version{db,repo}` | gauge | `db,repo` | Первая непокрытая позиция R+1 | 0, если нет | Проверить recoverability |
+| `shamir_wal_first_pending_age_ns{db,repo}` | gauge | `db,repo` | Нижняя оценка возраста первой непокрытой версии, нс | малое значение | Проверить sync backlog |
+| `shamir_wal_sync_now_calls{db,repo}` | counter | `db,repo` | Запросы sync, включая уже покрытые | по demand | Сопоставить с раундами |
+| `shamir_wal_sync_rounds{db,repo}` | counter | `db,repo` | Завершённые раунды sync-worker | по записи | Проверить производительность sync |
+| `shamir_wal_sync_coalesced{db,repo}` | counter | `db,repo` | Запросы, присоединившиеся к работающему worker | по нагрузке | Проверить конкуренцию sync |
+| `shamir_wal_sync_errors{db,repo}` | counter | `db,repo` | Ошибки раундов sync | 0 | Проверить WAL/storage логи |
+| `shamir_wal_sync_duration_ns{db,repo}` | counter | `db,repo` | Суммарное время sync, наносекунды | по нагрузке | Проверить latency storage |
+| `shamir_replication_pull_held_back_ns{db,repo}` | counter | `db,repo` | Суммарное ожидание pull, нс | низкое | Проверить recoverability |
+| `shamir_replication_pull_held_back_count{db,repo}` | counter | `db,repo` | Pull, задержанные recoverability | 0 | Проверить W/R |
+| `shamir_repo_history_epoch_bumps_total{db,repo}` | counter | `db,repo` | Сдвиги history epoch при unclean-open | обычно 0 | Проверить shutdown/reseed |
+| `shamir_journal_checkpoint_failures_total{db,repo}` | counter | `db,repo` | Ошибки clean-horizon checkpoint | 0 | Проверить journal и I/O |
+| `shamir_journal_checkpoints_total{db,repo}` | counter | `db,repo` | Успешные runtime checkpoints | по работе | Проверить horizon progression |
+| `shamir_journal_retention_overflow_total{db,repo}` | counter | `db,repo` | Измерения выше retention cap | 0 | Проверить retention настройку |
+| `shamir_journal_retention_refusals_total{db,repo}` | counter | `db,repo` | Отказы записи enforcement retention | 0 | Проверить журнал и лимит |
+| `shamir_journal_retention_gaps_total{db,repo}` | counter | `db,repo` | Durable retention GAP записи | 0 | Проверить recovery/fencing |
+| `shamir_journal_channel_dropped_total{db,repo}` | counter | `db,repo` | События journal, потерянные из-за переполнения канала | 0 | Проверить consumer и нагрузку |
+
+#### Хранилище
+
+Нет экспортируемой метрики дискового объёма репозитория/таблицы или свободного filesystem. `shamir_wal_size_bytes{db,repo}` и `shamir_wal_segments{db,repo}` описывают WAL, а не свободное место на диске.
+
+#### Запросы и нагрузка
+
+| Серия | Тип | Метки | Что измеряет | Норма | Отклонение и первая проверка |
+|---|---|---|---|---|---|
+| `shamir_query_duration_seconds_bucket{db,repo,op,le}` | gauge, кумулятивный bucket | `op=read\|write\|batch\|tx\|function`, плюс `db,repo,le` | Длительности операций, секунды | обычно 1 мс–1 с | Проверить p95 и тип операции |
+| `shamir_query_duration_seconds_count{db,repo,op}` | counter | `db,repo,op` | Число операций | соразмерно запросам | Сверить поток запросов |
+| `shamir_query_duration_seconds_sum{db,repo,op}` | gauge | `db,repo,op` | Сумма длительностей, секунды | пропорционально count | Проверить среднее/p95 |
+| `shamir_query_errors_total{db,repo,code}` | counter | `db,repo`; `code=write_committed_visibility_pending|visibility_future_version|visibility_wait_invalid|as_of_visibility_timeout|repo_requires_reopen|as_of_future_version|as_of_reopen_required|table_migrating|version_conflict|tx_conflict|index_drain_in_progress|resync_required|subscription_catalogue_invalid|replication_destination_bound|replication_destination_quarantined|interner_quota_exceeded|other` | Ошибки запросов из закрытого словаря code | около 0 | Разбить по code и проверить логи |
+| `shamir_query_rows_viewed_total{db,repo}` | counter | `db,repo` | Просмотренные движком строки | соответствует сканированию | Сопоставить с returned и запросами |
+| `shamir_query_rows_returned_total{db,repo}` | counter | `db,repo` | Возвращённые строки | соответствует страницам | Сверить с клиентскими запросами |
+| `shamir_shapes_tracked{db,repo}` | gauge | `db,repo` | Отслеживаемые формы, максимум 256 | ниже 256 | Рост — разнообразие форм запросов |
+| `shamir_connections_active` | gauge | нет | Соединения с ConnLimiter guard | в пределах limit | Проверить активные клиенты |
+| `shamir_connections_limit` | gauge | нет | Глобальный лимит соединений; 0 без ограничения | конфигурация | Проверить лимит |
+| `shamir_connections_rejected_total` | counter | нет | Отказы на глобальном лимите | прирост 0 | Проверить активность и limit |
+| `shamir_inflight_response_bytes_used` | gauge | нет | Зарезервированные байты бюджета ответов, не RSS | не выше cap | Проверить ожидания и резервы batch |
+| `shamir_inflight_response_bytes_cap` | gauge | нет | Предел бюджета; −1 без ограничения | конфигурация | Проверить конфигурацию |
+| `shamir_response_budget_waiters` | gauge | нет | Ожидающие резервирование байтов | 0 | Проверить used/cap и result caps |
+
+Гистограмма запросов измеряет разные spans для `read`, `write`, `batch`, `tx` и `function`; дочерние spans не складываются между метками. Опрос нагрузки выполняется при scrape; названия `shamir_inflight_response_bytes_*` сохранены для совместимости. `shamir_argon2_busy_refusals_total` учитывает gate admission сверх `2 × capacity`, timeout permit и ошибки часов/deadline; это не число доставленных ответов. Устойчивый рост: сперва проверить часы (NTP/виртуализация), затем конфигурацию permit и нагрузку blocking pool. Свободные permit — приблизительная оценка, не точное число активных вычислений.
+
+#### Индексы и интернер
+
+| Серия | Тип | Метки | Что измеряет | Норма | Отклонение и первая проверка |
+|---|---|---|---|---|---|
+| `shamir_index_entries{db,repo,table,index}` | gauge | `db,repo,table,index`; агрегат `(other)` идёт без метки `index` | Число записей в индексах | порядка строк таблицы | Проверить таблицу и индекс; лимит 64 таблицы/32 индекса |
+| `shamir_index_build_seconds_bucket{db,repo,kind,le}` | gauge, кумулятивный bucket | `db,repo,kind=regular|sorted|fts,le` | Длительность первичной сборки, секунды | по размеру данных | Проверить p95 и размер индекса |
+| `shamir_index_build_seconds_count{db,repo,kind}` | counter | `db,repo,kind=regular|sorted|fts` | Число завершённых сборок | по изменениям схемы | Сверить с операциями DDL |
+| `shamir_index_build_seconds_sum{db,repo,kind}` | gauge | `db,repo,kind=regular|sorted|fts` | Сумма времени сборки, секунды | пропорционально count | Проверить среднее и нагрузку |
+| `shamir_index_rebuild_seconds_bucket{db,repo,kind,le}` | gauge, кумулятивный bucket | `db,repo,kind=regular|sorted|fts,le` | Длительность rebuild, секунды | по размеру данных | Проверить p95 и repair |
+| `shamir_index_rebuild_seconds_count{db,repo,kind}` | counter | `db,repo,kind=regular|sorted|fts` | Число завершённых rebuild | обычно редко | Проверить doctor/repair и миграции |
+| `shamir_index_rebuild_seconds_sum{db,repo,kind}` | gauge | `db,repo,kind=regular|sorted|fts` | Сумма времени rebuild, секунды | пропорционально count | Проверить среднее и размер данных |
+| `shamir_interner_names{db,repo}` | gauge | `db,repo` | Число интернированных имён полей | рост с новыми именами | Проверить бесконтрольную генерацию схемы |
+| `shamir_interner_high_water{db,repo}` | gauge | `db,repo` | Персистентный high-water интернера | монотонен | Сопоставить с числом полей |
+| `shamir_export_tables_truncated{db,repo}` | gauge | `db,repo`, значение 0/1 | Усечение метрик по лимиту cardinality | 0 | При 1 использовать агрегат `(other)` |
+| `shamir_export_tables_known{db,repo}` | gauge | `db,repo` | Известные открытые таблицы | соответствует открытым таблицам | Сверить с truncated и open registry |
+
+Закрытые репозитории, таблицы и индексы не видны; полные метки ограничены 64 таблицами и 32 индексами на репозиторий, остаток свёрнут в `(other)`. Отдельная серия `shamir_gc_pending_versions` не существует: используется `shamir_gate_pending_versions`.
+
+#### Функции
+
+| Серия | Тип | Метки | Что измеряет | Норма | Отклонение и первая проверка |
+|---|---|---|---|---|---|
+| `shamir_function_duration_seconds_bucket{db,repo,le}` | gauge, кумулятивный bucket | `db,repo,le` | Время внешних вызовов WASM глубины 0 | обычно микросекунды–миллисекунды | Проверить p95 и WASM нагрузку |
+| `shamir_function_duration_seconds_count{db,repo}` | counter | `db,repo` | Число внешних вызовов | по трафику | Сверить вызовы функций |
+| `shamir_function_duration_seconds_sum{db,repo}` | gauge | `db,repo` | Сумма времени вызовов, секунды | пропорционально count | Проверить среднее и долгие вызовы |
+| `shamir_function_fuel_consumed_total{db,repo}` | counter | `db,repo` | Израсходованный fuel | по нагрузке | Проверить частоту и стоимость вызовов |
+| `shamir_function_call_depth_high_water{db,repo}` | gauge | `db,repo` | Максимальная глубина вызова | ниже настроенного предела | Проверить рекурсивные вызовы |
+| `shamir_compile_cache_hits_total` | counter | нет | Попадания compile cache | растут после прогрева | Проверить cache и перезапуски |
+| `shamir_compile_cache_misses_total` | counter | нет | Промахи compile cache | низкий темп после прогрева | Проверить смену модулей и cache |
+| `shamir_compile_cache_bytes` | gauge | нет | Размер on-disk compile cache, байты | зависит от модулей | Проверить лимиты и содержимое cache |
+| `shamir_compile_cache_entries` | gauge | нет | Записи on-disk compile cache | зависит от модулей | Проверить churn модулей |
+| `shamir_module_admission_rejected_total{reason}` | counter | `reason` из закрытого набора | Отказы admission модулей | 0 | Проверить причину в метке и модуль |
+
+Длительность функции учитывает внешний вызов глубины 0, включая вложенное время, ошибки и отмену; метки не содержат имя функции.
+
+#### Репликация
+
+| Серия | Тип | Метки | Что измеряет | Норма | Отклонение и первая проверка |
+|---|---|---|---|---|---|
+| `shamir_replication_lag_versions{db,repo}` | gauge | `db,repo` | Отставание durable bookmark follower | небольшое | Проверить leader write rate, follower и сеть |
+| `shamir_replication_lag_seconds{db,repo}` | gauge | `db,repo` | Возраст последней receipt/advance | интерпретировать с lag versions | Может расти при здоровом idle; проверить запись leader |
+| `shamir_replication_stream_state{db,repo,state}` | gauge, one-hot | `state=starting\|streaming\|backing_off\|stopped` | Состояние replication stream | streaming при активности | Проверить соединение и причины backoff |
+| `shamir_replication_reconnects_total{db,repo}` | counter | `db,repo` | Пересоздания источника stream | обычно редко | Проверить сеть и supervisor |
+| `shamir_repl_resync_required_total` | counter | нет | Требования resync | 0 | Проверить журнал и identity |
+| `shamir_repl_identity_mismatch_total{reason}` | counter | `reason` | Несовпадения identity peer | 0 | Проверить lineage/epoch; не обходить fencing |
+
+Снимки агрегируют состояния и lag по ролям; receipt age способен расти при здоровом простое без новых версий, поэтому его нужно оценивать совместно с `shamir_replication_lag_versions`.
+
+#### Backup
+
+| Серия | Тип | Метки | Что измеряет | Норма | Отклонение и первая проверка |
+|---|---|---|---|---|---|
+| `shamir_backup_started_total{kind}` | counter | `kind=online` | Запущенные online backup | растёт по расписанию | Сверить расписание и завершения |
+| `shamir_backup_completed_total{kind}` | counter | `kind=online` | Успешные online backup | растёт вместе с started | Проверить failed и логи backup |
+| `shamir_backup_failed_total{kind,stage}` | counter | `kind=online`; `stage=preparing\|captured\|copying\|sealing\|verifying\|done\|failed` | Неудачные прогоны по стадии | прирост 0 | По stage проверить соответствующую фазу |
+| `shamir_backup_active` | gauge | нет, 0/1 | Выполняется ли backup | кратковременно 1 | Долгий 1 — проверить зависший прогон |
+| `shamir_backup_bytes_copied` | gauge | нет | Суммарные скопированные байты завершённых прогонов | растёт при успехе | Проверить прогресс и размер копии |
+| `shamir_backup_duration_seconds` | gauge | нет | Длительность последней успешной копии | сравнивать с предыдущими | Проверить прогресс фаз и storage |
+| `shamir_backup_writer_block_seconds{phase}` | gauge | `phase=capture\|seal` | Последнее закрытое окно блокировки writer, секунды | краткие окна | Проверить длительность barrier |
+| `shamir_backup_last_success_timestamp_seconds` | gauge | нет | Unix-время последнего успешного backup | свежее по расписанию | Проверить расписание и completed |
+| `shamir_backup_last_duration_seconds` | gauge | нет | Длительность последнего успешного backup | сравнивать последовательно | Проверить рост длительности |
+| `shamir_backup_last_bytes` | gauge | нет | Байты manifest последней успешной копии | зависит от данных | Сравнить с предыдущим backup |
+| `shamir_backup_scheduled_runs_total{result}` | counter | `result=started\|skipped_busy\|skipped_window\|failed\|completed` | События расписания | по расписанию | Проверить пропуски и ошибки |
+| `shamir_backup_scheduled_failure_streak` | gauge | нет | Последовательные плановые ошибки | 0 | Проверить backup logs и storage |
+| `shamir_backup_schedule_enabled` | gauge | нет, 0/1 | Включено ли расписание | соответствует конфигурации | Проверить schedule config |
+| `shamir_backup_schedule_started_timestamp_seconds` | gauge | нет | Время запуска расписания | ненулевое при enable | Проверить запуск schedule |
+| `shamir_backup_retention_deleted_total` | counter | нет | Удалённые retention объекты | зависит от срока хранения | Проверить retention policy |
+| `shamir_backup_retention_failed_total` | counter | нет | Ошибки очистки retention | 0 | Проверить права и storage |
+| `shamir_backup_retention_untouched` | gauge | нет | Объекты, не затронутые очисткой | зависит от политики | Проверить возраст и retention |
+
+`shamir_backup_pin_seconds` и `shamir_backup_wal_segments_copied_total` описаны, но не экспортируются: snapshot fields равны `None`, поскольку протокол пока не измеряет удержание pin и число WAL-сегментов. Метрики backup отражают последнюю успешную копию и плановые исходы; freshness/failure/retention alerts определены только в `shamir-backup.rules.yml`.
+
+#### Активность
+
+| Серия | Тип | Метки | Что измеряет | Норма | Отклонение и первая проверка |
+|---|---|---|---|---|---|
+| `shamir_cancellations_total{result}` | counter | `result=cancelled\|already_finished\|already_committing\|not_cancellable` | Попытки отмены запросов, транзакций и курсоров | зависит от клиентского трафика | Проверить источник отмен и длительные запросы |
+
+Серии `shamir_active_*` — без меток, это снимки конкретного сервера. `shamir_sessions_active`, `shamir_admission_queue_depth`, `shamir_repo_disk_bytes` и `shamir_table_disk_bytes` — design names, не экспортируются; для ожиданий версии используется `shamir_gate_pending_versions`.
+
+#### Подробности по семействам
 
 Серии WAL/storage (R4a-2) — снапшоты за scrape, метки только `db`/`repo`
 (у bucket-серий дополнительно `le`):
@@ -2015,6 +2214,19 @@ tar-архиву каталога); никогда не редактируйте
 `--force` её пропускает). Команда сверяет `manifest.json` (sha256 каждого
 файла), атомарно подменяет `data_dir` (прежний сохраняется как
 `.pre_restore_backup_<timestamp>`) и инвалидирует все resumption-тикеты.
+Копирование в staging привязано к тому, что проверила верификация: каждый
+файл читается один раз с открытого дескриптора источника и хешируется в том
+же проходе, в котором записывается, и до подсчёта скопированным сверяется с
+записью манифеста (размер и sha256); обычный файл, которого манифест не
+перечисляет (кроме служебных файлов формата), отвергается; скопированный
+корневой `manifest.json` сверяется по sha256 с теми байтами, которые
+потребила проверка. Файл, подменённый или добавленный между проверкой и
+копированием, отказывает restore до подмены `data_dir`; несовпадение
+называется своим именем (файл есть, но отличается от манифеста), а не
+«файл отсутствует». Имя файла, не являющееся корректным Unicode, при restore
+отвергается (оно не может совпасть с записью манифеста). Не закрыто: подмена родительского каталога между обходом
+и открытием файла (нужен примитив уровня `openat`, которого в коде нет),
+поэтому держи снимок в каталоге, в который пишет только оператор.
 Счётчики lockout не сбрасываются. Не восстанавливай простым `cp -r`: так
 пропускаются проверка манифеста и инвалидация тикетов. Известное ограничение
 копирования: на регистронезависимой файловой системе Windows два имени
@@ -2031,8 +2243,14 @@ Backup и restore теперь явно fsync'ируют каждый скопи
 storage до возвращения успеха (а не оставались в OS page cache):
 
 - **`copy_dir_recursive`** (общий для `backup()` и `restore()`'s step 3):
-  после `fs::copy` файл переоткрывается на запись и вызывается `sync_all()`.
-  Ошибка файлового sync'а **пропагируется** как `BackupError::Io` /
+  файл копируется потоково с открытого дескриптора источника в созданный
+  файл назначения, затем на дескрипторе назначения вызывается `sync_all()`
+  (хеширование и сверка с манифестом выполняются только при restore, см.
+  выше; `backup()` при копировании ничего не хеширует, манифест пишется
+  после обхода). Права источника сохраняются: на Unix файл создаётся сразу с
+  режимом источника и тот же режим выставляется после записи, поэтому
+  приватный файл (`0600`) не становится читаемым другим пользователям (как и
+  раньше с `fs::copy`). Ошибка файлового sync'а **пропагируется** как `BackupError::Io` /
   `RestoreError::Io` — корректность содержимого файла IS the point (по
   прецеденту `segment_meta.rs`, где файловый `sync_all` тоже жёстко
   протагируется).
@@ -2284,6 +2502,34 @@ identity создаются **disabled и passwordless** (`insert_disabled_impor
 grant. Уже существующие chown/chgrp работают с импортированными владельцами как
 обычно.
 
+### Шифрование дампа и онлайн-экспорта своими средствами
+
+Сервер не шифрует ни дамп, ни онлайн-экспорт (так же, как копии: см. «Шифрование
+копий своими средствами»); за шифрование отвечает оператор. Артефакт — один файл
+с контрольными суммами, поэтому шифруйте его целиком средствами вне сервера,
+например `age` или `gpg`, а шифртекст храните отдельно от ключей:
+
+```bash
+age -r <публичный-ключ> -o app.dump.age app.dump
+age -d -i <файл-ключа> -o app.dump app.dump.age
+```
+
+* Шифруйте только **опубликованный** артефакт: файл по пути `--output`
+  (офлайн-экспорт, успешно завершённая команда) или файл с opaque-именем в
+  `export_root` после терминальной фазы `done` задания.
+* Этапные файлы и каталоги (`.shamir-export-` + 6 символов в `export_root`,
+  этапные файлы рядом с `--output`) не шифруйте и не копируйте: это
+  незавершённая работа сервера, он удаляет их сам.
+* Не правьте байты артефакта и не перепаковывайте его: любая правка ломает
+  контрольные суммы.
+* Перед `logical-import` расшифруйте файл в приватный каталог (права только
+  владельца) и укажите его в `--input`; после импорта удалите расшифрованную
+  копию.
+* Изменённый, усечённый или неверно расшифрованный артефакт импорт отклоняет в
+  preflight, до любого изменения диска: цель не публикуется. Отдельной
+  CLI-проверки дампа нет (см. «Verify-only workflow»), проверкой служит сам
+  импорт.
+
 ### Что отказывается сегодня и почему
 
 Fail-closed: неподдерживаемое содержимое вызывает отказ экспорта/импорта,
@@ -2445,6 +2691,10 @@ SCRAM-сессия суперюзера. Runner сверяет полномоч�
 сессии-владельцу на той же базе. Реестр хранит одно текущее или последнее
 задание до следующего принятого старта. Разрыв соединения, вытеснение сессии
 из реестра сессий (eviction) и остановка сервера сигнализируют отмену.
+Остановка сервера ждёт ОБЕ очереди задания: и фазу подготовки старта
+(слот подготовки занят с момента приёма запроса до резервации в реестре —
+авторизация и прогрев идут под ним), и работающий worker, прежде чем
+сбрасывать репозитории.
 `ExportCancelReceipt` с `cancelled = true` подтверждает сигнал, а не завершение:
 терминальную фазу проверяют через `ExportStatus`. До публикации отмена
 сворачивает задание, освобождает gate и удаляет этап; опубликованный файл
@@ -2475,35 +2725,16 @@ SCRAM-сессия суперюзера. Runner сверяет полномоч�
 имени корня, ни секретов, ни peer-текста — только фиксированные строки и
 замкнутый набор типизированных причин.
 
-Порядок работы клиентом (typed builder'ы, никакого ручного wire-JSON):
+В интерактивном режиме сессия сохраняется между командами: `start` возвращает квитанцию, а `status` и `cancel` управляют заданием только в той же сессии. В пакетном режиме `start` удерживает соединение и раз в секунду опрашивает статус (не более 55 секунд), затем печатает одну JSON-запись с терминальным состоянием. Общий срок в 55 секунд делят запуск и все запросы статуса; между опросами пауза в одну секунду, поэтому и медленный успешный запрос статуса, и пауза могут вывести вызов за срок (код 7). Ошибка самого запроса статуса завершает вызов сразу и данных о задании не содержит. Терминальное состояние задания — успешный результат оболочки (код 0): `data.phase` принимает значения `done` (с меткой `artifact_name`), `failed` (с причиной в `failure`) или `cancelled`, а код 0 при `failed` не означает, что артефакт есть. Пакетные `status` и `cancel` отклоняются до отправки запроса: код `export_session_only`, код завершения 1, `op: null`. Каждый пакетный вызов открывает отдельную сессию; задание принадлежит сессии, в которой его запустили. Если за 55 секунд терминального состояния нет, процесс завершается с типизированным таймаут-исходом (код 7), а задание получает сигнал отмены вместе с соединением. При принудительном завершении процесса соединение закрывается, и сервер подаёт заданию сигнал отмены; код 7 не доказывает отсутствие артефакта: задание, уже вошедшее в окно публикации, может опубликовать артефакт. Сессия помнит базу задания, запущенного в ней: интерактивные `status` и `cancel` адресуют именно её; пока задание в сессии не запущено, они используют базу маршрутизации профиля. Идентификатора для управления заданием из другой сессии нет. Сервер не передаёт файл по протоколу: оператор получает его вне оболочки.
 
-```rust
-use shamir_query_builder::ddl;
-use shamir_query_types::admin::ExportPhase;
-use shamir_sync::replication_seed::verify_dump_file;
+```sh
+# Команды внутри одной интерактивной сессии:
+export online start billing --yes
+export online status
+export online cancel --yes
 
-// старт: вся база, либо .repo(...), .repo(...).table(...), .schema_only(true)
-client.start_export("app", ddl::start_export("app").repo("archive")).await?;
-
-// опрос статуса: не чаще ~раз в 20 ms (лимит 500 req/s на сессию)
-let receipt = loop {
-    let st = client.export_status("app").await?;
-    // При необходимости отмены во время задания:
-    // let cancel = client.cancel_export("app").await?;
-    // Даже при cancel.cancelled продолжайте опрашивать статус до терминальной фазы.
-    match st.phase {
-        ExportPhase::Done => break st,
-        ExportPhase::Failed | ExportPhase::Cancelled => {
-            panic!("export phase {:?}, failure {:?}", st.phase, st.failure);
-        }
-        _ => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
-    }
-};
-
-// верификация артефакта оператором — библиотечный верификатор, без открытия базы
-let path = export_root.join(receipt.artifact_name.expect("Done carries the name"));
-verify_dump_file(&path)?;
-// затем офлайн-импорт: shamir-server --config db.ktav logical-import --input <path> ...
+# Один batch-вызов; ожидает терминального статуса:
+shamir-server shell --profile prod --secret-prompt -- export online start billing --yes
 ```
 
 || Код | Когда |
@@ -2511,7 +2742,7 @@ verify_dump_file(&path)?;
 || `permission_denied` | Не SCRAM-сессия или не суперюзер (проверяется до всего остального). |
 || `online_export_not_configured` | Экспортный корень не настроен. |
 || `online_export_invalid_form` | Не standalone/нетранзакционный/одно-операционный батч или несовпадение `database` с конвертом. |
-|| `online_export_already_running` | На сервере уже живёт задание (любой владелец) или уже поднят freeze intent. |
+|| `online_export_already_running` | На сервере уже живёт задание (любой владелец), уже поднят freeze intent или другой старт ещё в фазе подготовки (слот подготовки занят до резервации задания в реестре). |
 || `export_scope_denied` | Текущее состояние каталога не подтверждает суперюзера или включённый объект не прошёл Read/Manage ACL. |
 || `online_export_invalid_scope` | Некорректный scope: пустые/чрезмерные имена, `table` без `repo`, `__system__`, неразрешённые имена. |
 || `online_export_unsupported` | Опции/инвентарь вне возможностей формата этой фазы (в т.ч. `include_artifacts`). |
@@ -2571,25 +2802,35 @@ scrape_configs:
       - targets: ['127.0.0.1:9090']
 ```
 
-И примеры alert-правил:
-* `auth_attempts_total{result="bad_proof"}` > threshold → brute-force alert.
-* `shamir_tx_aborted_ssi_total` growing → contention hot-spot.
-* `increase(shamir_visibility_ack_total{result="pending_timeout"}[5m])` > 0 →
-  commits are answering Pending (bounded mode): a writer version is unsettled —
-  correlate with `shamir_gate_oldest_blocker_*` before restarting anything.
-* `increase(shamir_visibility_pending_total{reason="reopen_required"}[5m])` > 0 →
-  the repository needs reopen/recovery attention, not client retries.
-* `increase(shamir_visibility_read_wait_timeouts_total[5m])` > 0 → AsOf reads
-  are waiting past `read_visibility_timeout_ms`: check the blocking writer.
-* `shamir_visibility_ack_waiters` near the connection limit → acknowledgement
-  parking is consuming connection slots; switch the service to
-  `visibility_ack_mode = "bounded"` (connection-resource liveness).
-* `increase(shamir_visibility_reconciliation_total{result="pending_timeout"}[15m])`
-  high → callers reconcile repeatedly against a stalled version; investigate
-  `shamir_gate_unsettled_versions` / orphan-replay counters.
-* Expiry of any of these waits also emits a rate-limited WARN log (at most one
-  per repository per 5 s) with `target`, `visible_through`, `blocking_version`
-  and `elapsed_ms` — alert on the metric, read the log for the position.
+Загрузите `deploy/alerts/shamir.rules.yml` и `deploy/alerts/shamir-backup.rules.yml` через `rule_files`, запустите `promtool check rules` и reload Prometheus. Backup freshness остаётся только в backup rules, без дублирования. Импортируйте `deploy/grafana/shamir-dashboard.json` или provision через dashboard provider; задайте datasource и фильтры `db`/`repo` (schema v39). Host-level filesystem alerts настраивайте через node_exporter: ShamirDB не экспортирует метрику свободного места файловой системы.
+
+Пороги ниже — стартовые значения; они дают время на кратковременные всплески или выявляют существенный backlog, их следует подстроить под рабочую нагрузку и retention.
+
+|| Алерт | Порог | for | severity | Почему такое стартовое значение |
+||---|---|---|---|---|
+|| ShamirWalTruncationBacklog | `>10000` версий | 10m | warning | Выявляет значимый backlog, не реагируя на короткое отставание truncate. |
+|| ShamirWalGrowth | `>10485760` байт/с и `>10000` версий lag | 10m | warning | Одновременно требует быстрого роста WAL и накопления backlog, снижая шум штатной записи. |
+|| ShamirReplicaLagVersions | `>1000` версий | 5m | warning | Отделяет заметное отставание от кратковременной разницы потока. |
+|| ShamirReplicaReceiptAge | `>300` секунд и lag `>0` | 5m | warning | Возраст receipt один не тревожит при healthy-idle; требуется и ненулевое отставание. |
+|| ShamirQueryErrorGrowth | любое увеличение за 15m | 5m | warning | Любая новая ошибка заслуживает проверки, но окно и for отсекают единичные короткие колебания. |
+|| ShamirGateBlockerStuck | возраст blocker `>300` секунд | 5m | warning | Долгоживущий blocker важен и без ожидающих ACK, поэтому сигнал независим от waiters. |
+|| ShamirVisibilityBlocked | blocker `>300` секунд и waiters `>0` | 5m | warning | Подтверждает, что старый blocker уже удерживает клиентов. |
+|| ShamirVisibilityPendingTimeout | любое увеличение timeout за 5m | 5m | warning | Timeout — редкий признак задержки gate, требующий проверки после устойчивого окна. |
+|| ShamirVisibilityReopenRequired | любое увеличение reopen_required за 5m | 5m | critical | Reopen fencing указывает на неопределённый WAL outcome и требует немедленного внимания. |
+|| ShamirVisibilityReadWaitTimeouts | любое увеличение за 5m | 5m | warning | Таймауты чтения видимости не ожидаются в штатном режиме. |
+|| ShamirVisibilityReconciliationLoop | `>5` pending_timeout за 15m | 10m | warning | Порог отделяет повторяющиеся ошибки reconciliation от одиночного сбоя. |
+|| ShamirAuthenticationAnomaly | `>1` отказа/с за 5m | 5m | warning | Выявляет устойчивый поток ошибок, не единичную ошибку пользователя. |
+|| ShamirReplicationIdentityMismatch | любое увеличение за 15m | 1m | critical | Любое несовпадение identity нарушает fencing и требует проверки до продолжения. |
+|| ShamirArgon2Refusals | rate `>0`/с | 5m | warning | Устойчивые отказы admission заметны без тревоги на краткий отказ. |
+|| ShamirConnectionSaturation | любое увеличение за 5m | 2m | warning | Фактический отказ подключения подтверждает насыщение лимита; короткий for помогает быстро реагировать. |
+|| ShamirPostAuthRateLimit | любое увеличение за 5m | 5m | warning | Показывает устойчивое ограничение сессий, а не единичную попытку. |
+|| ShamirResponseBudgetWaiters | waiters `>0` | 5m | warning | Ожидание должно быть устойчивым, чтобы исключить краткий contention. |
+|| ShamirResponseBudgetNearCap | used/cap `>90%` | 5m | warning | Запас менее 10% — ранний сигнал давления до явного ожидания. |
+|| ShamirActiveRequestsGrowth | `>100` запросов и рост `>0.1`/с | 10m | warning | Сочетает существенный абсолютный уровень и длительный рост, исключая небольшой всплеск. |
+
+Ни одно правило файла не читает timestamp-серию напрямую, а `BackupStale` в `shamir-backup.rules.yml` защищает нулевой случай.
+
+`shamir.rules.yml` содержит WAL, replica, query, visibility, auth и saturation alerts; конкретные выражения и runbook annotations находятся в самом файле. Backup freshness/failure/retention rules определены только в `shamir-backup.rules.yml`.
 
 ## Что важно знать уже сейчас (дозированно)
 
@@ -3247,589 +3488,89 @@ schema: журнал application-schema миграций R1c и durable-иден
 `UnsupportedServer`, а не «пустой журнал». Никакого fallback на DDL без
 журнала не существует ни на одном пути.
 
-### Что добавит административный шелл (позже)
+### Контекст: шелл R5
 
-Шелл (release-1 R5, проект
-[docs/dev-artifacts/design/admin-shell.md](../../dev-artifacts/design/admin-shell.md))
-получит те же команды apply/status/check поверх этого протокола; R1c
-поставляет только клиентские API.
+`shamir-server shell` использует тот же протокол; R1c поставляет клиентские API. Порядок работы оператора приведён ниже.
 
-## Административный шелл: состояние и узкие просмотры данных (R5 PR3)
+## Административный шелл: рабочий маршрут оператора
 
-Административный шелл (`shamir-server shell`) поддерживает интерактивный
-режим (только когда и stdin, и stdout — TTY) и батч-режим: ровно одна
-команда после `--`, разбор из argv, один ответ. Батч-вывод — всегда JSON
-Lines (схема v1), в том числе на TTY; stderr — только для человека и
-никогда не содержит сырых серверных сообщений или peer-supplied текста.
-Секреты в argv запрещены: источников ровно четыре — `--secret-prompt`,
-`--secret-stdin`, `--secret-env` и `--secret-fd N`. Четвёртый доступен
-**только на Unix** и передаёт уже открытый файловый дескриптор, а не сам
-секрет в argv; на Windows флаг отвергается типизированным отказом до
-чтения секрета и до любой сетевой активности. Ровно один источник за
-вызов: несколько явных селекторов — типизированный конфликт источников.
-`--secret-env` принимает только `SHAMIR_SHELL_PASSWORD` (SCRAM) или
-`SHAMIR_SHELL_TOKEN` (токен). Никакой истории в R5 нет — поверхности
-утечки через историю не существует.
+Поля результатов, требуемые права, пределы ответов и таблица типизированных кодов выхода собраны в [справочнике команд оболочки](#справочник-команд-оболочки) ниже; этот раздел описывает порядок действий оператора.
 
-### Команды состояния и просмотра данных
+`shamir-server shell` — удалённый клиент, а не способ открыть каталог сервера. Интерактивный режим запускается без команды и требует TTY на stdin и stdout; пакетный режим выполняет ровно одну команду после `--`. Для команды, разобранной и дошедшей до вывода, пакетный ответ — одна LF-завершённая запись JSON Lines v1, даже при TTY, — если запись на stdout удалась: при неудачной записи полная запись не появляется, а код выхода становится 1. `-- help`/`--help` и команда, не разобранная как таковая, вывода на stdout не дают. `op` в записи — метка команды, а не индикатор отправки: локальный отказ после разбора может нести непустой `op`. `--output-version 1` — только локальная проверка версии. История команд отсутствует. Интерактивное приглашение и диагностика идут в stderr.
 
-| Команда | Что печатает | Права |
-|---|---|---|
-| `status` | снимок состояния сервера (см. ниже) | superuser-класс |
-| `version show` | версия бинарника, наблюдённая при загрузке эпоха формата и исход штампа; штамп при запросе не перечитывается (сохранённые переопределения durable-политики читаются из системного каталога во время запроса — см. ниже) | superuser-класс |
-| `replication subscriptions` | записи подписок репликации (идентичности, состояние, закладки, версии), но не «живой» лаг апстрима | **только superuser-класс**: хендлер отвергает не-суперпользователя ещё до запуска batch; у суперпользователя проверки `List(Root)` (`authorize_repl_read`) и ACL базы маршрутизации проходят через общий admin-обход; БД маршрутизации из профиля обязательна (batch-путь) |
-| `data count DB REPO TABLE` | число записей таблицы и признак пути (O(1)-счётчик или скан); если статистика ответа не различает путь — консервативное `unknown` с оговоркой | Read на поименно названной базе команды (floor профиля не требуется); затем обычный ACL базы/таблицы сервера (batch-путь) |
-| `data head DB REPO TABLE N` | первые N записей в порядке серверного скана (см. ниже) | Read на поименно названной базе команды (floor профиля не требуется); затем обычный ACL базы/таблицы сервера (batch-путь) |
-| `data get DB REPO TABLE KEY` | точечное чтение по точному ключу: тело одной записи (см. поля результата ниже) или типизированный `not_found`. KEY — Base58 `RecordId` длиной **16–22** символа (22 — каноническая полная форма), проверяется локально до соединения; некорректный ключ — типизированный отказ `invalid_record_id` (exit 1), не паника и не скан | сначала Database Read, затем Table Read на поименно названной базе (floor профиля не требуется), с проверкой предка до любого поиска; та же двухшаговая проверка повторяется после ожидания бюджета ответа (см. ниже); курсор не создаётся, курсорный путь не задействуется |
+### 1. Профиль и проверка pin
 
-**Единый отказ чтения: таблица не выдаёт своего существования.** Если
-вызывающий не может прочитать таблицу — потому ли, что она закрыта ACL, или
-потому, что её нет, — все пути чтения данных возвращают **один и тот же**
-типизированный код `unknown_table` (exit 5): точечное чтение `data get`,
-batch-чтение (`data count` / `data head`), создание и чтение курсора. Тот же
-код получает и опрос статуса DDL-операции. Закрытая таблица и отсутствующее
-имя по коду неразличимы. Правило действует в одной точке на каждом пути:
-отказ `Read` на `Table` в авторизации batch-запроса, проверка существования
-таблицы перед выполнением batch-чтения и двухшаговая проверка
-`Database`→`Table` у точечного чтения, создания/чтения курсора и опроса
-статуса DDL. Отказ уровня **базы** (`Database Read`) по-прежнему
-`access_denied` (exit 4): он выполняется до любого разрешения таблицы и
-поэтому о таблице ничего не сообщает. Отсутствующие родители сохраняют свои
-коды `unknown_db` / `unknown_repo`. Той же маской закрыты `DescribeTable` и
-`GetTableSchema`: закрытая и отсутствующая таблица дают `unknown_table` с
-фиксированным сообщением `table is unavailable` (родительская проверка базы
-остаётся `access_denied`).
+Профили создаются оператором вручную как строгие `.ktav` файлы в каталоге профилей оболочки. Разрешены только адрес, транспорт, имя пользователя, pin, SNI/CA и база маршрутизации; секреты в профиль не помещаются. В первом выпуске оболочка не создаёт профиль и не захватывает pin: профиль provisioning — отдельная локальная операция, а pin `SHA256(server_pub_key)` нужно получить и сверить через доверенный внеполосный канал. Отсутствующий или несовпадающий pin — отказ; режима принятия нового хоста нет. `profile list` и `profile show` локальны и не показывают сам pin (только наличие).
 
-Важно не обобщать это правило на все операции READ: паритет отказа для
-чтения данных действует как на здоровых, так и на quarantined репозиториях,
-но порядок admission и проверки доступности различается. При slot admission
-раньше availability таблицы в обоих состояниях получают одинаковый
-фиксированный `server_busy`. На `GetRecord` availability раньше slot:
-absent/closed таблицы получают `unknown_table`, quarantine проверяется позже.
-Остаётся узкое окно name-to-handle между повторной проверкой регистрации и
-получением handle; terminal-state гонка курсора также follow-up. `List(Tables)`
-через store List перечисляет настроенные имена; `List(Indexes)` различает
-состояния. `GetBufferConfig` и `ListValidators` через stored function всё ещё
-различают availability. Для batch missing repository остаётся legacy untagged
-error, не typed `unknown_repo`.
-`Subscribe` с любым нечитаемым или отсутствующим source целиком отклоняется
-до создания потока; нет частичного исключения источников. Утверждённая
-совместимость `runLive` — отклонить весь promise без выдачи stream.
+```sh
+shamir-server shell -- profile list
+shamir-server shell -- profile show prod
+```
 
-Практическое следствие: раньше пути расходились — закрытая таблица давала
-`access_denied` (exit 4), а отсутствующая на batch-пути приходила общим кодом
-`query` (в шелле — `server_error`). Теперь и закрытая, и отсутствующая
-таблица дают `unknown_table` (exit 5) на всех перечисленных путях. Неудачная
-попытка прочитать таблицу больше не подтверждает и не опровергает её
-существование.
+### 2. Подключение
 
-**Вторая авторизация и сравнение регистрации.** Точечное чтение — не batch-
-и не курсорный путь, поэтому он сам выполняет ту же двухшаговую проверку
-(Database `Read`, затем Table `Read`, с проверкой предка до любого поиска)
-**дважды**: до ожидания ёмкости байтового бюджета ответа и ещё раз после
-него — иначе отзыв прав за время ожидания был бы обойдён. После второй
-проверки сервер заново разрешает имя родителя и сравнивает **регистрацию**
-таблицы с той, которую авторизовала первая проверка; сравнение различает
-любые две регистрации, включая legacy-таблицы без store id. Три исхода:
+Укажите профиль и используйте свежую аутентификацию. Для переключения профиля в уже работающей интерактивной сессии используйте `connect NAME` (для токена — `connect NAME --auth token`); `connect` без имени использует текущий профиль. Поддерживаются TLS-TCP + SCRAM, native WSS + SCRAM, локальный IPC + SCRAM; для заранее выданного токена — HTTPS REST или native token WSS. TLS-TCP/WSS SCRAM проверяет прикладной pin; IPC опирается на границу ОС плюс SCRAM и pin. Токены используют проверку CA (WebPKI либо указанный в профиле CA PEM). Нет plaintext-сетевого режима, token-over-IPC, HTTP password login, browser-профиля или возобновления сессии. Никакого автоматического переподключения с повтором операции нет.
 
-* регистрация не изменилась — чтение выполняется обычным путём;
-* регистрация заменена (drop + create, переименование, замена
-  legacy-таблицы другой legacy-таблицей, имя маршрута занято другой
-  регистрацией) — типизированный `access_denied` с фиксированным серверным
-  текстом «the authorized table registration changed during the request»;
-  шелл печатает собственный фиксированный отказ (exit 4) и серверный текст
-  не воспроизводит. Если идентичность регистрации установить нельзя, сервер
-  отказывает так же (fail closed), а не читает вслепую;
-* таблицы по этому имени больше нет — `unknown_table` (exit 5): отсутствие
-  сообщается как отсутствие, а не как замена.
+```sh
+shamir-server shell --profile prod --secret-prompt -- connect
+shamir-server shell --profile prod --auth token --secret-env SHAMIR_SHELL_TOKEN -- connect
+shamir-server shell --profile prod --secret-prompt -- ping
+```
 
-Если за время ожидания исчез родитель (база или репозиторий), ответ — тот
-же типизированный отказ разрешения имени, что и без ожидания
-(`unknown_db` / `unknown_repo`), а не `unknown_table`.
+Секреты передаются только одним источником за запуск: интерактивный скрытый prompt (без эха), `--secret-stdin`, Unix-only `--secret-fd N` или `--secret-env` (`SHAMIR_SHELL_PASSWORD` для SCRAM, `SHAMIR_SHELL_TOKEN` для токена). Batch не спрашивает секрет без явного `--secret-prompt`. `--secret-stdin` читает stdin; TTY нельзя использовать как stdin/fd вместо prompt. `--secret-fd` на Windows отвергается, используйте `--secret-stdin`. Значение env может быть видно процессам того же пользователя. `--password` и `--token` в argv запрещены. Секреты не печатаются ни в stdout, ни в stderr; источники ограничены общим пределом чтения.
 
-**Остаточное DDL-окно.** Между последней проверкой регистрации и получением
-хендла таблицы остаётся окно: DDL, целиком попавшая в него, сравнением не
-покрыта. Повторная проверка сужает окно ожидания, но не закрывает его — это
-документированное ограничение этой версии.
+### 3. Ping и каталог
 
-**Границы ответа `data get`: имена и карантин.** `db`, `repo` и `table`
-принимаются в пределах **1..=255 UTF-8 байт**. Это **физический** предел
-имени ключевого пространства хранилища, а не логический предел DDL:
-логические валидаторы создания базы и репозитория длину не ограничивают
-(только пустое имя, `.`/`..` и символы вне `[A-Za-z0-9_-]`), поэтому база с
-логическим именем длиннее 255 байт может существовать, но точечным чтением
-не адресуется — сервер отвечает фиксированным отказом `invalid_request`
-(шелл: exit 5) без эха имени. Карантин репозитория проверяется и до
-ожидания, и при получении хендла таблицы; на этом пути `resync_required`
-несёт **фиксированный** текст, а не записанную или наблюдённую идентичность
-репликации (у batch-пути текст не менялся). Шелл в любом случае печатает
-собственный фиксированный текст.
+Начните с `ping`, затем используйте каталог: `db list`, `repo list`, `repo describe REPO`, `table list REPO`, `table describe REPO TABLE`, `table schema REPO TABLE`, `index list REPO TABLE`, `function list [FOLDER]`. Команды пакетного batch-пути (включая каталог) требуют в профиле базу маршрутизации с правом Read; команда дополнительно проверяется сервером по ACL своей цели. `repo describe` требует superuser и Read на репозитории. Сервер остаётся единственным источником решения о правах.
 
-Припаркованный (ожидающий ёмкости байтового бюджета ответа, а **не**
-видимости) `data get` при этом **не виден в просмотре активности запросов и
-не может быть отменён оттуда** — известное ограничение этой версии:
-точечное чтение занимает слот in-flight запросов сессии, но не регистрирует
-строку активности (в отличие от припаркованного batch-запроса, который
-виден и отменяем).
+```sh
+shamir-server shell --profile prod --secret-prompt -- ping
+shamir-server shell --profile prod --secret-prompt -- db list
+shamir-server shell --profile prod --secret-prompt -- repo describe main
+shamir-server shell --profile prod --secret-prompt -- table describe main invoices
+shamir-server shell --profile prod --secret-prompt -- table schema main invoices
+shamir-server shell --profile prod --secret-prompt -- index list main invoices
+shamir-server shell --profile prod --secret-prompt -- function list
+```
 
-**Права `replication subscriptions` и admin-обход.** Команда идёт
-существующим admin-путём `ReplicationStatus`. Это admin-операция: хендлер
-**отвергает не-суперпользователя ещё до запуска batch** (типизированный
-`permission_denied`, exit 4), поэтому «обычная сессия с Root List» эту
-команду выполнить не может. У суперпользователя обе оставшиеся проверки —
-`List(Root)` (`authorize_repl_read`) и ACL базы маршрутизации из профиля —
-проходят через общий admin-обход движка (актор уровня admin/system проходит
-гейт, не сравнивая биты), так что выдавать суперпользователю Root List
-дополнительно не нужно.
+### 4. Состояние и репликация
 
-**Конверт ответа и поле `node`.** Батч-вывод — всегда ровно одна запись
-JSON Lines (схема v1), в том числе на TTY. Интерактивный режим
-JSON-конверта не печатает вовсе: человекочитаемая таблица или блок ошибки
-идёт только на stderr, stdout молчит. Поле `node` (наблюдённые роль и id
-узла) заполнено **только** в **успешной** записи (`kind: result`) команд
-`status` и `version show` — каждая выдаёт **собственный живой** `Status`
-RPC (тот же RPC и те же смыслы полей); лаунчер при загрузке/подключении
-захватывает исход штампа формата и идентичность узла (роль и id), а
-uptime, наблюдения, WAL-блок и сохранённые переопределения
-durable-политики собираются **во время запроса**. Любая **ошибка** несёт
-`node: null` и `data: null`. Все остальные команды — `data count`, `data head`,
-`data get`, `replication subscriptions` — печатают `node: null`, как и
-локальные/поясняющие команды и отказы до подключения: роль подключённого
-узла наблюдаема **только** через `status`/`version show`, а шелл никогда
-не отправляет скрытый лишний запрос, чтобы её заполнить. `null` здесь
-означает «не наблюдалось», а не «нет роли»; выдуманное наблюдение не
-печатается никогда.
-
-`status` печатает:
-
-* версию серверного бинарника;
-* **наблюдённую** эпоху формата и исход штампа — захваченные лаунчером
-  при загрузке (через существующий on-disk `inspect` под boot-lock);
-  константа процесса не используется, и штамп при запросе НЕ
-  перечитывается. Утверждение «`status` не читает диск» было бы
-  неверным: **сохранённые** переопределения durable-политики читаются из
-  системного каталога **во время запроса** (через работающее
-  хранилище системы), поэтому `status` и `version show` могут
-  завершиться типизированным кодом, если это чтение не удалось.
-  Каталожные команды (`db list`, `table describe` и т.п.) отличаются не
-  этим, а тем, что каталог — сам предмет их ответа: `db list` перечисляет
-  **живой реестр** процесса (зарегистрированные имена баз), а не сканирует
-  каталог на диске, и так же `repo list`/`table list` отдают живые
-  регистрации при каждом вызове;
-* монотонный uptime (монотонные часы; не откатывается);
-* роль репликации **из настроенного при запуске режима узла**, не
-  выведенную из телеметрии; отсутствует — `unknown`;
-* разрыв репликации по репозиториям: поле `gap_versions_merged` —
-  **слитный неавторитетный агрегат** (реестр объединяет наблюдения
-  лидера и фолловера). Всегда печатается оговорка; слово «лаг» не
-  используется никогда. Возраст выборки всегда неизвестен (нет
-  timestamp-проведения), ноль может означать «не сэмплировано».
-  Возраст по квитанции (receipt) — отдельное поле, если присутствует
-  в снимке, иначе неизвестен;
-* WAL-телеметрию: watermark/отложенные версии/коммиты. Это **диапазон
-  W–R (watermark — recoverable), а не число записей**;
-* настройки durable-политики по репозиториям: **эффективные** (после
-  всех переопределений) и **сохранённые**; отсутствующее
-  переопределение — `null`.
-
-Принятые ограничения `status` (сформулированы явно, чтобы их не принимали
-за дефекты):
-
-1. **Наблюдения репликации берутся из ПРОЦЕССНО-ГЛОБАЛЬНОГО реестра**:
-   два лаунчера в одном процессе видят наблюдения друг друга; реестр
-   ограничен числом различных ключей `(db, repo)`, и при переполнении
-   наблюдения всех непоместившихся источников сводятся в одну строку
-   `(other)/(other)` — это предел **ключей реестра**, а не источников на
-   репозиторий; идентичности репозитория для этой строки не сохраняются,
-   поэтому она печатается с оговоркой.
-2. **Роль выводится из настроенного режима**, а не из локального потока:
-   `ReadOnly` → `follower`, любая другая конфигурация (включая
-   `ReadWrite` и выключенную репликацию) → `unknown`. Локальный поток
-   репликации роль никогда не определяет.
-3. **Пара WAL о первом отложенном**: `first_pending_age_ns` присутствует
-   ровно тогда, когда присутствует `first_pending_version` (и никогда
-   отдельно). Нулевой возраст — **нижняя граница**, а не доказательство,
-   что отложенная версия только что появилась: экспортёр метрик отдаёт
-   ноль и когда отложенных версий нет, и когда параллельное или запоздалое
-   наблюдение сделало выборку несравнимой (более новое наблюдение не
-   заменяется).
-
-Бюджеты и обещания `data head` (оболочечные, поверх серверных):
-
-* **порядок не обещан** — записи приходят в порядке серверного скана,
-  `ORDER BY` не используется и порядок полагать нельзя;
-* не более **100 записей** (больший N обрезается с видимым маркером
-  `rows_capped`);
-* не более **256 КиБ** — это бюджет **выдаваемого массива записей**, а не
-  полученной от сервера полезной нагрузки и не транзитных аллокаций:
-  первая запись, которая переполнила бы массив, останавливает проекцию и
-  выставляет маркер `bytes_truncated`;
-* **дедлайн 5 секунд** по **монотонным часам** — ОДИН общий дедлайн на
-  весь запрос **после установления сессии**: и на ожидание ответа, и на
-  локальную проекцию (монотонные часы не зависят от перевода системного
-  времени и не откатываются). Точный контракт:
-  * дедлайн проверяется **между записями** и при ожидании;
-  * **одна запись сначала проецируется целиком**, поэтому стоимость одной
-    записи ограничена только серверным лимитом результата — это **не**
-    жёсткая граница wall-time на одну запись;
-  * **уже истёкший дедлайн важнее ошибки проекции**: если бюджет
-    исчерпан, отказ — типизированный `head_wall_time` (**exit 7**),
-    даже когда проекция записи вернула ошибку (`projection_limit` и
-    т.п.) — никогда не вводящий в заблуждение exit 5;
-  * дедлайн перепроверяется **и после** синхронной проверки вывода на
-    отражение секрета (у токен-сессии) — этот последний замер входит в
-    тот же бюджет: если к этому моменту он истёк, ответ —
-    `head_wall_time` (exit 7), а не успех (exit 0) и не отказ проверки
-    (exit 5);
-  * истечение — «исход неизвестен, операция может ещё выполняться»;
-    повторная отправка не выполняется никогда.
-
-Поля результата `data head` (схема v1): `rows` — массив спроецированных
-записей; `rows_requested` — запрошенное N десятичной строкой;
-`rows_returned` — число выданных записей десятичной строкой;
-`rows_truncated` — `true` только когда сервер сообщил, что записи
-продолжаются (`has_next`), И запрос превысил жёсткий предел в 100;
-`bytes_truncated` — `true`, если проекцию остановил байтовый бюджет;
-`rows_capped` — `true`, присутствует только при N > 100 (сам факт
-усечения запроса); `caveat` — фиксированная оговорка о порядке.
-
-Поля результата `data count` (схема v1): `count` — десятичная строка;
-`count_path` — `counter` (метка `__record_counter__`, O(1)-счётчик),
-`scan` (статистика показала просканированные записи) или `unknown`
-(статистика не различает путь); `caveat` — фиксированная оговорка,
-присутствует **только** при `count_path = unknown`. Шелл никогда не
-выдумывает маркер скана, а фильтры всё равно сканируют — это бюджет, а не
-обещание физического осмотра.
-
-Поля результата `status` (схема v1): `server_version` — строка;
-`format_epoch`, `uptime_ms` — десятичные строки; `stamp_outcome` — одно из
-`created`, `adopted`, `unchanged`, `version_updated`, `inspected_stampless`,
-`inspected_older`; `role` — `follower` или `unknown` (только из настроенного
-режима узла); `node_id` — строка или `null`; `gap_caveat`, `age_caveat` —
-фиксированные оговорки; `replication` — массив объектов `{db, repo,
-gap_versions_merged, age, receipt_age_ns}`, где `gap_versions_merged` —
-десятичная строка, `age` — всегда `null`, `receipt_age_ns` — десятичная
-строка или `null`; `repositories` — массив объектов `{db, repo, effective,
-stored, wal}`: `effective` и `stored` — `{wal_commit,
-wal_retention_max_bytes, on_wal_retention_exceeded, replication_serve}`
-(`wal_commit`: `buffered`/`synced`; `wal_retention_max_bytes`: десятичная
-строка; `on_wal_retention_exceeded`: `refuse_writes`/`declare_gap`;
-`replication_serve`: `durable`/`completed_reseed`; отсутствующее
-переопределение — `null`, `stored` целиком `null`, когда ничего не
-сохранено), `wal` — `{backend_mem, watermark_w, recoverable_through,
-pending_versions, first_pending_version, first_pending_age_ns,
-sync_now_calls, sync_rounds, sync_coalesced, sync_errors, sync_duration_ns}`
-(`backend_mem` — булев, остальные — десятичные строки, оба `first_pending_*`
-— `null` или строка). `wal` — это диапазон W–R, а не число записей.
-
-Поля результата `version show` (схема v1): `server_version`, `format_epoch`,
-`stamp_outcome`, `role`, `node_id` — те же значения и типы, что у
-одноимённых полей `status` (тот же RPC и те же смыслы полей, без uptime и телеметрии).
-
-Поля результата `replication subscriptions` (схема v1): `subscriptions` —
-массив объектов, и в каждой записи только allowlist-поля — `db`, `repo`,
-`name`, `state`, `installation_state` (строки), `recorded_identity` и
-`observed_identity` (`null` либо `{lineage_id, history_epoch}`, где
-`lineage_id` — ровно 16 неотрицательных целых (в выводе — десятичные
-строки), а `history_epoch` — **обязательное** поле идентичности: оно
-должно присутствовать и быть НЕ `null` (версия; в выводе — десятичная
-строка)), `upstream_bookmark`, `next_pull_version`,
-`local_consistent_version`, `certified_gap_first`, `certified_gap_through`,
-`seed_source_version`, `local_baseline_version`, `source_history_epoch`
-(`null` или версия — в выводе десятичная строка), `source_lineage_id`
-(`null` или ровно 16 неотрицательных целых, в выводе — десятичные
-строки), `artifact_digest` (`null` или строка).
-
-Запись проецируется **поле за полем**: поля, отсутствующие в серверной
-карте, **ПРОПУСКАЮТСЯ** (ключа просто нет в объекте — это не `null`);
-прочие поля сервера (сырой `status_message`, терминальные причины, пути
-источников) отбрасываются; имя из allowlist, для которого у шелла нет
-типизированной формы, — типизированный отказ (exit 5), а не «данные».
-Так же отказом (exit 5), а не данными, считается несовпадение формы
-значения.
-
-Три случая различаются. Поля, отсутствующие в серверной карте, оболочка
-опускает целиком (это случай выше, а не `null`). Присутствующий лист
-версии/эпохи/закладки, который движок типизирует как `u64`, принимается
-только в канонической форме: **присутствующее** значение `null` (движок
-закодировал `Null` для необязательного листа) печатается как `null`;
-неотрицательное целое; `Big`, укладывающийся в `u64`; либо канонический
-десятичный текст **строго выше** `i64::MAX` (значения, помещающиеся в
-`i64`, приходят целым). Любой другой текст — `"7"`, `"007"`, `"+1"`,
-`"-1"`, текст с пробелами и всё выше `u64::MAX` — отказ, а не данные.
-Список lineage-байт с элементом больше 255 или неверной длины — тоже
-отказ, а не данные. Присутствующая идентичность
-(`recorded_identity`/`observed_identity`) как карта обязана нести
-`history_epoch` **присутствующим и не `null`**: `history_epoch: null` —
-типизированный отказ (exit 5), а не данные; идентичность целиком `null`
-печатается как `null`.
-
-Поле результата `data get` (схема v1): `data` — **только тело записи** (без
-обёртки `record`), спроецированное конвенциями схемы v1: целые и
-`Big`/`Dec` — десятичные строки, `bin` — hex, строки санитизированы,
-нефинитные float помечены тегом, карта — объект, список — массив. Точное
-чтение возвращает ровно одну запись или типизированный `not_found`
-(exit 5); отсутствующая таблица — `unknown_table`, карантин —
-`resync_required` (оба exit 5).
-
-### Токен-сессии (read-only подмножество)
-
-Токен-сессия (`--auth token`) может вызывать только фиксированное
-read-only подмножество (включая `data head` и `data count`). Из команд
-этого раздела **только** они разрешены; `status`, `version show`,
-`data get` и `replication subscriptions` в подмножество не входят:
-шелл отвечает фиксированным типизированным отказом
-`token_request_denied` с **exit 4 ещё до отправки какого-либо запроса**
-на сервер (на сервер не уходит ничего; текст отказа фиксирован:
-«token sessions expose only the read-only shell subset; log in with
-SCRAM for this command»). Серверный периметр при этом
-шире — сужение это политика шелла поверх обычной авторизации сервера:
-никаких клиентских привилегий шелл не добавляет.
-
-### Примеры вызова (безопасные, секреты вне argv)
+`status` показывает состояние сервера, наблюдённую при загрузке эпоху и исход штампа, uptime, роль и телеметрию с оговорками; `version show` — версию и состояние штампа. `replication subscriptions` показывает записи подписок, а не живой лаг. Эти команды недоступны токен-сессии.
 
 ```sh
 shamir-server shell --profile prod --secret-prompt -- status
-shamir-server shell --profile prod --secret-stdin --output-version 1 -- version show
 shamir-server shell --profile prod --secret-prompt -- replication subscriptions
-shamir-server shell --profile prod --secret-prompt -- data count billing main invoices
-shamir-server shell --profile prod --secret-prompt -- data head billing main invoices 10
-shamir-server shell --profile prod --secret-prompt -- data get billing main invoices "<KEY>"
 ```
 
-`"<KEY>"` — плейсхолдер В КАВЫЧКАХ: подставьте валидный Base58 `RecordId`
-(от **16 до 22** символов), тоже в кавычках. 16–22 — это диапазон длин: id
-с ведущими нулевыми байтами кодируется короче, **22 символа — максимум**
-(это каноническая полная форма), но не единственная допустимая форма.
+### 5. Просмотр данных
 
-`--output-version 1` — локальное утверждение схемы v1 (на сервер не
-отправляется); неподдерживаемое значение отклоняется с exit 1 до
-соединения. Нулевое число строк `data head` и пустой/переполненный или
-невалидный ключ `data get` отвергаются локально, до набора. Коды
-завершения: 0 — успех; 1 — ошибка использования/разбора; 2 — сбой
-соединения; 3 — отказ аутентификации; 4 — типизированный отказ
-(включая `token_request_denied`); 5 — ошибка сервера; 6 —
-неподдерживаемая комбинация **или отказ политики оболочки** (в том числе
-неподтверждённая разрушающая команда и попытка изменить ресурс `root`);
-7 — таймаут после отправки (исход неизвестен); 130 — прерывание. Сырой wire-JSON в документации и в
-выводе шелла не появляется: значения строятся через builder, вывод —
-типизированные записи схемы v1 с экранированием.
+`data head DB REPO TABLE N` возвращает ограниченный первый набор в порядке серверного сканирования — порядок не гарантирован. `data count DB REPO TABLE` возвращает число и доступный признак пути подсчёта. `data get DB REPO TABLE KEY` делает точное чтение по Base58 RecordId. Для всех трёх сервер применяет ACL; незнакомые/закрытые таблицы не раскрывают существование. Токену разрешены только `data head` и `data count`, но не `data get`.
 
-**Типизированные серверные коды для ВСЕХ команд.** Общий серверный
-маппер (`connect::scram::server_code`) типизирует для каждой команды
-шелла как минимум эти коды сервера, каждый — с фиксированным локальным
-сообщением; сырой серверный текст не печатается никогда:
+```sh
+shamir-server shell --profile prod --secret-prompt -- data head billing main invoices 10
+shamir-server shell --profile prod --secret-prompt -- data count billing main invoices
+shamir-server shell --profile prod --secret-prompt -- data get billing main invoices KEY
+```
 
-* **exit 4** (`permission_denied`): `permission_denied`, `access_denied`,
-  `token_database_denied`, `token_read_only`, `token_channel_denied`,
-  `token_request_denied`;
-* **exit 5** (`server_error`): `not_found`, `unknown_table`,
-  `resync_required`, `result_too_large`, `invalid_owner`, `hmac_mismatch`,
-  `hmac_required`, `unknown_db`, `read_only_replica`, `cancelled`.
+### 6. Права (только SCRAM)
 
-Следствие, которое стоит знать при обновлении: у `table describe`
-отсутствующая таблица сообщает типизированный `not_found`, тогда как
-более старые версии сообщали общую серверную ошибку (`server_error`); код
-выхода при этом не изменился — 5. Типизированное сообщение `not_found`
-теперь нейтрально: «the addressed resource was not found» — маппер не
-различает отсутствующую базу, хранилище, таблицу и функцию, поэтому текст
-и не обещает различия. Кроме перечисленных, отдельно типизированы `not_supported` (код выхода
-6) и коды окончания сессии (`session_expired`, `session_invalidated`,
-`token_revoked`, `token_expired` — `authentication_failed`, exit 3).
-Любой **не** перечисленный код сервера по-прежнему схлопывается в
-`server_error` (exit 5): список закрытый, и новый стабильный код сервера
-не появляется в оболочке, пока его не добавят в маппер.
-
-## Административный шелл: права и активность
-
-Просмотр прав, изменение прав и активность — три группы команд; правила,
-общие для всех трёх, — в конце раздела.
-
-### Команды прав (SCRAM only)
-
-Все команды прав доступны **только в SCRAM-сессии**; токен-сессия
-отклоняет их на клиенте (см. общее примечание ниже). Все они идут
-пакетным путём, поэтому профиль **обязан** задавать базу маршрутизации
-(`database:`): без неё команда отказывает кодом 1 до соединения, а сама
-база должна существовать и быть доступной на чтение. Для `rights show`
-этого мало: сервер дополнительно требует `Manage(root)` — как и для
-`user list`, и для `group tree`/`group members`.
+`user list`, `group tree [--db DB]`, `group members` и `rights show PATH` — просмотр; точное право просмотра (серверное `Manage` на корне ресурсов) и права изменений (superuser, `Manage` на цели, подпись текущей SCRAM-сессии) перечислены в [справочнике](#справочник-команд-оболочки). Изменения `chmod PATH MODE`, `chown PATH OWNER`, `chgrp PATH GROUP` требуют подтверждения: интерактивно `yes`, в пакетном режиме `--yes`; без подтверждения запрос не отправляется. Синтетический `root` изменять нельзя.
 
 ```sh
 shamir-server shell --profile prod --secret-prompt -- user list
-shamir-server shell --profile prod --secret-prompt -- group tree
 shamir-server shell --profile prod --secret-prompt -- group tree --db billing
 shamir-server shell --profile prod --secret-prompt -- group members
-shamir-server shell --profile prod --secret-prompt -- rights show billing
-shamir-server shell --profile prod --secret-prompt -- rights show billing/main/invoices
-shamir-server shell --profile prod --secret-prompt -- rights show function:tax_total
+shamir-server shell --profile prod --secret-prompt -- rights show db:billing
+shamir-server shell --profile prod --secret-prompt -- chmod db:billing 0750 --yes
+shamir-server shell --profile prod --secret-prompt -- chown db:billing alice --yes
+shamir-server shell --profile prod --secret-prompt -- chgrp db:billing devs --yes
 ```
 
-* `user list` — список пользователей. Сервер требует право `Manage` на
-  ресурс `root`: это не отдельное право «список пользователей». Поля:
-  имя, числовой идентификатор принципала, признак суперпользователя,
-  область делегирования владельца (`database`) или `null`. Это
-  **не** «база по умолчанию» пользователя: `database` — необязательная
-  область, в границах которой владелец делегирует права; `null` значит,
-  что область не задана.
-* `group tree [--db DB]` — дерево ресурсов (root → база → хранилище →
-  таблица), функции (с признаком `builtin`) и принципалы (пользователи;
-  группы с участниками). Право `Manage(root)` требуется **всегда**;
-  `--db` передаётся серверу как фильтр дерева и никогда не меняет
-  требуемое право — фильтрация и авторизация остаются на сервере.
-  Целиком дерево проецируется в пределах оболочки: не глубже 8 уровней и
-  не больше **2000 узлов**. Дерево больше этого предела даёт собственный
-  типизированный отказ `tree_too_large` (код 5) с фиксированным
-  сообщением, которое называет предел и средство — фильтр `--db`. Фильтр
-  сужает только базы: функции сервер возвращает всегда, поэтому он не
-  поможет, если сами функции или одна база превышают предел.
-* `group members` — только группы и их участники: тот **же проводной**
-  ответ (`AccessTree` без фильтра), но своя проекция: оболочка печатает
-  только список групп. Это не «тот же результат», что `group tree`:
-  ресурсное дерево и функции в выводе отсутствуют, поэтому и предел в
-  2000 узлов к `group members` не применяется.
-* `rights show PATH` — владелец, группа, режим (восьмеричный, 4 цифры),
-  признак setuid и, у функции, признак `builtin` одного ресурса из уже
-  разрешённого дерева. Поддержанные формы пути:
+`db:billing` — селектор базы: он же выбран, чтобы пример не содержал разделителя пути. Слэш-форма `billing/main/invoices` адресует таблицу (база-хранилище-таблица); все формы селекторов — в [справочнике](#справочник-команд-оболочки).
 
-  | Форма | Что адресует |
-  |---|---|
-  | `root` или `/` | синтетический корень ресурсов |
-  | `db:ИМЯ` | **всегда** базу `ИМЯ`, даже если она называется `root` |
-  | `function:ИМЯ` | хранимую функцию по точному имени; `ИМЯ` может содержать `/` |
-  | `БАЗА` | базу |
-  | `БАЗА/ХРАНИЛИЩЕ` | хранилище |
-  | `БАЗА/ХРАНИЛИЩЕ/ТАБЛИЦА` | таблицу |
+### 7. Активность и отмена (только SCRAM)
 
-  `db:` и `function:` — единственный способ адресовать базу с именем
-  `root` и функцию; само слово `root` (без префикса) всегда означает
-  синтетический корень, а не базу. **Селектор никогда не уходит на провод
-  как ссылка на ресурс**: оболочка запрашивает разрешённое дерево и
-  выбирает узел локально, одним запросом и без второго обращения.
-  Разбор локальный, до любого dial: `root`/`/` и `function:ИМЯ` — не
-  ресурсные пути; два первых компонента пути (база, хранилище) обязаны
-  подчиняться собственному правилу имён движка — только `[A-Za-z0-9_-]`,
-  никогда `.` или `..`; у этого правила **нет ограничения длины**, и
-  зеркало оболочки его тоже не добавляет. Третий компонент (таблица)
-  проверяется по самому мягкому правилу физического имени хранилища:
-  имя хранилища `__history__` + имя таблицы (у таблицы без суффикса `--<id>`)
-  не длиннее 255 байт, поэтому имя таблицы не длиннее **244** байт. Таблица,
-  созданная сегодня, имеет ещё и суффикс `--<id>`, поэтому настоящий предел
-  движка ниже и зависит от длины идентификатора. Оба потолка — **244** байта
-  у таблицы и **1024** байта у функции — это собственные границы
-  выполнимости оболочки (табличная выведена из предела физического имени
-  хранилища, функциональная — разумный предел самой оболочки), а **не**
-  правило валидации движка: оболочка не зеркалит серверную проверку. На
-  имени между гарантированно допустимой длиной и потолком оболочки
-  авторитет остаётся за сервером, и он может отказать в имени, которое
-  оболочка приняла; имя длиннее потолка оболочки до запроса не доходит
-  вовсе.
-  Оболочка отказывает локально (`usage`, код 1, ничего не отправляется) только
-  имени, которое не может существовать ни у какой таблицы физического
-  хранилища Fjall. Имя
-  `function:ИМЯ` движок хранит как есть и никакой проверки имени или
-  сегментов не делает (папки создаются отдельной операцией), поэтому
-  оболочка отказывает только пустому имени, управляющему байту и имени
-  длиннее 1024 байт (собственный предел оболочки: у движка предела нет);
-  `math/abs`, `math.v2/abs` и `math/abs:v2` адресуются одинаково. Форма
-  `function:` выбирает и встроенные функции (узел несёт признак `builtin`).
-  Путь, отсутствующий в разрешённом дереве, даёт `not_found` (код 5) с
-  нейтральным текстом — база это, хранилище, таблица или функция, маппер
-  не различает. `rights show` проецирует **только выбранный узел**:
-  потомки не проецируются и в предел дерева не входят, поэтому здоровый
-  каталог с тысячами таблиц не мешает `rights show /`; запрос при этом
-  по-прежнему получает ВСЁ дерево, и каталог, не помещающийся в предел
-  ответа пакета (10 МиБ по умолчанию), даёт `result_too_large` ещё до
-  проекции. Папки и
-  пространства имён функций оболочкой не адресуются. Оболочка не
-  вычисляет действующие права и не синтезирует ACL.
-
-### Команды изменения прав (SCRAM only, подтверждение, подпись)
-
-Только SCRAM-сессия; каждая команда требует подтверждения и подписи.
-
-```sh
-shamir-server shell --profile prod --secret-prompt -- chmod billing/main/invoices 0750 --yes
-shamir-server shell --profile prod --secret-prompt -- chown billing/main/invoices alice --yes
-shamir-server shell --profile prod --secret-prompt -- chgrp billing/main/invoices devs --yes
-```
-
-* Цели: база, хранилище, таблица, функция (`function:ИМЯ` со слэшами в
-  имени). Формы пути — те же, что у `rights show`, включая `db:ИМЯ` (база
-  с именем `root`) и `root`/`/` для синтетического корня. `root` изменить
-  нельзя — отказ на клиенте, код 6, запрос не отправляется.
-* Владелец и группа задаются именем, и оболочка **сама** переводит имя в
-  числовой идентификатор из уже полученного ответа сервера: для владельца
-  из `user list`, для группы из ответа `AccessTree` (тем же ответом, что
-  печатают `group tree` и `group members`; отдельной команды `group
-  members` для этого не выполняется). Оболочка никогда не придумывает и
-  не разбирает числовые идентификаторы из аргументов. Неизвестное имя —
-  `unknown_principal` (код 5); малформированное имя — `usage` (код 1) до
-  соединения.
-* Имя группы, содержащее пробел, **невыразимо в интерактивном REPL**:
-  REPL разбивает строку по пробелам и кавычек не понимает. Такое имя
-  работает только как один аргумент пакетного режима
-  (`-- chgrp БАЗА/ХРАН/ТАБЛ "sales ops" --yes`). Ограничение осознанное:
-  токенизатор REPL в этой версии не меняется. Имена групп длиннее 256
-  байт оболочка отвергает и в пакетном режиме.
-* `MODE` — восьмеричный, 1–4 цифры, только 0–7, не больше 7777 (`0755`);
-  иначе `invalid_mode` (код 1), ничего не отправляется. Значение, похожее
-  на флаг (`-1`, `--x`), отвергается ещё разбором аргументов как `usage`
-  (код 1) — до `invalid_mode`.
-* Подтверждение: интерактивно оболочка печатает вопрос в stderr и ждёт
-  `yes` (с обрезкой окружающих пробелов); в пакетном режиме нужен
-  `--yes`. Флаг `--yes` пропускает вопрос целиком: он не печатается и
-  ответа никто не ждёт (оболочке не нужен терминал). Без подтверждения — `confirmation_required` (код
-  6), до вычисления подписи и до любой отправки.
-* Подпись: сервер требует суперпользователя, право `Manage` на
-  изменяемый ресурс и HMAC-тег этой сессии. Тег — HMAC-SHA256 над
-  каноническими байтами операции: фиксированный префикс домена, затем
-  дискриминатор операции (`chmod` / `chown` / `chgrp`), затем
-  типизированная цель (база/хранилище/таблица/функция) и новое значение
-  (режим, идентификатор владельца, идентификатор группы). Одноразового
-  входа (nonce) у этих трёх операций **нет** и база маршрутизации в
-  канонические байты **не** входит: подпись той же операции дважды тем же
-  ключом сессии даёт тот же тег. Тег вычисляется **после** подтверждения
-  из ключа живой сессии; он никогда не печатается, не попадает в
-  аргументы командной строки и не читается из файла. Точка входа подписи
-  в builder-крейте существует только вместе с его фичей `crypto` (она
-  входит в набор фич по умолчанию, но это именно фича `crypto`: сборка
-  **без** `crypto` — в том числе с `--no-default-features` и без явного
-  включения `crypto` — метода подписи не имеет, и команды изменения прав
-  в такой сборке недоступны).
-* Отказы типизированы, сообщения фиксированные, сырой текст сервера не
-  печатается: `permission_denied` — 4 (право `Manage` проверяется
-  раньше существования цели: вызывающему без `Manage` отказ приходит
-  даже для несуществующей цели, и цель никогда не создаётся);
-  `unknown_db` — 5 (вызывающий с достаточными правами адресовал
-  несуществующий ресурс; фиксированное сообщение не уточняет, чего
-  именно нет — базы, хранилища, таблицы или функции, — потому что
-  серверный отказ эту разницу не различает; тот же код приходит, когда
-  не существует **база маршрутизации** профиля);
-  `hmac_mismatch` — 5 (тег не совпал с каноническими байтами);
-  `hmac_required` — 5 (сервер не получил тега, который принимает для
-  разрушающего изменения; это же сообщение приходит, если сервер не смог
-  закодировать канонические байты, — типизированные builder'ы такую
-  операцию вообще не собирают); `invalid_owner` — 5 (сервер не знает
-  такого идентификатора владельца или группы; на проводе этот код значит
-  не только «неизвестный идентификатор»);
-  `unknown_principal` — 5 (имени нет в справочнике, который оболочка
-  только что прочитала); `invalid_mode` — 1;
-  `read_only_replica` — 5 (узел — реплика только для чтения и отказывает
-  в записи: повторите изменение на лидере; оболочка не перенаправляет и
-  не повторяет запрос); `cancelled` — 5 (ваш собственный пакет отменил
-  другой оператор); `root_mutation_refused` — 6.
-  **Не каждый** стабильный отказ сервера доживает до вывода в типичном
-  виде: список типизированных кодов в маппере закрытый (см. общее
-  примечание выше), остальные коды схлопываются в `server_error` (код 5)
-  с тем же успехом-нейтральным сообщением.
-* Результат: путь и применённый режим (восьмерично) / имя и идентификатор
-  владельца / имя и идентификатор группы. Путь в результате — та форма,
-  которую вы адресовали: `db:ИМЯ` остаётся `db:ИМЯ`, `/` остаётся `/`.
-
-### Команды активности (SCRAM only)
-
-Только SCRAM-сессия.
+`activity sessions` и `activity requests` показывают страницы с ограничениями; область по умолчанию — собственные строки, `--all` запрашивает расширенный просмотр (право `ActivityView` с действием `Manage` проверяет сервер). `activity cancel REQUEST_ID` — кооперативный запрос отмены, не доказательство завершения целевой операции; подтверждение обязательно (`--yes` в batch). Отмена чужого запроса требует `ActivityView` с действием `Manage` независимо от соединения: повторное подключение тем же непривилегированным пользователем право не даёт. Отдельное соединение — операционная рекомендация (управляющий запрос не конкурирует за слоты с целевой работой), а не условие авторизации. Поля, пагинация и исходы отмены — в [справочнике](#справочник-команд-оболочки).
 
 ```sh
 shamir-server shell --profile prod --secret-prompt -- activity sessions
@@ -3838,555 +3579,181 @@ shamir-server shell --profile prod --secret-prompt -- activity sessions --all
 shamir-server shell --profile prod --secret-prompt -- activity cancel 42 --yes
 ```
 
-* `activity sessions` / `activity requests` — одна страница за запрос;
-  оболочка дочитывает продолжение до своего предела: страница не больше
-  50 строк (`--limit`, по умолчанию 50, значение больше 50 усекается до
-  50), всего не больше 100 строк, не больше 10 страниц. Достижение
-  предела в 100 строк завершает обход **немедленно**: следующий запрос
-  не отправляется, даже если сервер выдал продолжение; такой результат
-  помечен `rows_truncated: true`. `--limit 0` — `usage` (код 1) до
-  соединения. Признак усечения не равен «строк ровно 100»: он истинен
-  только когда строки были отброшены или продолжение осталось
-  невыбранным. На десятой странице обход прекращается, и результат может
-  содержать меньше 100 строк с `rows_truncated: true` — там усекает
-  предел страниц, а не предел строк.
-* Область по умолчанию — `own`: только собственные строки вызывающего,
-  строки другого актора в неё не попадают никогда. `--all` расширяет
-  область до других акторов, и решает это сервер (`ActivityView` с
-  действием `Manage`); иначе сервер отказывает, и оболочка печатает
-  `permission_denied` (код 4). `--all` — единственный способ **увидеть**
-  чужую строку; оболочка это сама не решает.
-* `activity cancel REQUEST_ID` — попытка отменить запрос по выданному
-  сервером идентификатору; нужен `--yes` или интерактивное
-  подтверждение (иначе `confirmation_required`, код 6, ничего не
-  отправляется). Идентификатор — ASCII-десятичное число: без знака,
-  пробелов и префикса, не больше 20 цифр, в пределах `u64`; иначе
-  `usage` (код 1). Результат — одно из четырёх значений: `cancelled` —
-  сервер **принял переход** запроса в состояние «отменён» и подал сигнал
-  его исполнителю; ответ оператору **не ждёт** сворачивания цели, и
-  успешный ответ **сам по себе не доказывает** завершения перехода:
-  собственный обработчик запроса дожидается завершения своей работы и
-  только потом отвечает клиенту запроса типизированной ошибкой
-  `cancelled` (отмена всё равно не доказывает, что побочные эффекты цели
-  не успели начаться); `already_finished` — идентификатор больше не
-  живой запрос: запрос завершён, никогда не существовал или уже был
-  отменён; `already_committing` — запрос вошёл в фиксацию и не
-  отменяется; `not_cancellable` — его состояние не допускает отмены.
-  Отмена должна приходить от **другого пользователя**, чем тот, кто
-  выполняет запрос, и требует серверного права `ActivityView:Manage` на
-  цель: сервер сравнивает принципала отменяющего с принципалом целевого
-  запроса. Отдельная сессия оболочки — операционный способ выполнить это
-  условие (соединение оболочки обычно вторая сессия по отношению к
-  запросу клиентской программы), а не серверное требование о сессиях.
-  Отмена кооперативная:
-  успешный ответ не означает, что запрос уже отменён, а `not_cancellable`
-  может означать и политику регистрации запроса, даже если он ещё
-  выполняется или фиксируется. Сессии и запросы — **глобальные для узла**
-  величины, а строки запросов всё равно ограничены базой маршрутизации:
-  запросы другой базы не попадают в список даже с `--all`.
-* Строки активности содержат только типизированные значения, выданные
-  сервером: чеканенные метки сессий и запросов (десятичные строки), имя
-  принципала, имя транспорта, имя базы, вид операции, слово состояния и
-  тайминги, у сессий — ещё счётчики открытых транзакций и курсоров;
-  каждая такая строка экранируется для показа. Четыре свободных поля
-  (`user`, `db`, `transport`, `op_kind`) проходят каждое через собственный
-  список разрешённого в
-  `crates/server/shamir-server/shell/commands/activity.rs` (`user_field`,
-  `name_field`, `transport_field`, `op_kind_field`); значение вне списка
-  заменяется одной фиксированной подстрокой `<invalid>`. Это **правило
-  показа оболочки**, а не правило движка. `user` — непустое имя: не
-  длиннее **255** байт (`MAX_USER_NAME_BYTES` = `USERNAME_MAX_BYTES`,
-  `crates/net/shamir-connect/src/common/model/types.rs`) и без символа,
-  который является управляющим (`char::is_control`), пробельным
-  (`char::is_whitespace`) или одним из символов показа, которые
-  экранирует вывод (bidi/zero-width, `is_display_control`). Входной
-  профиль сервера — PRECIS `UsernameCaseMapped`
-  (`crates/net/shamir-connect/src/common/user/username.rs`,
-  `NormalizedUsername::from_raw`), поэтому не-ASCII буквы печатаются как
-  есть после обычного экранирования (как и 65-символьный ASCII-логин);
-  саму нормализацию — width/case mapping, NFC и Bidi — оболочка **не**
-  повторяет: это разрешающий список формы, а не копия профиля. `db` —
-  только `[A-Za-z0-9_-]` (`name_field`) с пределом 255 байт
-  (`MAX_DB_NAME_BYTES`; у правила движка для имени базы предела длины
-  нет; собственный профиль оболочки ограничивает только базу
-  **маршрутизации** — 64 байта); `transport` — только из закрытого набора
-  `tcp` / `ws` / `ipc` (`TRANSPORTS`); `op_kind` — только имя операции
-  из `[a-z0-9_:]` не длиннее 64 байт (`MAX_OP_KIND_BYTES`; двоеточие
-  входит в собственные метки сервера, а самая длинная из них —
-  `admin:apply_application_schema_migration`, 40 байт, поэтому строка
-  реально идущей миграции печатается, а не заменяется). Вне ASCII-набора
-  проходит только `user`: `db`, `transport` и `op_kind` отвергают любой
-  не-ASCII символ, а управляющие символы, пробелы и слишком длинные
-  значения отвергают все четыре поля; обратный слэш в `user` список
-  пропускает, но вывод его экранирует. `op_kind` проверяет **форму**,
-  а не принадлежность закрытому словарю: выдуманная, но формально
-  корректная метка (`admin:bogus`) от повреждённого авторизованного
-  источника пройдёт. `admin:list_activity` — реальная внутренняя метка,
-  но строку собственного листинга сервер из вывода исключает, так что
-  увидеть её в живом списке нельзя.
-  Значение, допустимое по правилу (например, длинная шестнадцатеричная
-  строка в роли имени пользователя), печатается как есть: правило
-  гарантирует форму имени, а не отсутствие в нём чего-то, похожего на
-  секрет; сама оболочка в эти поля ничего секретного не кладёт. Оболочка
-  никогда не повторяет значения фильтров, литералы и тела сообщений, и ни
-  в один поток не попадают ключ сессии, тег, токен или сырой текст
-  сервера. В
-  интерактивном REPL список выводится **одной строкой на запись**
-  (`rows[0]`, `rows[1]`, ...), чтобы поздние метки оставались видны;
-  предел в 200 символов относится к **значению** записи, а не к строке:
-  значение обрезается до 200 символов, затем к нему добавляется `...`, а
-  метка (`rows[i]`) печатается перед значением отдельным столбцом, так
-  что общая длина строки больше 200 (усечение никогда не разрывает
-  escape-последовательность `\uXXXX`). Пакетный вывод — по-прежнему
-  ровно одна запись JSON Lines v1; в интерактивном режиме JSON Lines не
-  печатается вообще.
-* Коды выхода интерактивного отказа: интерактивно отклонённое
-  подтверждение печатает `confirmation_required`, и сессия сохраняет код
-  выхода 6 до конца своей жизни — обычные `exit` или EOF его не
-  превращают в 0. Уточнение: «до конца жизни» означает именно нормальное
-  завершение сессии; последующее прерывание (130) или ошибка чтения
-  терминала дают свой код. В пакетном режиме тот же отказ тоже даёт код
-  6.
-* Отдельных видов для активных транзакций, курсоров и статистики форм в
-  оболочке нет: они вне этой версии.
+### 8. Копии и расписание (только SCRAM)
 
-### Общее для всех трёх групп
-
-* Все команды этого раздела требуют входа по SCRAM. В сессии с
-  API-токеном они отклоняются на клиенте фиксированным сообщением
-  `token_request_denied` с кодом 4, и ни один запрос не отправляется.
-  Токенный набор — ровно это, и ничего больше: `connect`, `ping`,
-  `db list`, `repo list`, `table list` / `table describe` /
-  `table schema`, `index list`, `function list`, `data head`,
-  `data count`. `repo describe`, `status`, `version show`,
-  `data get`, `replication …`, весь раздел прав и весь раздел
-  активности — вне набора. Быть в наборе оболочки **не** значит быть
-  разрешённым сервером: у токена со ограниченной областью сервер
-  откажет и в `db list` (код 4), потому что периметр сервера уже
-  клиентского набора.
-* Вывод — та же схема JSON Lines v1 (одна запись на команду), коды
-  возврата — та же таблица.
-* Ничего из этого раздела не печатает ключи, теги, токены и сырые
-  сообщения сервера. Уточнение к более раннему правилу «шелл не
-  печатает ничего, присланного узлом»: в таблицах этого раздела
-  печатаются **авторизованные данные узла** (имена, режимы, метки,
-  счётчики) — всегда с экранированием; гарантия «никогда» относится к
-  необработанному тексту ошибок сервера, который не воспроизводится
-  никогда. `node` в записи результата этого раздела остаётся `null`:
-  оболочка не запрашивает скрытый статус узла.
-* `group tree --db` — единственное место раздела, где значение фильтра
-  возвращается в выводе самим шеллом (поле `database_filter`); это
-  значение аргумента, а не данные сервера. В остальном шелл не повторяет
-  значения фильтров.
-* Исчерпанный после отправки локальный 60-секундный бюджет времени даёт
-  `timeout_outcome_unknown` (код 7): исход неизвестен, и повторять
-  команду автоматически нельзя. Бюджет проверяется **последним**, после
-  проекции и после проверки вывода: если время вышло, код 7 приходит
-  даже вместо отказа проекции, ошибки сканирования вывода или
-  успешного результата. Точнее: проверка идёт после проекции и после
-  проверки вывода (это не проверка сериализации и не проверка записи в
-  поток). Проверка вывода в SCRAM-сессии ничего не сканирует (секретов в
-  выводе этих команд нет), поэтому на практике бюджет решает только
-  тайминг. Исчерпание бюджета на подготовительном чтении (`user list` для
-  `chown`, дерево для `chgrp`) даёт код 7 и **не** говорит, был ли
-  изменяющий запрос отправлен: при таком исходе команду нельзя повторять
-  автоматически.
-* Что покрыто тестами именно через оболочку: живые строки активности
-  (собственная сессия, чужая живая сессия в `--all` и её отсутствие в
-  `own`), полнота набора строк при обходе (`--limit 1` при двух живых
-  сессиях возвращает обе строки, каждую один раз, и
-  `rows_truncated: false`; маркер усечения, размер страницы и передача
-  продолжения проверяются на подставном листинге в модульных тестах),
-  отображение `<invalid>`, отказ токенной сессии без единого входящего
-  соединения и отмену по неизвестному идентификатору
-  (`already_finished`). Что **не** покрыто: строка запроса в живом
-  листинге `activity requests` (листинг исключает собственный запрос, а
-  припаркованный запрос в фикстуре оболочки детерминированно не
-  создаётся), поэтому проекция строки запроса — включая все реальные
-  метки операций — закреплена модульным тестом проекции, а проверка
-  «ровно сколько запросов ушло на провод» недоступна: у фикстуры нет
-  шва, наблюдающего исходящий `limit`. Отмена **припаркованного** запроса (ждёт
-  блокировку записи) доказана на уровне обработчика, а не через
-  оболочку: `tests/admin/activity/cancel_lock_tests.rs` держит блокировку
-  старой транзакцией, ждёт `waiting_lock` в списке активности, отменяет
-  запрос по выданной метке и проверяет типизированную ошибку `cancelled`,
-  исчезновение строки и освобождение блокировки. Сервер внутри
-  shell-фикстуры не отдаёт тесту свой `ShamirDb`, а клиент не умеет
-  держать интерактивную транзакцию по проводу, поэтому в shell-тесте
-  припаркованный запрос не создаётся детерминированно.
-
-## Административный шелл: копии, версии, диагностика (R5c)
-
-Пять тем: online-копия без остановки сервера, версии и штампы формата,
-статус миграций прикладной схемы, поясняющие мануалы вместо запуска и
-диагностика; отдельно — автономная проверка копии, которая командой
-шелла не является. Все команды раздела — только SCRAM. Шелл остаётся
-тонким клиентом: каталог данных он не читает, пути не разбирает и
-серверную валидацию не переизобретает — каждая удалённая команда
-становится либо одной admin-операцией существующего batch-протокола,
-либо одним типизированным запросом
-([`command.rs:1-14`](../../../crates/server/shamir-server/shell/commands/maintenance/command.rs#L1-L14)).
-
-### Копии без остановки сервера
+`backup start --to DIR` передаёт абсолютное назначение серверу без локальной обработки; команда node-local и требует подтверждения (`--yes` в batch). `backup status` — чтение статуса, `backup cancel` без id отменяет текущий прогон и требует подтверждения. На follower запуск и отмена отклоняются `online_backup_follower_read_only`; статус доступен. `backup schedule show` — чтение живой секции `schedule` статуса планировщика (`BackupStatus`), не файла конфига; раздел не настроен — это успешный ответ с `data.state: schedule_not_configured`, а не ошибка. Для проверки уже созданного снимка используйте объясняющую команду `backup verify SNAPSHOT`: оболочка не запускает её, а показывает ручную `shamir-server backup-verify SNAPSHOT` (проверка хеширует содержимое и не является дешёвой).
 
 ```sh
-shamir-server shell --profile prod --secret-prompt -- backup start --to /srv/copies --yes
+shamir-server shell --profile prod --secret-prompt -- backup start --to DIR --yes
 shamir-server shell --profile prod --secret-prompt -- backup status
 shamir-server shell --profile prod --secret-prompt -- backup cancel --yes
+shamir-server shell -- backup verify SNAPSHOT
+shamir-server shell --profile prod --secret-prompt -- backup schedule show
 ```
 
-* Три команды — оболочки над уже существующими admin-операциями
-  online-копии `StartBackup` / `BackupStatus` / `CancelBackup`
-  ([`MaintenanceCommand::op`](../../../crates/server/shamir-server/shell/commands/maintenance/command.rs#L64-L77)):
-  новых серверных операций ради шелла нет. Семантика снимка, стадии,
-  кооперативная отмена и границы копии — в
-  [разделе «Online-копия: когда и как»](#online-копия-когда-и-как);
-  здесь только поведение командной строки.
-* Операции **node-local**: копируется `data_dir` этого узла, а не база.
-  Batch-путь шелла при этом требует базу маршрутизации из профиля
-  (`database:`): без неё — `usage`, код 1, до чтения секрета и до
-  соединения
-  ([`MaintenanceCommand::requires_routing_db`](../../../crates/server/shamir-server/shell/commands/maintenance/command.rs#L79-L88),
-  [`session.rs:118-127`](../../../crates/server/shamir-server/shell/parser/session.rs#L118-L127)).
-* Все три — admin-операции, то есть **только для суперпользователя**:
-  серверный хендлер отвергает не-суперпользователя до запуска работы
-  (грубый admin-гейт,
-  [`execute.rs:176-194`](../../../crates/server/shamir-server/src/engine/db_handler/repo_admin/execute.rs#L176-L194)),
-  а классификатор сессии даёт `StartBackup`/`CancelBackup` глобальный
-  `Alter`, `BackupStatus` — глобальный `Read`
-  ([`session.rs:582-587`](../../../crates/engine/shamir-engine-query/src/query/auth/session.rs#L582-L587)).
-* `--to` — **серверный** абсолютный путь, переданный без изменений:
-  шелл его не разрешает, не создаёт и не проверяет
-  ([`MaintenanceCommand::execute`](../../../crates/server/shamir-server/shell/commands/maintenance/command.rs#L166)),
-  и прикладывает к ответу фиксированную оговорку `destination_note`
-  (`backup.rs:16`). Относительный путь отвергает **сервер** —
-  типизированным `backup_invalid_destination` (код 5), а не оболочка
-  ([`validate_destination`](../../../crates/server/shamir-server/src/boot/config/diagnostics/backup_online/schedule/destination.rs#L54)).
-* `backup start` печатает `backup_id`, `destination` и
-  `destination_note`. Второй прогон на узле отвергается
-  `backup_already_running` (код 5): одна online-копия за раз.
-* `backup status` — read-only и **не доходит до follower-гейта записи**.
-  Поля результата: `backup_id` (`null`, если прогонов ещё не было),
-  `destination`, `dest_dir`, `started_at_unix_ns`, `running`,
-  `cancel_requested`, `stage`, `failed`, `failed_stage`,
-  `excluded_repos`, `repos_in_snapshot`, `repos_created_during`, `repos`
-  (по репозиторию: `repo`, `bytes_hashed`, `files_hashed`),
-  `progress_stage`, `progress_started_at_unix_ns` и фиксированный
-  `current_run_note`; при отказе прогона добавляется `failure_note`
-  (текст серверной ошибки не воспроизводится) — `backup.rs:41-174`.
-* `backup cancel` не несёт id и всегда адресует **текущий** прогон на
-  узле (`current_run_note`, `backup.rs:12-13`). `cancelled: false` —
-  отменять было нечего (прогон не идёт); это ответ, а не отказ.
-* Подтверждение: `backup start` и `backup cancel` его требуют —
-  интерактивно `yes`, в пакетном режиме `--yes`
-  ([`dispatch.rs`](../../../crates/server/shamir-server/shell/parser/dispatch.rs#L550),
-  вызов `ctx.confirm` внутри `maintenance_outcome`).
-  Без подтверждения — `confirmation_required`, код 6, **до соединения и
-  до отправки**: пакетный прогон без `--yes` не отправляет ничего.
-* На follower `backup start` и `backup cancel` отвергаются
-  `online_backup_follower_read_only` (код 5), а `backup status`
-  по-прежнему отвечает
-  ([`backup_handlers.rs:13-30`](../../../crates/server/shamir-server/src/engine/db_handler/handlers/backup_handlers.rs#L13-L30)).
-* `backup schedule show` не поддержан: `unsupported_prerequisite`, код 6,
-  ничего не отправляется
-  ([`MaintenanceCommand::local`](../../../crates/server/shamir-server/shell/commands/maintenance/command.rs#L113)).
-  Это типизированный отказ, а
-  не заглушка-успех.
+`backup schedule show` — команда только для чтения: она проецирует живую секцию `schedule` того же ответа состояния копий, которую обычная команда `backup status` не показывает (внутренний ключ `schedule` оболочка там отбрасывает, поэтому вывод `backup status` при активном расписании не меняется). Секции нет — успешный результат `state: "schedule_not_configured"`. Секция есть — `state: "configured"` и поля оболочки: `enabled`, `interval_seconds` (десятичная строка), `window` (строка или `null`), `keep_last` — **число удерживаемых копий** (десятичная строка), а не срок хранения, `run_on_start`, `next_run`, `last_run` (`null` или `started_at`, `result`, `stage`, `reason`) и `runs` — восемь десятичных счётчиков. Команда не меняет конфигурацию.
 
-### Версии и миграции схемы
+### 9. Версии
+
+`version show` показывает версию и штамп; `version stamp` — ту же проекцию состояния штампа. `schema-migration status --database-id ID` читает статус одной базы и требует её Read; на follower сервер отказывает. `version migrate` только объясняет ручной план/применение `format-migrate`; оболочка миграцию не выполняет.
 
 ```sh
+shamir-server shell --profile prod --secret-prompt -- version show
 shamir-server shell --profile prod --secret-prompt -- version stamp
-shamir-server shell --profile prod --secret-prompt -- version migrate
-shamir-server shell --profile prod --secret-prompt -- schema-migration status --database-id "<ID>"
+shamir-server shell --profile prod --secret-prompt -- schema-migration status --database-id ID
+shamir-server shell -- version migrate
 ```
 
-* `version stamp` — вид P1 status DTO: поля `server_version`,
-  `format_epoch`, `stamp_outcome`, `role`, `node_id` — те же значения и
-  типы, что у `version show`, потому что это буквально та же проекция и
-  тот же запрос `Status` (`state.rs:727-737`,
-  [`MaintenanceCommand::op`](../../../crates/server/shamir-server/shell/commands/maintenance/command.rs#L69)). Эпоху
-  формата и исход штампа захватил лаунчер при загрузке существующим
-  on-disk `inspect`; сам шелл каталог данных не читает и при запросе
-  штамп не перечитывает. Оговорка `status` про чтение **сохранённых**
-  переопределений durable-политики во время запроса относится и сюда:
-  запрос тот же, поэтому типизированный код при неудаче этого чтения
-  возможен. База маршрутизации не нужна. Запись результата успешна и её
-  op — `Status`, поэтому поле `node` (наблюдённые роль и id) заполнено и
-  здесь
-  ([`observed_node`](../../../crates/server/shamir-server/shell/output.rs#L456-L469)).
-* `version migrate` — **только объяснение**, шелл миграцию никогда не
-  применяет: печатаются две ручные строки (`format-migrate --plan` и
-  `format-migrate --yes --from-backup SNAPSHOT`, обе с `--config CONFIG`),
-  см. [«Объяснения вместо запуска»](#объяснения-вместо-запуска).
-* `schema-migration status --database-id ID` — ровно одна запись статуса
-  одной базы. `--database-id` — Base58 `RecordId` (короткая форма
-  допустима, предел — 22 байта), проверяется **локально, до любого
-  dial**: пустой, слишком длинный или неразбираемый id — типизированный
-  `invalid_record_id`, код 1, запрос не уходит
-  ([`versions.rs:19-29`](../../../crates/server/shamir-server/shell/commands/maintenance/versions.rs#L19-L29)).
-* Операция — существующая под-операция `ApplicationSchema` Status
-  ([`MaintenanceCommand::op`](../../../crates/server/shamir-server/shell/commands/maintenance/command.rs#L70),
-  `versions.rs:41-52`). Сервер авторизует `Read` на базе
-  ([`authorize_database_read`](../../../crates/engine/shamir-db/src/shamir_db/execute/admin_db/schema_migration/schema_migration.rs#L67-L80))
-  и не проходит грубый admin-гейт: операция в списке исключений
-  ([`admin.rs:632-658`](../../../crates/server/shamir-server/src/engine/db_handler/handlers/admin.rs#L632-L658)),
-  то есть суперпользователь не обязателен, а право на базу обязательно.
-* На follower статус отвергается `schema_migration_follower_read_only`
-  (код 5): у follower нет согласованного вида журнала и схемы
-  ([`execute.rs:199-215`](../../../crates/server/shamir-server/src/engine/db_handler/repo_admin/execute.rs#L199-L215)).
-* Запись несёт `database_identity`, `protocol_version`,
-  `last_applied_id` (`null`, если применённых нет), `last_applied_ordinal`,
-  `last_applied_checksum` (hex или `null`), `checksum_validation`
-  (`valid` / `missing_body` / `mismatch` / `unknown_version` /
-  `not_checked`), `fence_generation`, `in_flight` (`null` или объект),
-  `applied_count`, `applied` (по записи: `id`, `ordinal`, `checksum`) и
-  серверный `error` из закрытого набора либо `null`; счётчики —
-  десятичные строки
-  ([`project`](../../../crates/server/shamir-server/shell/commands/maintenance/versions.rs#L76-L260)).
-* Важное различие: `schema_migration_identity_mismatch` приходит с
-  **нулевым** `last_applied_ordinal`, нулевым `fence_generation` и
-  `applied_count` «0» — это **не** пустой журнал, а ответ «identity в
-  запросе не та, что обслуживает база»; `database_identity` в записи —
-  обслуживающая, не запрошенная
-  ([`status_result`](../../../crates/engine/shamir-db/src/shamir_db/execute/admin_db/schema_migration/schema_migration.rs#L85-L100)).
-* Проекция строгая: неизвестный ключ или несовпадение формы —
-  `server_error`, код 5, а не «данные».
+### 10. Объясняющие offline-команды
 
-### Объяснения вместо запуска
-
-Семь команд шелла отвечают **локально** напечатанным мануалом и никогда
-ничего не запускают; их список и текст — одна таблица `EXPLAINED`
-([`EXPLAINED`](../../../crates/server/shamir-server/shell/commands/maintenance/explain.rs#L84-L151)).
-Печатаются ровно такие строки:
+Оболочка никогда не запускает offline операции: только печатает ручное руководство и сообщает `executed: false`. `backup restore`, `backup snapshot`, `export logical`, `import logical`, `diag integrity` объясняют серверные `restore`, `backup`, `logical-export`, `logical-import`, `doctor`; `backup verify` объясняет отдельный `backup-verify`. Операции, открывающие каталог данных (restore, snapshot, doctor и format-migrate), требуют прав ОС; где указано в руководстве, сервер должен быть остановлен. Restore заменяет каталог данных, doctor с `--apply` чинит его на месте. Для логического импорта применяется только offline `logical-import` в новый/пустой каталог.
 
 ```sh
-shamir-server backup-verify SNAPSHOT
-shamir-server --config CONFIG restore --from SNAPSHOT
-shamir-server --config CONFIG backup --to DIR
-shamir-server --config CONFIG format-migrate --plan
-shamir-server --config CONFIG format-migrate --yes --from-backup SNAPSHOT
-shamir-server --config CONFIG logical-export --db DATABASE --output PATH
-shamir-server --config CONFIG logical-import --input PATH --target DIR
-shamir-server --config CONFIG doctor
+shamir-server shell -- backup restore
+shamir-server shell -- backup snapshot
+shamir-server shell -- export logical
+shamir-server shell -- import logical
+shamir-server shell -- diag integrity
 ```
 
-* `SNAPSHOT`, `DIR`, `PATH`, `DATABASE`, `REPO`, `TABLE`, `CONFIG` —
-  литеральные плейсхолдеры: шелл не подставляет значения и **не
-  повторяет** переданный argv (для `backup verify` печатается
-  `backup-verify SNAPSHOT`, а сам аргумент проверяется только на
-  непустоту,
-  [`MaintenanceCommand::validate`](../../../crates/server/shamir-server/shell/commands/maintenance/command.rs#L137)).
-* Каждая запись несёт `os_rights`, `destructive_effects`,
-  `implementation_limits`, `caveats` и `executed: false`
-  ([`Explained::payload`](../../../crates/server/shamir-server/shell/commands/maintenance/explain.rs#L167-L180)).
-* Права ОС и предусловия: `backup verify` — чтение каталога снимка и
-  каждого перечисленного файла; `backup restore` — владение каталогом
-  данных и его родителем, сервер остановлен; `backup snapshot` — запись в
-  `DIR` и владение каталогом данных; `version migrate` — владение
-  каталогом данных, сервер остановлен; `export logical` — владение
-  каталогом данных, сервер остановлен (только офлайн); `import logical` —
-  запись в родителя `DIR`, сам `DIR` отсутствует или пуст и никем не
-  занят; `diag integrity` — владение каталогом данных, сервер
-  остановлен, потому что проверка открывает каталог напрямую.
-* Разрушительные эффекты: `backup restore` подменяет живой каталог
-  данных, оставляя текущий рядом как `.pre_restore_backup_<timestamp>`
-  (сохраняется, не удаляется); `doctor --apply` чинит нездоровые таблицы
-  на месте, пересоздавая все их индексы; `format-migrate --yes`
-  перезаписывает on-disk штампы формата, а без `--yes` только печатает
-  план; `logical-import` создаёт **новый** каталог данных и никогда не
-  заменяет существующий.
-* Шелл не выполняет ничего и не открывает ничего: эти ответы строятся до
-  соединения, поэтому им не нужны ни профиль, ни секрет, ни dial
-  ([`dispatch.rs:534-564`](../../../crates/server/shamir-server/shell/parser/dispatch.rs#L534-L564)).
-* Печатные флаги закреплены тестом в двух половинах. Реальная:
-  `logical-export`, `logical-import` и `format-migrate` разбирают токены
-  своих мануалов настоящими `clap::Args` сервера, включая флаги, которых
-  нет в командной строке. Исходная: объявления `backup-verify`,
-  `backup`, `restore`, `doctor` и их флагов ищутся в тексте
-  `src/main.rs`, где они объявлены inline, а не как `clap::Args`. Первая
-  половина ловит переименование, удаление и перенос флага внутри
-  `clap::Args`; вторая не отличает флаг, **перемещённый** между двумя
-  inline-подкомандами
-  ([`printed_flags_exist_in_the_server_argument_parser`](../../../crates/server/shamir-server/tests/admin/shell/maintenance/explain.rs#L358)).
-  `--force` не печатается никогда. Ответ несёт ровно `manual`
-  (напечатанные строки), `os_rights`, `destructive_effects`,
-  `implementation_limits`, `caveats` и `executed: false` — и ничего
-  больше.
-
-### backup-verify: проверка копии
-
-Это команда бинарника, а не шелла:
-
-```sh
-shamir-server backup-verify SNAPSHOT
-```
-
-* Диспетчеризация — **до загрузки конфига** и до `Cli::parse()`: команда
-  должна быть первым аргументом, `--config` не нужен
-  ([`run_main`](../../../crates/server/shamir-server/src/main.rs#L306-L334)).
-  Аргумент ровно один; иначе — фиксированная строка
-  `usage: shamir-server backup-verify SNAPSHOT` и код 1, причём argv не
-  эхом (`main.rs:319-333`).
-* Ничего не загружается: сервер не стартует, каталог данных не
-  открывается, сеть не используется. Команда работает с правами ОС
-  вызывающего пользователя и только читает.
-* Она проверяет `manifest.json` и **хеширует каждый перечисленный файл**,
-  поэтому дешёвой не является: время пропорционально размеру снимка.
-* Вывод — строки `label` и значение: `result` (`verified` / `failed`),
-  `kind` (`offline` / `online`), `files_checked`, `total_bytes`,
-  необязательный `format_epoch` и фиксированный `note`
-  ([`backup_verify`](../../../crates/server/shamir-server/src/main.rs#L396-L422)).
-* При отказе: `result failed`, `error_class`, `note`. Класс берётся из
-  закрытого набора — `manifest_missing`, `manifest_invalid`,
-  `checksum_mismatch`, `unmanifested_file`, `unsafe_manifest_path`,
-  `unsupported_manifest_format_version`, `managed_snapshot`, `io`,
-  `source_missing`, `source_not_dir`, `cache_manifest_path`,
-  `duplicate_manifest_entry`, `wal_sequence_gap`; любой неназванный
-  вариант сообщается как `corrupt` (`main.rs:442-460`).
-* Коды: 0 — снимок проверен, 1 — ошибка использования, 5 — снимок не
-  прошёл проверку. Текст сообщений библиотеки не печатается никогда:
-  только класс.
-
-### Диагностика
+Также доступны `diag wal` и `diag durability REPO` как удалённые просмотры, не offline-модификации:
 
 ```sh
 shamir-server shell --profile prod --secret-prompt -- diag wal
 shamir-server shell --profile prod --secret-prompt -- diag durability main
-shamir-server shell --profile prod --secret-prompt -- diag integrity
 ```
 
-* `diag wal` — телеметрия WAL по репозиториям из того же P1 status DTO
-  (запрос `Status`): `backend_mem`, `watermark_w`,
-  `recoverable_through`, `pending_versions`, первый отложенный
-  (`first_pending_version`, `first_pending_age_ns`) и счётчики
-  синхронизации (`sync_now_calls`, `sync_rounds`, `sync_coalesced`,
-  `sync_errors`, `sync_duration_ns`) — `diag.rs:24-60`.
-  `pending_versions` — **граница**, а не точное число незаписанных
-  записей; это фиксированная оговорка `caveat`. Строка `source` говорит
-  прямо: это экспорт сервера, а шелл файл WAL не открывает. Нужен
-  суперпользователь (запрос `Status`,
-  [`operator_state.rs:536-541`](../../../crates/server/shamir-server/src/engine/db_handler/repo_admin/operator_state.rs#L536-L541));
-  база маршрутизации не нужна.
-* `diag durability REPO` — проекция существующей admin-операции
-  `DescribeRepo`: поле `durability` — действующая политика с учётом
-  настроенного переопределения, `durability_override` — записанная в
-  каталоге, плюс фиксированная оговорка `caveat` (`diag.rs:63-78`).
-  Нужны суперпользователь (admin-гейт) и `Read` на
-  репозитории
-  ([`admin_repo_durability.rs:188-197`](../../../crates/engine/shamir-db/src/shamir_db/execute/repo_admin/admin_repo_durability.rs#L188-L197));
-  только SCRAM; база маршрутизации из профиля нужна.
-* `diag integrity` — только объяснение (`doctor`). Проверка офлайн по
-  построению: скан живого хранилища может увидеть переходные
-  miscount'ы, поэтому команда печатает мануал, а не запускает проверку.
+### 11. Онлайн-экспорт
 
-### Коды возврата и токенные сессии
+`export online start DATABASE [--repo REPO] [--table TABLE] [--schema-only] [--include-artifacts] [--yes]` запускает экспорт; для `table` обязателен репозиторий. Сервер не поддерживает `include_artifacts` и отклоняет эту опцию. Запуск требует суперпользователя и прав Read/Manage на включённую область. В интерактивном режиме команда возвращает квитанцию, а задание продолжает работать в той же сессии; `export online status` и `export online cancel [--yes]` доступны только в этой интерактивной сессии. В пакетном режиме `start` удерживает сессию, опрашивает статус раз в секунду (не более 55 секунд) и затем печатает одну JSON-запись с терминальным состоянием. Общий срок в 55 секунд делят запуск и все запросы статуса; между опросами пауза в одну секунду, поэтому и медленный успешный запрос статуса, и пауза могут вывести вызов за срок (код 7). Ошибка самого запроса статуса завершает вызов сразу и данных о задании не содержит. Терминальное состояние задания — успешный результат оболочки (код 0): `data.phase` принимает значения `done` (с меткой `artifact_name`), `failed` (с причиной в `failure`) или `cancelled`, а код 0 при `failed` не означает, что артефакт есть. Пакетные `status` и `cancel` отклоняются до отправки запроса с кодом `export_session_only`, код завершения 1 и `op: null`. Каждый пакетный вызов открывает отдельную сессию; задание принадлежит сессии, в которой его запустили. Если за 55 секунд терминального состояния нет, пакетный `start` завершается с типизированным таймаут-исходом (код 7), а задание получает сигнал отмены вместе с соединением; при принудительном завершении процесса сигнал уходит так же. Это не гарантия отмены: задание, уже прошедшее проверку публикации, может опубликовать артефакт, и код 7 не доказывает, что артефакта нет. Сессия помнит базу задания, запущенного в ней: интерактивные `status` и `cancel` адресуют именно её; пока задание в сессии не запущено, они используют базу маршрутизации профиля. Идентификатора для последующего управления нет; файл не передаётся по протоколу, оператор получает его вне оболочки.
 
-* Все команды раздела — только SCRAM. В сессии с API-токеном каждая
-  отвергается на клиенте `token_request_denied` (код 4) до отправки: на
-  провод не уходит ничего
-  ([`dispatch.rs:30-86`](../../../crates/server/shamir-server/shell/parser/dispatch.rs#L30-L86)).
-* 0 — успех или напечатанный мануал; 1 — ошибка использования (включая
-  `invalid_record_id`); 4 — отказ токена или прав; 5 — серверный отказ
-  (`backup_already_running`, `backup_invalid_destination`,
-  `backup_io_error`, `backup_unavailable`,
-  `online_backup_follower_read_only`,
-  `schema_migration_follower_read_only`, `not_found`, …); 6 —
-  неподтверждённая разрушающая команда или `unsupported_prerequisite`;
-  7 — таймаут после отправки: исход неизвестен, повторять автоматически
-  нельзя; 130 — прерывание.
-* Ни один отказ не выдаётся за успех: таблица кодов не отображает ошибку
-  в 0
-  ([`ShellError::exit`](../../../crates/server/shamir-server/shell/output.rs#L316-L370)).
+```sh
+# Команды внутри одной интерактивной сессии:
+export online start billing --yes
+export online status
+export online cancel --yes
 
-### Что покрыто тестами, а что нет
+# Отдельный batch-вызов ожидает терминальный статус:
+shamir-server shell --profile prod --secret-prompt -- export online start billing --yes
+```
 
-Приёмочный набор для команд раздела лежит в
-`crates/server/shamir-server/tests/admin/shell/maintenance/`
-(`backup.rs`, `versions.rs`, `explain.rs`, `verify.rs`, `diag.rs`,
-`policy.rs`, `migrations.rs`) и объявлен в
-[`mod.rs`](../../../crates/server/shamir-server/tests/admin/shell/mod.rs);
-он входит в интеграционную цель `admin`. Зелёный CI этой главой не
-обещан: имена тестов приведены, чтобы их можно было найти, а
-утверждения раздела сверены с кодом, а не с прогоном.
+Стабильные типизированные отказы оболочки: `online_export_already_running` (код 5), `permission_denied` для серверного `export_scope_denied` (код 4), `online_export_unavailable` (включая ненастроенный экспорт; код 5), `online_export_not_found` (код 5), `export_session_only` (только пакетные `status`/`cancel`; код 1) и `token_request_denied` (код 4, до отправки запроса). Причину и фиксированное сообщение выбирает оболочка; текст сервера не воспроизводится. Конкурирующий запуск получает `online_export_already_running`. Полный контракт областей, квитанций и серверных ошибок приведён выше в разделе «Online export job». Онлайн-импорта нет: импорт выполняется только офлайн командами `import logical`/`logical-import`.
 
-Покрыто — online-копии (`maintenance/backup.rs`):
-`backup_status_reports_no_running_copy`,
-`backup_start_without_yes_is_refused_before_sending`,
-`backup_start_with_yes_starts_a_copy`,
-`backup_cancel_without_yes_is_refused`,
-`backup_cancel_with_yes_answers_the_current_run`,
-`relative_destination_is_refused_by_the_server_unmodified` (относительный
-`--to` отвергает сервер, а не шелл),
-`follower_refuses_start_and_cancel`,
-`token_session_is_refused_with_no_request` (все пятнадцать команд
-раздела под токенной сессией: код 4, ничего не отправлено).
+### 12. Токен-сессии
 
-Покрыто — версии и статус миграций (`maintenance/versions.rs`,
-`maintenance/migrations.rs`):
-`version_stamp_reports_the_boot_captured_stamp`,
-`malformed_database_id_is_refused_locally`,
-`identity_mismatch_is_not_an_empty_journal`,
-`follower_refuses_the_status_read`.
-`schema_migration_status_reports_an_applied_migration` применяет одну
-миграцию по настоящему проводу и затем проверяет через шелл
-`last_applied_id`, ненулевой `last_applied_ordinal`, `applied_count`,
-единственную запись в `applied` с её hex-`checksum`,
-`last_applied_checksum`, равный ей, и `in_flight` — null или объект.
-Предел остаётся честным: применение требует SDK-клиента в тесте (сам
-шелл миграцию не применяет), а отказ сервера в применении провалит
-тест, а не пропустит его.
+Токен-сессия получает только read-only подмножество команд; точный список и границу (в том числе что `connect` — управление сессией, а интерактивные `help`/`exit` идут вне командного шлюза) см. в [справочнике](#справочник-команд-оболочки). Команда из разрешённого набора всё равно подчинена серверной ACL; клиентских привилегий нет.
 
-Покрыто — объяснения (`maintenance/explain.rs`):
-`explained_commands_print_the_documented_sections` (точные печатные
-строки), `explained_commands_change_nothing_on_disk` (sha256 каждого
-обычного файла каталога данных до и после),
-`schedule_show_is_unsupported_not_a_placeholder_success`,
-`explained_command_options_are_refused`,
-`printed_flags_exist_in_the_server_argument_parser`.
+### 13. Коды завершения
 
-Покрыто — `backup-verify` (`maintenance/verify.rs`):
-`valid_v1_snapshot_verifies`,
-`corrupted_content_reports_checksum_mismatch`,
-`missing_manifest_reports_manifest_missing`,
-`unlisted_file_reports_unmanifested_file`,
-`unsafe_manifest_path_is_refused`,
-`malformed_manifest_reports_manifest_invalid`,
-`missing_argument_is_a_usage_error`,
-`backup_verify_rejects_a_flag_token`,
-`extra_argument_is_a_usage_error`,
-`pre_existing_dispatch_still_requires_config`.
+Коды завершения и их слои (локальный отказ, проводной код и его типизация) сведены в [справочнике](#справочник-команд-оболочки). Две оговорки: код 6 — отказ политики оболочки или неподдерживаемая комбинация, он **не доказывает**, что запрос не был отправлен (сервер может ответить `not_supported` на отправленный запрос); код 7 — таймаут с неизвестным исходом, он не доказывает и того, что запрос был отправлен (бюджет `data head` может истечь до записи кадра), а дедлайн не вытесняет синхронную работу — проекция одной записи и финальная проверка вывода доводятся до конца.
 
-Покрыто — диагностика и справка (`maintenance/diag.rs`,
-`maintenance/policy.rs`): `diag_wal_reports_the_status_wal_projection`
-(голден проекции против загруженного сервера: одиннадцать полей `wal`,
-`source`, `caveat`), `diag_durability_reports_the_describe_repo_projection`
-(проекция `DescribeRepo` плюс `caveat`) и
-`help_lists_every_command_family` (каждое семейство команд раздела
-присутствует в `help`, `--force` — нет).
+### 14. Что делать, если…
 
-Покрыто — только юнит-тестами (`shell/commands/maintenance/tests/`):
-`backup_status_never_reflects_a_hostile_server_value`,
-`diag_wal_never_reflects_a_hostile_repository_name` и
-`schema_migration_status_never_reflects_a_hostile_server_value`.
-Управляющие символы, ANSI-escape, bidi и длинный текст с канарейкой не
-отражаются; последний тест заодно закрепляет ровно одиннадцать ключей
-проекции статуса миграций. Живой тест `diag wal` закрепляет одиннадцать
-имён полей проекции; отдельного общего помощника у шелла и `state.rs` нет
-(проекционные помощники `state.rs` приватны, расширять их запрещено).
+* **Не подключается:** проверьте адрес, транспорт, доступность сервера и соответствие транспорта профилю; не переключайтесь на plaintext.
+* **Pin mismatch:** остановитесь и сверяйте pin с доверенным каналом; не принимайте новый ключ автоматически.
+* **Permission denied:** проверьте личность/ACL и требуемое право на целевой ресурс; токен не расширяет полномочия.
+* **Копия отклонена на follower:** запускайте `backup start`/`backup cancel` на лидере, не повторяйте их на follower; `backup status` остаётся чтением локального узла.
+* **Export busy:** в интерактивной работе проверьте `export online status` в той же сессии. Повторный `start` в batch всё равно ждёт завершения вызова; второй конкурентный запуск получает `online_export_already_running`.
 
-Не покрыто — прямо: (a) в харнессе нет fake-server seam, поэтому защита
-от «злонамеренного пира» — это юнит-тест проекций, а не живой враждебный
-сервер; (b) `explained_commands_change_nothing_on_disk` сравнивает
-СОДЕРЖИМОЕ файлов (в Windows файл, который запущенный сервер фикстуры
-держит под блокировкой диапазона байт и потому не читается, сверяется по
-длине): он доказывает отсутствие постоянной записи, а не «ни один файл не
-открыт»; (c) интерактивный человеческий рендер (он обрезает
-длинные ячейки на 200 символах) для длинных текстов объяснений не
-проверяется; (d) начатую копию тест завершает через `backup cancel` —
-естественное завершение оракула не имеет; (e) исходная половина флагового
-пина не отличает флаг, **перемещённый** между двумя inline-подкомандами
-(реальная половина покрывает три `clap::Args`-подкоманды).
+## Справочник команд оболочки
+
+Краткий маршрут выше — операторский walkthrough; ниже собраны точные поля и ограничения. Пакетный вызов выполняет одну типизированную команду после `--`. Для разобранной команды, дошедшей до вывода, печатается одна LF-завершённая запись JSON Lines v1 — **если запись на stdout удалась**: неудачная запись оставляет без полной записи и даёт код выхода 1; `data` есть в каждой записи (`null` при ошибке). `op` — метка команды, не индикатор отправки: токенный отказ после разбора несёт `token_request_denied` с `op: null`, а локальный отказ с профилем может нести непустой `op` (например, `op: "Status"` у `status`, отказавшего до подключения). `node` (наблюдённые роль и id) заполняется только в **успешной** записи (`kind: result`) трёх команд с op `Status` — `status`, `version show` и `version stamp`; во всех остальных случаях `node: null`. Внутри `node` поле `node_id` может быть `null` (узел без присвоенного id). Команда и `op` — стабильные идентификаторы; код и фиксированное сообщение включаются только в запись ошибки. Серверные свободные тексты ошибок не воспроизводятся. `-- help` и `--help` печатают справку только в stderr и завершаются с кодом 0 без записи на stdout; команда, не разобранная как таковая, записи на stdout не даёт вовсе. См. [маршрут оператора](#административный-шелл-рабочий-маршрут-оператора).
+
+### Состояние, подписки и просмотр данных
+
+| Команда | Поля/результат схемы v1 | Авторизация и ограничения |
+|---|---|---|
+| `status` | `server_version` — строка; `format_epoch`, `uptime_ms` — десятичные строки; `stamp_outcome` — `created`, `adopted`, `unchanged`, `version_updated`, `inspected_stampless` или `inspected_older`; `role` — `follower` или `unknown`; `node_id` — строка или `null`; `gap_caveat`, `age_caveat` — фиксированные оговорки. `replication[]`: `db`, `repo`, `gap_versions_merged` (десятичная строка), `age` — всегда `null`, `receipt_age_ns` — десятичная строка или `null`. `repositories[]`: `db`, `repo`, `effective`, `stored`, `wal`; `effective` и `stored` — `{wal_commit` (`buffered`/`synced`), `wal_retention_max_bytes` (десятичная строка), `on_wal_retention_exceeded` (`refuse_writes`/`declare_gap`), `replication_serve` (`durable`/`completed_reseed`), листья — `null` или значение}; **`stored` целиком `null`, когда переопределение не сохранено**. `wal`: `backend_mem` — булев, остальные — десятичные строки; `first_pending_version` и `first_pending_age_ns` — `null` или строка, присутствуют ровно вместе, и **нулевой возраст — нижняя граница** (выборка могла быть несравнимой), не доказательство свежести. `pending_versions` — граница W−R, не количество записей. Строка `replication` с `db: "(other)"`, `repo: "(other)"` — общий контейнер переполнения реестра наблюдений, идентичностей там нет. Ответ сверх этой проекции ограничен полным серверным лимитом результата (`result_too_large`, 5), когда лимит конечен, — то же для `version show`. | SCRAM; сервер требует суперпользователя (`permission_denied`, 4). Снимок состояния, не переизмерение штампа; `format_epoch` и `stamp_outcome` захвачены при запуске. Роль берётся из настроенного режима: `follower` только для ReadOnly, иначе `unknown`. Репликация — слитный неавторитетный агрегат, не live lag; возраст `age` неизвестен. |
+| `version show` | `server_version`, `format_epoch`, `stamp_outcome`, `role`, `node_id` — те же смыслы и типы, что в `status`, без uptime и телеметрии; полный лимит результата `Status` (когда он конечен) применяется и здесь. | SCRAM; сервер требует суперпользователя; версия/штамп наблюдены при загрузке. |
+| `replication subscriptions` | `subscriptions[]`, только поля allowlist: `db`, `repo`, `name`, `state`, `installation_state` — строки; `recorded_identity`/`observed_identity` — `null` либо `{lineage_id, history_epoch}`, где lineage — ровно 16 байтов (в выводе массив из 16 десятичных строк), а `history_epoch` обязан присутствовать и не быть `null`; версии `upstream_bookmark`, `next_pull_version`, `local_consistent_version`, `certified_gap_first`, `certified_gap_through`, `seed_source_version`, `local_baseline_version`, `source_history_epoch` — `null` или версия (десятичная строка); `source_lineage_id` — `null` или 16 байтов (десятичные строки); `artifact_digest` — `null` или строка. Правила по уровням: поле, **отсутствующее** в серверной карте, опускается целиком (ключа нет — это не `null`); **присутствующий `null`** версии печатается как `null` (на обычной связанной репо сервер явно возвращает null для seed/version листьев); неизвестные поля **записи** отбрасываются; лишнее поле **верхнего уровня** или вложенное поле идентичности — `server_error` (5), не данные. | SCRAM; сервер требует суперпользователя; у суперпользователя проверка права `List` на корне и ACL базы маршрутизации проходит через admin-обход; база маршрутизации профиля обязательна (batch-путь). Показывает записи, не живой лаг. |
+| `data count DB REPO TABLE` | `count` — десятичная строка; `count_path` — `counter` (метка `__record_counter__` в статистике ответа, O(1)-счётчик), `scan` (статистика показала просканированные записи) или `unknown`; фиксированный `caveat` — только при `unknown`. | Серверный Read на базе и таблице; база профиля не нужна, потому что DB задана командой. |
+| `data head DB REPO TABLE N` | `rows` — массив спроецированных записей; `rows_requested`, `rows_returned` — десятичные строки; `rows_truncated` — `true`, только когда сервер сообщил, что записи продолжаются (`has_next`), И запрос превысил жёсткий предел 100; `bytes_truncated` — проекцию остановил байтовый бюджет массива записей (бюджет выдачи, не ответа сервера); `rows_capped` — присутствует только при N > 100, фиксирует сам факт усечения запроса (N=150 даёт `rows_capped: true` при `rows_truncated: false` на последней странице); `caveat` — фиксированная оговорка о порядке. | Серверный Read. Порядок строк не гарантирован. Лимиты оболочки: не более 100 записей, 256 КиБ сериализованного массива спроецированных строк, дедлайн 5 секунд по монотонным часам на ожидание ответа и локальную проекцию. Дедлайн не вытесняет синхронную работу: одна запись проецируется целиком (стоимость одной записи ограничена только серверным лимитом результата), финальная проверка вывода доводится до конца, после чего дедлайн перепроверяется. N=0 — локальная ошибка использования. Исход при истечении — `head_wall_time` (код 7), неизвестен; повтор автоматически небезопасен. |
+| `data get DB REPO TABLE KEY` | Тело одной записи в схеме v1 (целые и Big/Dec — десятичные строки, байты — hex, строки санитизированы) либо `not_found` (5); не обёртка `record`. | Точный Base58 RecordId проверяется до соединения, 16–22 символа. Лимит имён `db`/`repo`/`table` — **физический** предел имени ключевого пространства хранилища (1..=255 UTF-8 байт, серверный), не логический предел DDL: имя длиннее существует, но не адресуется (проводной `invalid_request` → печатается как `server_error`, 5). Ответ ограничен **полным закодированным MessagePack-ответом** (`max_result_size_bytes` → `result_too_large`, 5), не только телом записи; **упреждающее** резервирование байтового бюджета ответа (до чтения, с ожиданием, которое может припарковать запрос) происходит только когда **включены и общий бюджет, и конечный лимит результата**; если включён лишь общий бюджет, записи резервируются после чтения по размеру закодированного ответа и ожидание бюджета возможно перед возвратом, а проверка полного MessagePack-размера против лимита результата выполняется только при конечном лимите и успешном измерении (это ожидание бюджета, не видимости). Карантин проверяется повторно и при получении handle таблицы, закрывая гонку probe→lookup. Два этапа Database Read → Table Read выполняются повторно после ожидания бюджета ответа; отказ Database Read — `permission_denied` (4), отказ Table Read — `unknown_table` (5), закрытая и отсутствующая таблица неразличимы. Порядок шлюзов: absent/closed таблица получает фиксированный отказ **до** шлюза слота; таблица в карантинной repo может получить `server_busy` шлюза слота раньше, карантин (`resync_required`, 5, фиксированный текст без идентичностей) проверяется после шлюза слота. После второй проверки сервер заново разрешает родителей и сравнивает регистрацию **только если таблица ещё доступна**: обнаруженная замена — проводной `access_denied` → `permission_denied` (4); если таблица к этому моменту уже закрыта или отсутствует, вернётся `unknown_table` (5), а не отказ замены; отсутствующий родитель (после прохождения авторизации) — `unknown_db`/`unknown_repo`; переполненный шлюз слота даёт проводной `server_busy` → `server_error` (5). DDL-окно между последней проверкой и получением handle не закрыто. Курсор не создаётся; припаркованный запрос не виден в activity requests и не отменяем оттуда. |
+
+Порядок проверок и лимиты `data get` — в таблице выше; эти гарантии относятся к чтению данных, не ко всем операциям чтения: например, batch-admission может вернуть `server_busy` раньше проверки доступности.
+
+### Права и изменение прав
+
+| Команда | Доступ/права | Результат и предел |
+|---|---|---|
+| `user list` | SCRAM, база маршрутизации профиля; право `Manage` на корне ресурсов проверяет **сервер** (грубый шлюз суперпользователя эту операцию не блокирует: не-суперпользователь — владелец корня — допускается, не владелец получает `permission_denied`, 4) | `users[]`: имя, `principal64` (десятичная строка), `superuser`, `database` (строка или null). **`database` — не «база по умолчанию», а область делегирования владельца; `null` — область не задана.** |
+| `group tree [--db DB]` | SCRAM, база маршрутизации; `Manage` на корне (как у `user list`) | `database_filter` — значение фильтра или `null`. Дерево: `resources`, `functions` и `principals`. **Локальный предел оболочки — только здесь**: не глубже 8 уровней и не больше 2000 узлов; превышение — `tree_too_large` (5). Это не серверный предел: ответ пакета сверх локальной проекции по-прежнему ограничен лимитом результата сервера (`result_too_large`, 5), и ответ приходит целиком (функции не фильтруются), поэтому большой каталог может дать `result_too_large` ещё до проекции. `--db` — фильтр, не изменение требуемого права. |
+| `group members` | SCRAM, база маршрутизации; `Manage` на корне (как у `user list`) | `groups[]`: `{id, name, members[]}`; каждый участник — `{id, name}`, где `name` — строка **или `null`**; `id` — десятичные строки. **Своя проекция** того же ответа AccessTree без фильтра; ресурсное дерево и функции в выводе отсутствуют. Локальный предел 8 уровней/2000 узлов **не применяется**: группы и участники идут вне обхода дерева. Серверный лимит результата остаётся. |
+| `rights show PATH` | SCRAM, база маршрутизации; `Manage` на корне (как у `user list`) | Выбирает локально один узел из ответа AccessTree; поля: `path` (нормализованная форма селектора), `name`, `kind`, `owner`, `owner_name`, `group`, `group_name`, `mode`, `setuid`, у функции также `builtin`; `owner` — десятичная строка; `group` — десятичная строка или `null` (ресурс без группы); `owner_name`/`group_name` — строка или `null`; `mode` — восьмеричная строка, дополненная до **не менее** четырёх цифр (`0o4755` печатается как `"4755"`, `0o750` — как `"0750"`). Путь не отправляется как ссылка на ресурс. |
+| `chmod PATH MODE`, `chown PATH OWNER`, `chgrp PATH GROUP` | SCRAM, подтверждение (`--yes` пакетно) до вычисления подписи и до отправки; сервер проверяет superuser, `Manage` на цели и HMAC-подпись сессии | Изменяют один ресурс; синтетический root запрещён локально (`root_mutation_refused`, 6, запрос не отправляется). Аргументы owner/group — точные имена: оболочка ищет точное совпадение имени в списке пользователей (`chown`) или групп (`chgrp`) и не разбирает аргумент как числовой ID (группа с именем `123` ищется как имя `123`); имя, которого нет в списке, — `unknown_principal` (5); пустое имя, имя длиннее 256 байт или с управляющими байтами отклоняется локально (`usage`, 1). MODE — 1–4 восьмеричные цифры, максимум 7777 (`invalid_mode`, 1). Результат: `path` + `mode` (та же восьмеричная строка, не менее четырёх цифр), или `path` + `owner` + `owner_id`, или `path` + `group` + `group_id` (id — десятичные строки). |
+
+Селектор `root` или `/` означает синтетический корень; `db:NAME` адресует базу даже с именем root; `function:NAME` — функцию, имя которой может содержать `/` и не длиннее 1024 байт; голые пути адресуют базу, хранилище или таблицу по числу компонентов, компонент таблицы — не длиннее 244 байт (предел физического имени хранилища минус суффикс `__history__`; созданная сегодня таблица несёт ещё суффикс идентификатора, поэтому реальный предел движка ниже). Селектор, не проходящий эти локальные правила, отклоняется с `usage` (1) до любого подключения; у правила имён базы/хранилища предела длины нет. `rights show` проецирует только выбранный узел (потомки не входят в локальный предел узлов), хотя запрашивает всё дерево. Подпись прав — HMAC-SHA256 над каноническими байтами операции: дискриминатор, типизированная цель и новое значение. **База маршрутизации в подпись не входит и одноразового nonce нет**: тот же запрос тем же ключом сессии даёт тот же тег. Подпись вычисляется после подтверждения из ключа живой SCRAM-сессии и не выводится.
+
+### Активность
+
+| Команда | Доступ/ограничения | Поля результата |
+|---|---|---|
+| `activity sessions [--all] [--limit N]` | Только SCRAM и база маршрутизации. По умолчанию `own`; `--all` требует серверного `ActivityView` с действием `Manage`. **Сессии узловые**: с `--all` видны сессии всех баз узла. `--limit` задаёт **размер страницы** (по умолчанию 50, максимум 50), всего максимум 100 строк и 10 страниц; обход прекращается при исчерпании любого предела, и `rows_truncated: true` означает отброшенные строки или невыбранное продолжение (например, `--limit 1` при 11 подходящих строках и неизменном листинге вернёт не больше `"10"` с `rows_truncated: true` — там усекает предел страниц, а не предел строк; запись может исчезнуть до показа, поэтому точное число строк не гарантируется). `--limit 0` — usage (1). | `kind`, `scope`, `rows[]`, `rows_returned`, `rows_truncated`. Строка session: `kind`, `session_handle`, `user`, `transport`, `created_at_ns`, `idle_ns`, `open_transactions`, `open_cursors` (счётчики и тайминги — десятичные строки). |
+| `activity requests [--all] [--limit N]` | Те же правила области/пагинации. **Запросы ограничены базой**: даже с `--all` показываются только запросы базы маршрутизации. | Строка request: `kind`, `request_exec_id`, `user`, `db`, `op_kind`, `state`, `elapsed_ns` (id и тайминги — десятичные строки), `session_handle` — десятичная строка **или `null`** (у запроса без сессии). |
+| `activity cancel REQUEST_ID [--yes]` | Только SCRAM и **база маршрутизации профиля** (все команды активности несут этот floor); подтверждение обязательно (без него — `confirmation_required`, 6, запрос не отправляется); для чужого запроса сервер требует `ActivityView:Manage`, сравнивая принципала отменяющего с принципалом цели. Отмена кооперативная, успех не означает, что цель уже остановилась. | `{outcome}`: `cancelled` — сервер принял переход в отмену (переход цели может ещё идти; побочные эффекты могли уже начаться); `already_finished` — цель завершилась, не существовала или уже отменена; `already_committing` — цель в фиксации и не отменяется; `not_cancellable` — состояние цели не допускает отмены. |
+
+Поля активности — типизированы; каждое свободное поле (`user`, `db`, `transport`, `op_kind`) проходит собственный список разрешённой формы оболочки (`user` — каноническое имя логина: проходит PRECIS `UsernameCaseMapped` и совпадает со своей нормальной формой (имя `Alice` нормализуется в `alice` и поэтому заменяется), до 255 байт, без управляющих символов, а подстрока `shk1.` недопустима в любом месте значения, не только в начале; `db` — `[A-Za-z0-9_-]` до 255 байт; `transport` — закрытый набор `tcp`/`ws`/`ipc`; `op_kind` — `[a-z0-9_:]` до 64 байт), значение вне списка заменяется фиксированной строкой `<invalid>` — это правило показа, а не правило движка. В интерактивном REPL листинг печатается по строке на запись (`rows[0]`, `rows[1]`, …) с обрезкой значения до 200 символов плюс `...` (метка — до 32); пакетный вывод — прежние JSON Lines. `activity cancel` принимает только ASCII-десятичный ID: без знака, пробелов и префикса, не больше 20 цифр, в пределах u64 (`usage`, 1). Отменяемая работа может уже иметь частичные эффекты; timeout после отправки не доказывает, что операция не выполняется. Интерактивно отклонённое подтверждение (`confirmation_required`) запоминается на время сессии: обычное завершение (`exit`/`quit`/EOF) даст код 6. Прерывание (Ctrl+C, код 130) и ошибка чтения терминала возвращают свой код и запомненное 6 не отменяют, но и не обязаны воспроизводить.
+
+Права-команды: база маршрутизации — floor; право `Manage` на корне ресурсов проверяет **сервер**; грубый шлюз суперпользователя их не блокирует. Детали — в таблице прав выше.
+
+### Токен-сессии
+
+Токен разрешает только `ping`, `db list`, `repo list`, `table list`, `table describe`, `table schema`, `index list`, `function list`, `data count` и `data head`; кроме этого, `connect` является управлением сессией, а интерактивные `help`/`quit`/`exit` идут вне командного шлюза. В частности, `status`, `version show`, `replication subscriptions`, точечный `data get`, права и активность запрещены политикой токенного подмножества и получают `token_request_denied` до отправки запроса. Это ограничение оболочки; разрешённая команда всё равно проходит серверную ACL. Серверный периметр при этом уже клиентского набора: **само наличие** у токена области баз запрещает глобальные `db list` и `user list` (проводной `token_database_denied`, печатается как `permission_denied`, 4), даже если база маршрутизации входит в область.
+
+| Код | Значение |
+|---:|---|
+| 0 | Команда выполнена, либо выведена справка, либо REPL завершён обычным `exit`/`quit`/EOF. Сам по себе код 0 не доказывает, что результат записан: справка игнорирует ошибки записи в stderr, а REPL может завершиться без результата. |
+| 1 | Локальная ошибка использования, включая `invalid_record_id`, `export_session_only`. |
+| 2 | Ошибка соединения/транспорта. |
+| 3 | Ошибка аутентификации. |
+| 4 | Отказ прав или токенной политики. Оболочка печатает ровно два кода: `permission_denied` (в него сворачиваются проводные `access_denied` — в том числе отказ смены регистрации `data get`, — `token_database_denied`, `token_read_only`, `token_channel_denied` и `export_scope_denied`) и `token_request_denied`. |
+| 5 | Типизированная ошибка сервера или операции; в том числе `unknown_table`, `not_found`, `server_error`, `tree_too_large`. Неизвестные оболочке серверные коды сворачиваются в `server_error`. |
+| 6 | Отказ политики оболочки или неподдерживаемая комбинация: неподтверждённая команда, root-мутация, `not_supported` (неверный MODE — это выход 1). Код 6 **не доказывает**, что запрос не был отправлен: сервер может ответить `not_supported` на отправленный запрос. |
+| 7 | Таймаут с неизвестным исходом (`timeout_outcome_unknown` / `head_wall_time`): неизвестно даже, был ли запрос отправен; повтор автоматически небезопасен. |
+| 130 | Прерывание. |
+
+Две таблицы ниже разделяют слои. Первая — локальные отказы оболочки; она полна по классам отказов, но не по ситуациям. Вторая — соответствие проводного кода коду оболочки: она перечисляет все явно сопоставленные коды, а резервное правило (`server_error`, 5) применяется только к проводным кодам, которых в ней нет.
+
+**Локальные отказы оболочки** (никогда не отправляются на провод):
+
+| Ситуация | Код оболочки | Выход |
+|---|---|---:|
+| Некорректный KEY у `data get` | `invalid_record_id` | 1 |
+| Неверный MODE у `chmod` | `invalid_mode` | **1** |
+| Неизвестное имя владельца/группы при мутации | `unknown_principal` | 5 |
+| Селектор `rights`/мутации не разбирается; `--limit 0`; мутация прав или команда активности при профиле без базы маршрутизации | `usage` | 1 |
+| Узел, выбранный `rights show`, отсутствует в полученном дереве | `not_found` | 5 |
+| Подтверждение не получено | `confirmation_required` | 6 |
+| Мутация адресует корень ресурсов | `root_mutation_refused` | 6 |
+| Локальный предел `group tree` превышен | `tree_too_large` | 5 |
+| Проекция записи глубже 32 уровней (отказ после получения ответа) | `projection_limit` | 5 |
+| Таймаут с неизвестным исходом / `data head` deadline | `timeout_outcome_unknown` / `head_wall_time` | 7 |
+| Токенная сессия вызывает запрещённую команду | `token_request_denied` | 4; до запроса |
+
+**Проводной код → код оболочки** (код выхода — по коду оболочки, см. первую таблицу):
+
+| Проводной код | Код оболочки | Выход |
+|---|---|---|
+| `not_found` | `not_found` | 5 |
+| `unknown_table` | `unknown_table` | 5 |
+| `unknown_db` | `unknown_db` | 5 |
+| `unknown_repo` | **`server_error`** (в списке типизаций нет) | 5 |
+| `resync_required` | `resync_required` | 5 |
+| `result_too_large` | `result_too_large` (кроме `projection_limit` — это локальный код выше) | 5 |
+| `permission_denied`, `access_denied`, `token_database_denied`, `token_read_only`, `token_channel_denied`, `export_scope_denied` | `permission_denied` | 4 |
+| `token_request_denied` (оболочка печатает его и локально, до отправки) | `token_request_denied` | 4 |
+| `invalid_owner`, `hmac_mismatch`, `hmac_required` | те же | 5 |
+| `read_only_replica` | `read_only_replica` | 5 |
+| `cancelled` (целевой запрос был отменён другим оператором — не путать с успешным ответом отмены `data.outcome: cancelled`) | `cancelled` | 5 |
+| `session_expired`, `session_invalidated`, `token_revoked`, `token_expired` | `authentication_failed` | 3 |
+| `not_supported` | `unsupported` | **6** |
+| `backup_already_running`, `backup_invalid_destination`, `backup_unavailable`, `backup_io_error`, `online_backup_follower_read_only`, `schema_migration_follower_read_only`, `online_export_already_running` → `online_export_already_running`, `online_export_unavailable`, `online_export_not_found` (и `online_export_not_configured` → `online_export_unavailable`) | те же | 5 |
+| `invalid_request` (например, имя `db`/`repo`/`table` не 1..=255 байт у `data get`) | **`server_error`** | 5 |
+| `online_export_invalid_scope`, `online_export_unsupported`, `online_export_scope_unavailable`, `online_export_invalid_form`, `internal_error` | `server_error` (сопоставлены явно) | 5 |
+| `server_busy` | **`server_error`** | 5 |
+| Любой прочий проводной код | **`server_error`** (список типизаций закрытый) | 5 |
+
+**Сводка по выходам.** Выход 4 — `permission_denied` (включая токенные и ACL-отказы) и `token_request_denied`; выход 3 — отказ аутентификации, включая истёкшую/отозванную сессию; выход 6 — политика оболочки и `unsupported`; выход 7 — таймаут с неизвестным исходом; выход 5 — все остальные типизированные и схлопнутые отказы; выход 1 — локальные ошибки использования (`usage`, `invalid_record_id`, `invalid_mode`, `export_session_only`).
 
 ## Поиск и отмена зависшего запроса
 

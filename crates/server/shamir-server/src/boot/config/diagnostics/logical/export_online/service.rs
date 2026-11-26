@@ -79,6 +79,7 @@ use crate::boot::config::diagnostics::logical::logical_dump::{
     classify_export_failure, publish_live_stage, write_live_export, ExportObserver, ExportProgress,
     LiveExport, LiveExportFailure, LogicalExportArgs, SecuritySource,
 };
+use crate::db_handler::ExportJobActivityGuard;
 
 /// Process-wide sequence for export ids and artifact names (brief: names
 /// are `timestamp + process-wide sequence`; no user-supplied component).
@@ -252,6 +253,52 @@ pub struct OnlineExport {
     /// while a worker still drains, and the registry's own single
     /// admission slot stays the primary arbitration.
     worker_slot: Arc<Semaphore>,
+    /// Bounded preparation slot: ONE permit claimed BEFORE authorization
+    /// and warm-up and held until the registry job is reserved, so a
+    /// claimant arriving DURING another caller's preparation is refused
+    /// with [`ServiceError::AlreadyRunning`] instead of duplicating the
+    /// whole authorize/warm/admission sequence and losing only at the
+    /// late registry arbitration. The permit is bounded to preparation:
+    /// it never spans the spawned worker (that is `worker_slot`'s job)
+    /// and drops with the failing `start` future on every refusal path.
+    prepare_slot: Arc<Semaphore>,
+    /// Optional activity-view projection (task #2021 item 6b): when the
+    /// attaching handler installed one, each admitted job publishes a
+    /// `Requests` row through the shared in-flight table, removed when
+    /// the job's worker exits. `None` until attached (tests, minimal
+    /// boots) — the job then simply has no activity row.
+    activity: std::sync::OnceLock<Arc<crate::db_handler::ExportActivityProjection>>,
+}
+
+/// Shutdown fallback ownership of the export drain: ONLY the two quiescence
+/// slots (worker + preparation), deliberately NOT the [`OnlineExport`]
+/// service. The service owns `Arc<ShamirDb>` and the durable user directory;
+/// a shutdown owner that clones the whole service would hold those store
+/// references across the store-release probe and falsely report every store
+/// `StillLocked` on an IDLE export-enabled server. `ShutdownOwner` therefore
+/// keeps only the ability to wait for a draining worker — the same bounded
+/// both-slot acquire [`OnlineExport::wait_idle`] performs.
+pub(crate) struct ExportDrainHandle {
+    worker_slot: Arc<Semaphore>,
+    prepare_slot: Arc<Semaphore>,
+}
+
+impl ExportDrainHandle {
+    /// Same contract as [`OnlineExport::wait_idle`] (same slots, same bound):
+    /// `true` when no blocking export worker still holds the single worker
+    /// slot AND no `start` still holds the bounded preparation slot, `false`
+    /// when the bound elapsed with either slot still held.
+    pub(crate) async fn wait_idle(&self) -> bool {
+        let drain = async {
+            let prepare = self.prepare_slot.acquire().await;
+            let worker = self.worker_slot.acquire().await;
+            (prepare, worker)
+        };
+        matches!(
+            tokio::time::timeout(THREAD_DRAIN_WAIT, drain).await,
+            Ok((Ok(_prepare), Ok(_worker)))
+        )
+    }
 }
 
 impl OnlineExport {
@@ -277,7 +324,18 @@ impl OnlineExport {
             #[cfg(test)]
             controls: WorkerControls::default(),
             worker_slot: Arc::new(Semaphore::new(1)),
+            prepare_slot: Arc::new(Semaphore::new(1)),
+            activity: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Install the activity-view projection (called once by the attaching
+    /// handler; a second call is a no-op, keeping the first projection).
+    pub(crate) fn set_activity_projection(
+        &self,
+        projection: Arc<crate::db_handler::ExportActivityProjection>,
+    ) {
+        let _ = self.activity.set(projection);
     }
 
     /// Enable the runner before sharing it, only when the shared gate
@@ -294,35 +352,59 @@ impl OnlineExport {
         service
     }
 
+    /// The drain handle shutdown's fallback owner retains INSTEAD of the
+    /// service: lossless for the wait, and it drops the owner's database and
+    /// user-directory references so the store-release probe can observe a
+    /// released data directory on an idle export-enabled server.
+    pub(crate) fn worker_drain(&self) -> ExportDrainHandle {
+        ExportDrainHandle {
+            worker_slot: Arc::clone(&self.worker_slot),
+            prepare_slot: Arc::clone(&self.prepare_slot),
+        }
+    }
+
     /// Shutdown quiescence: `true` when no blocking export worker still
-    /// holds the single worker slot. The caller must have cancelled the
+    /// holds the single worker slot AND no `start` still holds the
+    /// bounded preparation slot. The caller must have cancelled the
     /// shutdown token (or otherwise stopped admitting new jobs) first —
     /// `start` refuses while the token is cancelled, so a permit acquired
-    /// here cannot be handed to a new worker. Bounded: the writer checks
-    /// its token on every codec I/O boundary, but a blocking-pool thread
-    /// cannot be aborted, so a stuck synchronous syscall can only be
-    /// waited out, not killed; `false` means the bound elapsed with a
-    /// worker still draining. The acquired permit is released on return
-    /// (no state mutated).
+    /// here cannot be handed to a new worker. Preparation is part of the
+    /// shutdown protocol: the preparation slot (claimed before
+    /// authorization, held through the registry reservation) is covered
+    /// by the SAME wait, so a start mid-preparation keeps the shutdown
+    /// from declaring the export surface quiescent. Order (prepare →
+    /// worker) matches `start`'s acquisition order, and `start` claims
+    /// both slots with `try_acquire_owned`, so neither side can deadlock.
+    /// Bounded: the writer checks its token on every codec I/O boundary,
+    /// but a blocking-pool thread cannot be aborted, so a stuck
+    /// synchronous syscall can only be waited out, not killed; `false`
+    /// means the bound elapsed with a slot still held. The acquired
+    /// permits are released on return (no state mutated).
     pub(crate) async fn wait_idle(&self) -> bool {
-        match tokio::time::timeout(THREAD_DRAIN_WAIT, self.worker_slot.acquire()).await {
-            Ok(Ok(permit)) => {
-                drop(permit);
-                true
-            }
-            _ => false,
-        }
+        let drain = async {
+            let prepare = self.prepare_slot.acquire().await;
+            let worker = self.worker_slot.acquire().await;
+            (prepare, worker)
+        };
+        matches!(
+            tokio::time::timeout(THREAD_DRAIN_WAIT, drain).await,
+            Ok((Ok(_prepare), Ok(_worker)))
+        )
     }
 
     /// Start an export job for `session`, targeting the scope in
     /// `options`.
     ///
-    /// Ordering (design §4.1): validate + authorize against the CURRENT
-    /// state → warm opens and the bounded catalogue warm-up under ONE
-    /// mutation admission → claim the worker slot → reserve the registry
-    /// job → spawn the blocking worker. A denial, an invalid scope, a
-    /// busy gate or a lost admission race refuses with a typed error and
-    /// never starts the freeze.
+    /// Ordering (design §4.1): claim the bounded preparation slot →
+    /// validate + authorize against the CURRENT state → warm opens and
+    /// the bounded catalogue warm-up under ONE mutation admission → claim
+    /// the worker slot → reserve the registry job → publish the activity
+    /// row → spawn the blocking worker. The preparation slot is part of
+    /// the shutdown protocol: [`Self::wait_idle`] waits for BOTH slots,
+    /// so shutdown cannot pass the export stage while a start is still
+    /// preparing. A denial, an invalid scope, a busy gate or a lost
+    /// admission race refuses with a typed error and never starts the
+    /// freeze.
     ///
     /// `connection_closed` is the session's connection token: when the
     /// session's transport dies, the supervisor cancels the job (the
@@ -339,6 +421,22 @@ impl OnlineExport {
         if self.runtime.shutdown.is_cancelled() {
             return Err(ServiceError::Shutdown);
         }
+        // ── claim the bounded preparation slot BEFORE authorization, so
+        // late claimants are refused for the whole (bounded) preparation
+        // instead of racing to the late registry arbitration. Held until
+        // the registry job is reserved below; dropped with this future on
+        // every refusal path.
+        let _preparing = Arc::clone(&self.prepare_slot)
+            .try_acquire_owned()
+            .map_err(|_| ServiceError::AlreadyRunning)?;
+        // Recheck under the preparation permit, before the first I/O: a drain
+        // that already took and released both slots began after the token was
+        // cancelled, so a start that acquired the permit late sees it here
+        // and never touches the catalogue after shutdown declared export idle.
+        if self.runtime.shutdown.is_cancelled() {
+            return Err(ServiceError::Shutdown);
+        }
+
         let user_id = session.user_id;
         let owner = ExportOwner {
             sessions: self.runtime.sessions.clone(),
@@ -407,6 +505,17 @@ impl OnlineExport {
             export_id.clone(),
             cancel.clone(),
         )?);
+        // Preparation is over: the registry arbitration owns admission
+        // from here, so a late claimant may retry freely.
+        drop(_preparing);
+        // Activity projection (item 6b): publish the job's row after the
+        // reservation (a refused start never flashes a row). The guard is
+        // moved into the job, so the row dies exactly when the worker
+        // exits — including panics (the guard's Drop).
+        let activity_guard = self
+            .activity
+            .get()
+            .and_then(|projection| projection.register_job(session, options.database.clone()));
 
         // ── spawn the dedicated blocking worker (synchronous codec/file
         // work bridged through the captured runtime handle). The job
@@ -429,6 +538,7 @@ impl OnlineExport {
             runtime: self.runtime.runtime.clone(),
             artifact: fresh_artifact_name(),
             publication_claimed: Arc::new(AtomicBool::new(false)),
+            _activity_row: activity_guard,
             _worker_slot: worker_slot,
         };
         // `Handle::spawn_blocking` is infallible: it always returns a
@@ -529,9 +639,17 @@ struct ExportJob {
     /// strand the job on the ticket's Drop backstop instead of giving
     /// status a real reason).
     publication_claimed: Arc<AtomicBool>,
+    /// Activity-view row guard (item 6b): its Drop removes the job's
+    /// projected `Requests` row when the worker exits, whatever the exit
+    /// path. `None` when no projection is attached (or the id space was
+    /// exhausted). Declared BEFORE `_worker_slot` on purpose: struct
+    /// fields drop in declaration order, so the row is removed first and
+    /// `wait_idle` cannot return while the row is still visible.
+    _activity_row: Option<ExportJobActivityGuard>,
     /// Shutdown-quiescence permit: held for the whole worker run so
     /// [`OnlineExport::wait_idle`] can observe quiescence; released when
-    /// the closure returns (or unwinds).
+    /// the closure returns (or unwinds) — AFTER the activity row above
+    /// has been removed.
     _worker_slot: tokio::sync::OwnedSemaphorePermit,
 }
 

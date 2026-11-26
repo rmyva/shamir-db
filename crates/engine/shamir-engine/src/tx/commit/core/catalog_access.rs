@@ -7,6 +7,7 @@ use crate::repo::changelog_store::write_domain::RepoWritePermit;
 use crate::repo::fk_reverse_cache::FkReverseCache;
 use crate::table::table_manager::table_token_for;
 use crate::table::{table_store_names, TableManager};
+use crate::tx::commit::cold_open::{ColdOpenRegistration, ColdOpenTasks};
 use shamir_storage::error::{DbError, DbResult};
 use shamir_storage::types::{fully_unwrap_store, Repo as _, Store};
 use std::future::Future;
@@ -93,8 +94,20 @@ impl RepoCore {
     /// publication.
     pub(crate) async fn get_table(&self, table_name: &str) -> DbResult<TableManager> {
         self.rename_fence.check_table_rename_fence(table_name)?;
+        // An ALREADY-OPEN table is served while shutdown drains (the drainer
+        // and the flush resolve open tables by name); only a FRESH cold open
+        // is refused below.
         if let Some(table) = self.catalog.initialized_table(table_name) {
             return Ok(table);
+        }
+        // Refuse a FRESH cold open once shutdown is draining, BEFORE the
+        // admission permit and before any store lookup (the registered open
+        // below may already have submitted a blocking store open the drain
+        // must settle; fresh work only adds to it).
+        if self.cold_opens.is_closed() {
+            return Err(DbError::Internal(
+                "repository shutdown in progress; cold table open refused".into(),
+            ));
         }
         let permit = self
             .durability_handle
@@ -131,8 +144,15 @@ impl RepoCore {
     /// a runtime task that keeps the repository permit through recovery and
     /// publication.
     pub(crate) async fn get_table_unfenced(&self, table_name: &str) -> DbResult<TableManager> {
+        // Already-open tables are served during the drain; a FRESH cold open
+        // is refused, as in `get_table` above.
         if let Some(table) = self.catalog.initialized_table(table_name) {
             return Ok(table);
+        }
+        if self.cold_opens.is_closed() {
+            return Err(DbError::Internal(
+                "repository shutdown in progress; cold table open refused".into(),
+            ));
         }
         let permit = self
             .durability_handle
@@ -154,10 +174,20 @@ impl RepoCore {
         let core = self.clone();
         let table_name = table_name.to_owned();
         // Runs on the caller's task (a sync-over-async caller keeps working);
-        // the permit moves with the work if the caller is dropped.
+        // the permit moves with the work if the caller is dropped. The open
+        // is REGISTERED with the repository's cold-open lifecycle owner
+        // (`cold_opens`) BEFORE its first side effect (no store lookup, no
+        // recovery), and the registration transfers with the future into the
+        // handed-off remainder; repository shutdown closes admission and
+        // drains the owner before commit quiescence and the buffer flush.
         // The deep cold-init future stays boxed as in the inline admitted paths.
-        HandoffOnDrop::new(async move { Box::pin(core.get_table_ctx(&table_name, &permit)).await })
-            .await
+        let work = async move { Box::pin(core.get_table_ctx(&table_name, &permit)).await };
+        match HandoffOnDrop::new(work, Arc::clone(&self.cold_opens)) {
+            Some(open) => open.await,
+            None => Err(DbError::Internal(
+                "repository shutdown in progress; cold table open refused".into(),
+            )),
+        }
     }
 
     /// Admitted twin of `get_table`: requires the caller to
@@ -378,21 +408,40 @@ impl RepoCore {
     }
 }
 
-/// Polls a cold open on the awaiting task. A caller dropped mid-open hands the
-/// rest to a runtime task, so blocking recovery still ends under its permit.
+/// Polls a cold open on the awaiting task. The open is registered with the
+/// repository's cold-open owner BEFORE its first side effect (`new` returns
+/// `None` — and the caller refuses — once shutdown closed admission). A
+/// caller dropped mid-open hands the rest, WITH its registration, to a
+/// runtime task, so blocking recovery still ends under its permit and stays
+/// visible to the shutdown drain.
 struct HandoffOnDrop<T: Send + 'static> {
     work: Option<Pin<Box<dyn Future<Output = T> + Send>>>,
+    tasks: Arc<ColdOpenTasks>,
+    /// Admission taken before the first side effect of `work`; transferred
+    /// into the handed-off task on drop, released when the open completes
+    /// inline. `None` only after completion or a refused registration.
+    registration: Option<ColdOpenRegistration>,
     started: bool,
     polling: bool,
 }
 
 impl<T: Send + 'static> HandoffOnDrop<T> {
-    fn new(work: impl Future<Output = T> + Send + 'static) -> Self {
-        Self {
+    fn new(
+        work: impl Future<Output = T> + Send + 'static,
+        tasks: Arc<ColdOpenTasks>,
+    ) -> Option<Self> {
+        // Register BEFORE any side effect of `work` can run: an inline open
+        // (never handed off) is counted too, so shutdown cannot close and
+        // flush under a live open, and a `spawn_blocking` store open already
+        // submitted on the caller's behalf is covered by the drain.
+        let registration = tasks.register()?;
+        Some(Self {
             work: Some(Box::pin(work)),
+            tasks,
+            registration: Some(registration),
             started: false,
             polling: false,
-        }
+        })
     }
 }
 
@@ -410,6 +459,9 @@ impl<T: Send + 'static> Future for HandoffOnDrop<T> {
         this.polling = false;
         if polled.is_ready() {
             this.work = None;
+            // Completed inline: release the registration so the shutdown
+            // drain can settle.
+            this.registration = None;
         }
         polled
     }
@@ -417,15 +469,25 @@ impl<T: Send + 'static> Future for HandoffOnDrop<T> {
 
 impl<T: Send + 'static> Drop for HandoffOnDrop<T> {
     fn drop(&mut self) {
-        // Never started: nothing ran. Unwinding out of a poll: do not resume.
+        // Never started: nothing ran (the registration drops here too).
+        // Unwinding out of a poll: do not resume.
         if !self.started || self.polling {
             return;
         }
         let Some(work) = self.work.take() else {
             return;
         };
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            drop(runtime.spawn(work));
+        let Some(registration) = self.registration.take() else {
+            return;
+        };
+        // The handed-off future resolves to `T`; the owner tracks plain tasks.
+        if !self.tasks.spawn_registered(registration, async move {
+            work.await;
+        }) {
+            log::warn!(
+                "no live tokio runtime to resume a handed-off cold open; the open was \
+                 dropped with its permit"
+            );
         }
     }
 }

@@ -42,7 +42,7 @@ use std::time::Duration;
 
 use shamir_db::ShutdownReport;
 
-use crate::audit_appender::FjallAuditAppender;
+use crate::audit_appender::{FjallAuditAppender, FlusherJoinFailure};
 use crate::db_handler::CancelRefusalAudit;
 use crate::scheduler::Scheduler;
 
@@ -100,6 +100,43 @@ fn fire_teardown_probe() {
     let probe = TEARDOWN_PROBE.lock().expect("teardown probe").take();
     if let Some(probe) = probe {
         probe();
+    }
+}
+
+/// Test seam: ONE error injected INTO the real teardown's report just before
+/// [`teardown_audit`] returns, so the rollback's log assertion pins the
+/// teardown-produced report itself — a caller that discards teardown's entries
+/// or logs a different report object misses the injected error and fails.
+/// LIMIT: one injection per process — under nextest (one process per test) only
+/// the intended test can arm it. Consumed exactly once; the guard clears a
+/// leftover so a failed assertion cannot leak it into another test.
+#[cfg(test)]
+static INJECTED_TEARDOWN_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Arming guard: clears an unconsumed injection on drop.
+#[cfg(test)]
+pub(crate) struct InjectedTeardownErrorGuard;
+
+#[cfg(test)]
+pub(crate) fn inject_teardown_error(message: String) -> InjectedTeardownErrorGuard {
+    *INJECTED_TEARDOWN_ERROR
+        .lock()
+        .expect("injected teardown error lock") = Some(message);
+    InjectedTeardownErrorGuard
+}
+
+#[cfg(test)]
+fn take_injected_teardown_error() -> Option<String> {
+    INJECTED_TEARDOWN_ERROR
+        .lock()
+        .expect("injected teardown error lock")
+        .take()
+}
+
+#[cfg(test)]
+impl Drop for InjectedTeardownErrorGuard {
+    fn drop(&mut self) {
+        take_injected_teardown_error();
     }
 }
 
@@ -199,20 +236,13 @@ pub(crate) async fn teardown_audit(parts: AuditTeardown<'_>, report: &mut Shutdo
         // A join that returned an error still stopped the task, so the final
         // close may run; its buffered entries are drained by that close.
         Ok(Ok(())) => {}
-        Ok(Err(message)) => {
-            // Two shapes arrive here as one string: an INNER blocking job the
-            // task reported (the job had already ended, so the wrapper's
-            // completion DOES prove the blocking work stopped), and an OUTER
-            // `JoinError` (the task panicked or was cancelled — nothing proves
-            // its blocking work stopped). Only the first may be followed by a
-            // final close.
-            let latched = parts.appender.last_failure();
-            let inner_ended = latched
-                .as_deref()
-                .is_some_and(|cause| latched_cause(&message) == cause);
-            if !inner_ended {
-                flusher_stopped = false;
-            }
+        Ok(Err(failure)) => {
+            // The VARIANT decides whether the blocking work provably stopped,
+            // never a string comparison with the latch: an inner job failure
+            // was reported by a task that completed (the close may run), a
+            // lost task proves nothing (the close must not).
+            flusher_stopped = matches!(failure, FlusherJoinFailure::InnerBlockingJobFailed(_));
+            let message = failure.into_message();
             report.add_error(format!("{ERR_FLUSHER_JOIN}: {message}"));
             reported_flusher = Some(message);
             complete = false;
@@ -265,7 +295,13 @@ pub(crate) async fn teardown_audit(parts: AuditTeardown<'_>, report: &mut Shutdo
     let dedicated = std::thread::Builder::new()
         .name("audit-final-close".to_string())
         .spawn(move || {
-            let _ = flush_tx.send(appender.final_flush_blocking());
+            let outcome = appender.final_flush_blocking();
+            // Release this thread's appender reference BEFORE publishing the
+            // result: the appender owns the checkpoint store and the
+            // `server_meta` hook, so a relaunch right after the reported
+            // close must not race the thread's drop.
+            drop(appender);
+            let _ = flush_tx.send(outcome);
         });
     let flush = match dedicated {
         Ok(_thread) => tokio::time::timeout_at(deadline, flush_rx).await,
@@ -307,6 +343,13 @@ pub(crate) async fn teardown_audit(parts: AuditTeardown<'_>, report: &mut Shutdo
         }
     }
 
+    // Test seam: the teardown's OWN report carries the injected error before
+    // this function returns, so the rollback's log assertion pins the report
+    // teardown produced, not one assembled after it.
+    #[cfg(test)]
+    if let Some(injected) = take_injected_teardown_error() {
+        report.add_error(injected);
+    }
     complete
 }
 

@@ -101,6 +101,14 @@ use export::{
 use lifecycle::CancelOnDrop;
 use visibility_export::{record_visibility_metrics, register_visibility_metrics};
 
+/// Test seam slot for one poller tick: (entered, release, finished) one-shots.
+#[cfg(test)]
+type PollerParkSlot = (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::sync::oneshot::Receiver<()>,
+    tokio::sync::oneshot::Sender<()>,
+);
+
 /// Live state shared between the HTTP handlers and the boot path.
 ///
 /// `ready` flips to `true` once `ServerLauncher::launch` has bound every
@@ -120,6 +128,19 @@ pub struct ObservabilityState {
     /// past shutdown and never reports a dropped server's mirrors.
     activity_source: ArcSwapOption<ActivitySource>,
     load_source: ArcSwapOption<LoadSource>,
+    /// Test seam (item #2008/6): one-shot park for ONE `/metrics` scrape
+    /// inside the raced database sample.
+    #[cfg(test)]
+    metrics_park: std::sync::Mutex<
+        Option<(
+            tokio::sync::oneshot::Sender<()>,
+            tokio::sync::oneshot::Receiver<()>,
+        )>,
+    >,
+    /// Test seam (item #2008/6): one-shot park for ONE poller tick inside the
+    /// raced tick body, same contract as `metrics_park`.
+    #[cfg(test)]
+    poller_park: std::sync::Mutex<Option<PollerParkSlot>>,
 }
 
 impl ObservabilityState {
@@ -130,7 +151,74 @@ impl ObservabilityState {
             bound_addrs: ArcSwap::from_pointee(Vec::new()),
             activity_source: ArcSwapOption::empty(),
             load_source: ArcSwapOption::empty(),
+            #[cfg(test)]
+            metrics_park: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            poller_park: std::sync::Mutex::new(None),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn arm_metrics_park(
+        &self,
+        entered: tokio::sync::oneshot::Sender<()>,
+    ) -> tokio::sync::oneshot::Sender<()> {
+        let release = tokio::sync::oneshot::channel();
+        *self
+            .metrics_park
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((entered, release.1));
+        release.0
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_metrics_park(&self) -> Option<tokio::sync::oneshot::Receiver<()>> {
+        self.metrics_park
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+            .map(|(entered, release)| {
+                let _ = entered.send(());
+                release
+            })
+    }
+
+    /// One-shot park for ONE poller tick inside the raced tick body. The
+    /// test seam fires `finished` as the LAST statement after the gauge write;
+    /// the test awaits `finished` before cancelling.
+    #[cfg(test)]
+    pub(crate) fn arm_poller_park(
+        &self,
+        entered: tokio::sync::oneshot::Sender<()>,
+    ) -> (
+        tokio::sync::oneshot::Sender<()>,
+        tokio::sync::oneshot::Receiver<()>,
+    ) {
+        let (release_send, release_recv) = tokio::sync::oneshot::channel();
+        let (finished_send, finished_recv) = tokio::sync::oneshot::channel();
+        *self
+            .poller_park
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some((entered, release_recv, finished_send));
+        (release_send, finished_recv)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_poller_park(
+        &self,
+    ) -> Option<(
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    )> {
+        self.poller_park
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+            .map(|(entered, release, finished)| {
+                let _ = entered.send(());
+                (release, finished)
+            })
     }
 
     /// Install the per-server activity gauge source. Called once at
@@ -304,6 +392,17 @@ pub async fn spawn_with_byte_budget(
         None
     };
 
+    spawn_serving(addr, state, prom_handle, tx_metrics, byte_budget, shamir_db).await
+}
+
+async fn spawn_serving(
+    addr: SocketAddr,
+    state: Arc<ObservabilityState>,
+    prom_handle: Option<PrometheusHandle>,
+    tx_metrics: Option<Arc<shamir_tx::TxMetrics>>,
+    byte_budget: Option<ByteBudget>,
+    shamir_db: Option<Arc<shamir_db::ShamirDb>>,
+) -> Result<ObservabilityHandle, ObservabilityError> {
     // 2. Process metrics collector — describes + collects standard
     // `process_*` series.
     let collector = Collector::default();
@@ -445,6 +544,8 @@ pub async fn spawn_with_byte_budget(
     let shutdown_for_poller = shutdown.clone();
     let tx_metrics_clone = tx_metrics;
     let shamir_db_clone = shamir_db.clone();
+    #[cfg(test)]
+    let poller_park_state = state.clone();
     let poller_task = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(5));
         // Burn the immediate first tick — we already collected once.
@@ -462,6 +563,16 @@ pub async fn spawn_with_byte_budget(
                     // with it. Race the whole body against the same token, so
                     // the cancel lands on the NEXT POLL, not after the await.
                     let collect_tick = async {
+                        #[cfg(test)]
+                        let (park_release, tick_finished) =
+                            match poller_park_state.take_poller_park() {
+                                Some((release, finished)) => (Some(release), Some(finished)),
+                                None => (None, None),
+                            };
+                        #[cfg(test)]
+                        if let Some(release) = park_release {
+                            let _ = release.await;
+                        }
                         collector.collect();
                         if let Some(ref tx_m) = tx_metrics_clone {
                             let snap = tx_m.snapshot();
@@ -480,6 +591,10 @@ pub async fn spawn_with_byte_budget(
                             let degraded = db.degraded_index_count().await;
                             metrics::gauge!("shamir_degraded_indexes_total")
                                 .set(degraded as f64);
+                        }
+                        #[cfg(test)]
+                        if let Some(finished) = tick_finished {
+                            let _ = finished.send(());
                         }
                     };
                     tokio::select! {
@@ -544,6 +659,20 @@ pub async fn spawn_with_byte_budget(
     })
 }
 
+/// Test-only spawn with a PRE-BUILT, never globally installed recorder
+/// handle, so a test can exercise the live `/metrics` route with a rendered
+/// body without winning the process-global `install_recorder` race.
+#[cfg(test)]
+pub(crate) async fn spawn_with_prom_handle_for_tests(
+    addr: SocketAddr,
+    state: Arc<ObservabilityState>,
+    prom: Option<PrometheusHandle>,
+    byte_budget: Option<ByteBudget>,
+    shamir_db: Option<Arc<shamir_db::ShamirDb>>,
+) -> Result<ObservabilityHandle, ObservabilityError> {
+    spawn_serving(addr, state, prom, None, byte_budget, shamir_db).await
+}
+
 #[derive(Clone)]
 struct AppState {
     state: Arc<ObservabilityState>,
@@ -587,6 +716,10 @@ async fn metrics_handler(State(s): State<AppState>) -> Response {
             // the answer is a prompt 503 — same body and status as the
             // not-ready path — instead of a held database.
             let sample_db = async {
+                #[cfg(test)]
+                if let Some(release) = s.state.take_metrics_park() {
+                    let _ = release.await;
+                }
                 if let Some(db) = &s.db {
                     sample_gate_metrics(db);
                     sample_index_interner_metrics(db).await;

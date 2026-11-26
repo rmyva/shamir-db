@@ -203,11 +203,21 @@ pub struct OnlineBackupRegistry {
     /// per-thread state; no process-global arming.
     #[cfg(test)]
     pending_step_callback: Mutex<Option<BackupStepCallback>>,
-    /// Test-only callback after successful protocol return.
+    /// Test-only (R2d-FIX-C): a one-shot post-run callback the NEXT
+    /// `start` moves onto its runner thread, invoked once after a
+    /// SUCCESSFUL protocol return and before the guard stamp, the
+    /// completion capture and the retention pass — fixture surgery (e.g.
+    /// renaming the published child to a fixed name) with no production
+    /// seam.
     #[cfg(test)]
     pending_post_run_callback: Mutex<Option<TestPostRunCallback>>,
     /// Shared mutation gate; backup runs are enrolled for their full lifetime.
     maintenance: Option<MaintenanceGate>,
+    /// PER-REGISTRY schedule state (item 3): the BackupStatus `schedule`
+    /// section's cell, shared with this registry's scheduler (`spawn`), its
+    /// runner thread and the admin adapter — never a process global, so two
+    /// registries in one process report independent sections.
+    schedule: Arc<backup_metrics::ScheduleState>,
 }
 
 /// Test-only post-run callback: given the protocol's published snapshot
@@ -260,7 +270,17 @@ impl OnlineBackupRegistry {
             #[cfg(test)]
             pending_post_run_callback: Mutex::new(None),
             maintenance: None,
+            schedule: Arc::new(backup_metrics::ScheduleState::default()),
         }
+    }
+
+    /// The registry's own schedule-state handle: the scheduler's exit guard
+    /// and the runner thread publish through this same instance (and the
+    /// admin adapter reads its snapshot), so a schedule never escapes its
+    /// registry. `pub(crate)` only so the crate's adapter-level regression
+    /// tests can seed and assert this exact cell.
+    pub(crate) fn schedule_cell(&self) -> Arc<backup_metrics::ScheduleState> {
+        Arc::clone(&self.schedule)
     }
 
     /// R3-2b: install the shared server-wide maintenance gate (`shamir_db::
@@ -410,6 +430,7 @@ impl OnlineBackupRegistry {
             maintenance,
             #[cfg(test)]
             post_run_callback,
+            schedule: Arc::clone(&self.schedule),
         };
         // §4.8 metrics hook: the run counts as started once registration
         // succeeded; a failed spawn is published as a preparing-stage
@@ -542,6 +563,9 @@ struct RunJob {
     /// — protocol, cleanup and every error/cancel/panic exit (a panic on
     /// this thread unwinds through `run`, dropping the guard).
     maintenance: Option<WriterDrainGuard>,
+    /// The registry's schedule cell: a scheduled run publishes its typed
+    /// outcome into ITS registry's section, never a process global.
+    schedule: Arc<backup_metrics::ScheduleState>,
 }
 
 impl RunJob {
@@ -568,6 +592,7 @@ impl RunJob {
             maintenance,
             #[cfg(test)]
             post_run_callback,
+            schedule,
         } = self;
         let scheduled_run = scheduled.is_some();
         // Test-only: arm this runner thread with the run's one-shot step
@@ -838,12 +863,27 @@ impl RunJob {
         // The scheduled run's LAST-RUN record publishes at the final
         // publication, before `running = false`: the run's own typed outcome
         // (completed / typed-cancelled / failed) with the stable path-free
-        // vocabulary; a failure keeps the ONCE log with identical fields.
+        // vocabulary; a failure keeps the ONCE log with identical fields
+        // (logged after the lock release, below).
+        let mut scheduled_failure_log: Option<(String, Option<String>)> = None;
         if scheduled_run {
-            backup_metrics::note_scheduled_run_outcome(&outcome, record.started_at_unix_ns);
+            scheduled_failure_log =
+                schedule.note_scheduled_run_outcome(&outcome, record.started_at_unix_ns);
         }
         record.running = false;
         drop(record);
+        // The failure warning is emitted AFTER the record lock is released
+        // (and under this module's `registry` target): a slow tracing
+        // subscriber must never extend the registry's admission lock, and
+        // the vocabulary belongs to the registry's last-run record, not the
+        // metrics cell.
+        if let Some((stage, reason)) = scheduled_failure_log {
+            tracing::warn!(
+                stage = stage.as_str(),
+                reason = reason.as_deref().unwrap_or(""),
+                "scheduled backup run failed"
+            );
+        }
         guard.disarm();
     }
 }

@@ -10,4 +10,4 @@ mod tests;
 
 pub use registry::{AlreadyRunning, ExportRegistry, ExportRun};
 pub(crate) use root::ExportRoot;
-pub(crate) use service::{ExportRuntime, OnlineExport, ServiceError};
+pub(crate) use service::{ExportDrainHandle, ExportRuntime, OnlineExport, ServiceError};

@@ -30,9 +30,9 @@
 use serde_json::Value;
 use shamir_query_types::admin::ResourceRef;
 
-use super::harness::{overwrite_profile, seed_catalogue, ShellFixture, DB_NAME, SHELL_USER};
-use super::secure_fixture::{boot_secure_root_owner, run_with_secret, set_acl_mode};
-use super::state_data_common::{data, refusal, scram_profile};
+use super::super::harness::{overwrite_profile, seed_catalogue, ShellFixture, DB_NAME, SHELL_USER};
+use super::super::secure_fixture::{boot_secure_root_owner, run_with_secret, set_acl_mode};
+use super::super::state_data_common::{data, refusal, scram_profile};
 
 /// The second probe: a non-superuser that does NOT own Root.
 const NON_OWNER: &str = "shelloutsider";

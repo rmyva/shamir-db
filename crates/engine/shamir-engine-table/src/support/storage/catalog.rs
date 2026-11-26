@@ -243,10 +243,14 @@ impl TableCatalog {
     /// What this does NOT close: a `DROP` after the caller's final comparison
     /// and the caller's name-based reacquisition remain pre-existing windows;
     /// the token only tells a caller whether two observations name the same
-    /// cell. There is no deterministic seam to schedule a `DROP` between the
-    /// old implementation's probe and insert, so no test reproduces the
-    /// original split-operation race — only the post-capture windows above are
-    /// observable.
+    /// cell. The exact mid-accessor `DROP` interleaving of the old
+    /// implementation is still not scheduled directly. The test
+    /// `src/tests/table_core/manager/catalog_registration_order_tests.rs
+    /// ::registration_of_an_absent_name_waits_for_the_tables_shard`
+    /// (via the test-only `tables_entry_guard_for_test` seam: another thread
+    /// holds the `tables` entry guard) checks that the accessor of an ABSENT
+    /// name waits for that shard; it does not observe the config/entry
+    /// boundary itself.
     ///
     /// Callers: the repo facade
     /// `crates/engine/shamir-engine/src/repo/instance/repo_instance/catalog.rs`
@@ -296,6 +300,19 @@ impl TableCatalog {
     #[cfg(any(test, feature = "test-util"))]
     pub fn table_cell_count(&self) -> usize {
         self.tables.len()
+    }
+
+    /// Test-only seam: hold the raw `tables` entry guard for `name` (the
+    /// shard write lock) so an in-crate test can observe that a concurrent
+    /// `table_registration(name)` blocks on it — the deterministic rendezvous
+    /// for the entry-first ordering the accessor doc describes. Unit tests of
+    /// this crate only: nothing outside it can name the raw entry guard.
+    #[cfg(test)]
+    pub(crate) fn tables_entry_guard_for_test(
+        &self,
+        name: &str,
+    ) -> dashmap::Entry<'_, String, Arc<OnceCell<TableManager>>> {
+        self.tables.entry(name.to_string())
     }
 
     /// Non-instantiating peek: like

@@ -110,18 +110,17 @@ pub struct CancelBackupOp {
 // admin classification. Scope fields are direct and flat on the wire
 // (matching the offline command's `--repo` / `--table` / `--schema-only`
 // controls); `include_artifacts` is accepted by the wire DTO like the
-// offline flag. Guest-artifact support is out of scope in this phase, and
-// the online job itself is disabled (fail-closed); the DTOs fix the wire
-// contract only.
+// offline flag. Guest-artifact support is out of scope in this phase;
+// the online job itself is live and these DTOs carry its wire contract.
 // ------------------------------------------------------------------------
 
 /// Start an online logical-dump export job on the live server.
 ///
 /// Superuser-only admin operation, per the agreed wire contract. The
-/// online job is disabled in this release (fail-closed refusals only, no
-/// job runs); the server never accepts an output path — per the contract
-/// the artifact would be written under the configured private export
-/// root and only its opaque artifact name reported.
+/// online job is live in this release; the server never accepts an
+/// output path — per the contract the artifact is written under the
+/// configured private export root and only its opaque artifact name is
+/// reported.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StartExportOp {

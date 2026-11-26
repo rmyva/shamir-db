@@ -400,9 +400,11 @@ impl ShamirDbHandler {
         //    behind us, then re-resolve and re-check the captured
         //    incarnation. WHY the seam is here and nowhere else: name-based
         //    authorization is a shared seam with the batch and cursor read
-        //    paths, and the re-run only narrows the park→resolve window — it
-        //    does NOT close a DDL racing between this re-check and the handle
-        //    acquisition below. No new ACL seam may be invented here.
+        //    paths, and the re-run only narrows the park→resolve window. A DDL
+        //    race between this re-check and handle acquisition is narrowed by
+        //    the post-acquisition re-check below, which compares fresh name
+        //    lookups (registration observations), not the acquired descriptor
+        //    itself. No new ACL seam may be invented here.
         //
         //    Like step 5 this re-probe is an OBSERVATION, not a lock:
         //    absence HERE answers `unknown_table`, but a DROP→CREATE landing
@@ -448,10 +450,33 @@ impl ShamirDbHandler {
         //    `unknown_table`); no list-table scan is needed. A quarantine
         //    refusal here uses the fixed point-read text. No record scan, no
         //    cursor.
+        // Test-only one-shot pause strictly after identity pre-check and
+        // before acquiring the table handle, for the post-acquisition identity test.
+        #[cfg(test)]
+        self.get_record_identity_pause().await;
         let table = match self.db.get_table(db_name, repo_name, table_name).await {
             Ok(table) => table,
             Err(e) => return final_lookup_error_response(&self.db, db_name, repo_name, e),
         };
+        // Post-acquisition identity re-check: closes the pre-check→acquisition
+        // window — a rename/drop/recreate landing between the incarnation
+        // comparison and `get_table` must not let the read serve the
+        // replacement.
+        let repo = match resolve_repo(&self.db, db_name, repo_name) {
+            Ok(repo) => repo,
+            Err(_) => return table_unavailable_response(),
+        };
+        let Some(current_config) = repo.table_config(table_name) else {
+            return table_unavailable_response();
+        };
+        let Some(current_registration) = repo.table_registration(table_name) else {
+            return table_unavailable_response();
+        };
+        if current_config.store_id != authorized_store_id
+            || !authorized_registration.same_registration(&current_registration)
+        {
+            return changed_registration_response();
+        }
         let inner = match table.get(key).await {
             Ok(inner) => inner,
             Err(e) => return db_error_response(e),

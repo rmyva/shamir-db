@@ -1,7 +1,7 @@
 //! Cumulative decoded-request count is asserted in-crate by `decoded_request_counter_covers_cancellation_dispatches`; this shell test cannot reach the handler's test accessor, and no metric was added.
 use super::access_activity_raw_scram::{
-    checked_shell_timeout, decimal, keys_exact, login as scram_login, roundtrip, scan_profile_home,
-    scan_streams, scanner_positive_control, shell_own_handle, REQUEST_FIELDS, REQUEST_STATES,
+    checked_shell_timeout, decimal, keys_exact, scan_profile_home, scan_streams,
+    scanner_positive_control, shell_own_handle, REQUEST_FIELDS, REQUEST_STATES,
 };
 use super::harness::{
     boot, overwrite_profile, seed_catalogue_timeout, seed_shell_user_named_timeout,
@@ -10,100 +10,28 @@ use super::harness::{
 };
 use super::secure_fixture::{run_secret_process_timeout_scanned, set_acl_mode_timeout};
 use super::state_data_common::{data, refusal, scram_profile};
+use crate::shell_tests::access_activity_holders::raw_session::{
+    batch_reply, close_session, exchange, login, remaining, rollback_tx, RawSession, FRAME_BOUND,
+    STEP_BOUND,
+};
 use serde_json::Value;
 use shamir_query_builder::batch::{Batch, Isolation};
 use shamir_query_builder::{ddl, doc, filter, write};
 use shamir_query_types::admin::ResourceRef;
-use shamir_query_types::batch::{BatchResponse, IsolationLevel};
+use shamir_query_types::batch::IsolationLevel;
 use shamir_query_types::hmac as canon;
 use shamir_query_types::write::UpdateOp;
 use shamir_server::db_handler::{DbRequest, DbResponse};
 use shamir_server::version::CURRENT_QUERY_LANG_VERSION;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncWriteExt, ReadHalf, WriteHalf};
-use tokio::net::TcpStream;
-use tokio_rustls::client::TlsStream;
+use tokio::io::AsyncWriteExt;
 use zeroize::Zeroizing;
 const TOTAL_BOUND: Duration = Duration::from_secs(175);
 const CLEANUP_RESERVE: Duration = Duration::from_secs(30);
-const STEP_BOUND: Duration = Duration::from_secs(120);
-const FRAME_BOUND: Duration = Duration::from_secs(10);
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 const FOREIGN_USER: &str = "parked_cancel_foreign";
-type TlsRead = ReadHalf<TlsStream<TcpStream>>;
-type TlsWrite = WriteHalf<TlsStream<TcpStream>>;
 fn active_deadline(start: Instant) -> Instant {
     start + (TOTAL_BOUND - CLEANUP_RESERVE).min(STEP_BOUND)
-}
-fn remaining(deadline: Instant) -> Duration {
-    deadline.saturating_duration_since(Instant::now())
-}
-#[derive(Clone)]
-struct RawSession {
-    state: Arc<tokio::sync::Mutex<RawState>>,
-    deadline: Instant,
-}
-struct RawState {
-    sid: [u8; 32],
-    next_rid: u32,
-    read: TlsRead,
-    write: TlsWrite,
-}
-impl RawSession {
-    fn ask(&self, fixture: &ShellFixture, req: DbRequest) -> (Self, DbResponse) {
-        let state = self.state.clone();
-        let cap = remaining(self.deadline).min(STEP_BOUND).min(FRAME_BOUND);
-        let response = fixture.rt.run(async move {
-            tokio::time::timeout(cap, async move {
-                let mut state = state.lock().await;
-                exchange(&mut state, &req).await
-            })
-            .await
-            .expect("raw request deadline")
-        });
-        (self.clone(), response)
-    }
-}
-fn login(fixture: &ShellFixture, username: &str, password: &[u8], deadline: Instant) -> RawSession {
-    let addr = fixture.tls_addr;
-    let pin = fixture.pin;
-    let password = Zeroizing::new(password.to_vec());
-    let username = username.to_owned();
-    // Construct the timer inside the runtime context.
-    let (sid, read, write, next_rid) = fixture.rt.run(async move {
-        tokio::time::timeout(
-            remaining(deadline).min(STEP_BOUND),
-            scram_login(addr, &username, &password, pin),
-        )
-        .await
-        .expect("raw SCRAM login deadline")
-    });
-    RawSession {
-        state: Arc::new(tokio::sync::Mutex::new(RawState {
-            sid,
-            next_rid,
-            read,
-            write,
-        })),
-        deadline,
-    }
-}
-async fn exchange(session: &mut RawState, req: &DbRequest) -> DbResponse {
-    roundtrip(
-        req,
-        session.sid,
-        &mut session.next_rid,
-        &mut session.write,
-        &mut session.read,
-    )
-    .await
-}
-fn batch_reply(response: DbResponse, context: &str) -> BatchResponse {
-    match response {
-        DbResponse::Batch { response } | DbResponse::TxBatch { response } => response,
-        DbResponse::Error { code, .. } => panic!("{context}: server replied `{code}`"),
-        _ => panic!("{context}: unexpected reply shape"),
-    }
 }
 // ── Fixture helpers ──────────────────────────────────────────────────
 fn use_admin_profile(fixture: &ShellFixture) {
@@ -245,36 +173,6 @@ fn spawn_parked_request(
         })
         .0
 }
-fn rollback_tx(fixture: &ShellFixture, session: RawSession, tx_handle: u64) -> RawSession {
-    let request = DbRequest::TxRollback {
-        db: DB_NAME.into(),
-        tx_handle,
-    };
-    let (session, reply) = session.ask(fixture, request);
-    match reply {
-        DbResponse::TxRolledBack {
-            tx_handle: rolled_back,
-        } => assert_eq!(
-            rolled_back, tx_handle,
-            "session A rolls back the handle it opened"
-        ),
-        DbResponse::Error { code, .. } => {
-            panic!("session A rolls back its transaction: server replied `{code}`")
-        }
-        _ => panic!("session A rolls back its transaction: unexpected reply shape"),
-    }
-    session
-}
-fn close_session(fixture: &ShellFixture, session: RawSession) {
-    let cap = remaining(session.deadline).min(FRAME_BOUND);
-    fixture.rt.run(async move {
-        let mut state = session.state.lock().await;
-        tokio::time::timeout(cap, state.write.shutdown())
-            .await
-            .expect("session A close deadline")
-            .expect("session A close");
-    });
-}
 // ── Output and leak helpers ──────────────────────────────────────────
 fn checked_shell(
     fixture: &ShellFixture,
@@ -293,16 +191,18 @@ fn signed_acl_probe(
 ) -> (RawSession, Zeroizing<[u8; 32]>, Zeroizing<String>) {
     let admin = login(fixture, ADMIN, fixture.canary.as_bytes(), deadline);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let sid = fixture.rt.run({
-            let state = admin.state.clone();
-            async move {
-                tokio::time::timeout(remaining(deadline).min(STEP_BOUND), async move {
-                    state.lock().await.sid
-                })
-                .await
-                .expect("signed probe session-id read deadline")
-            }
-        });
+        let sid = fixture
+            .rt
+            .run_timeout(remaining(deadline).min(STEP_BOUND), {
+                let state = admin.state.clone();
+                async move {
+                    tokio::time::timeout(remaining(deadline).min(STEP_BOUND), async move {
+                        state.lock().await.sid
+                    })
+                    .await
+                    .expect("signed probe session-id read deadline")
+                }
+            });
         let key = Zeroizing::new(canon::derive_session_hmac_key(&sid));
         let resource = shamir_query_builder::ddl::res::table(DB_NAME, REPO_NAME, PLAIN_TABLE);
         let unsigned = ddl::chmod(resource.clone(), 0o777)
@@ -501,26 +401,21 @@ struct FixtureShutdownGuard {
     fixture: ShellFixture,
     shutdown_deadline: Instant,
 }
-impl std::ops::Deref for FixtureShutdownGuard {
-    type Target = ShellFixture;
-    fn deref(&self) -> &Self::Target {
-        &self.fixture
-    }
-}
 impl Drop for FixtureShutdownGuard {
     fn drop(&mut self) {
         let cap = remaining(self.shutdown_deadline);
         if cap.is_zero() {
             self.fixture
                 .guard
-                .note("fixture shutdown skipped", "total deadline exhausted");
+                .note("fixture shutdown on grace", "total deadline exhausted");
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.fixture.shutdown_with_timeout(Duration::ZERO);
+                self.fixture
+                    .shutdown_with_deadline(Instant::now() + SHUTDOWN_GRACE);
             }));
             return;
         }
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.fixture.shutdown_with_timeout(cap);
+            self.fixture.shutdown_with_deadline(self.shutdown_deadline);
         }));
     }
 }
@@ -538,16 +433,18 @@ impl Drop for CleanupGuard<'_> {
         if let Some(victim) = self.victim.take() {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let deadline = self.cleanup_deadline;
-                self.fixture.rt.run(async move {
-                    let mut victim = victim;
-                    victim.abort();
-                    let cap = deadline.saturating_duration_since(Instant::now());
-                    match tokio::time::timeout(cap, &mut victim).await {
-                        Ok(Ok(_)) => "victim join: success".to_owned(),
-                        Ok(Err(_)) => "victim join: task error".to_owned(),
-                        Err(_) => "victim join: timeout (aborted; handle consumed)".to_owned(),
-                    }
-                })
+                self.fixture
+                    .rt
+                    .run_timeout(remaining(deadline), async move {
+                        let mut victim = victim;
+                        victim.abort();
+                        let cap = deadline.saturating_duration_since(Instant::now());
+                        match tokio::time::timeout(cap, &mut victim).await {
+                            Ok(Ok(_)) => "victim join: success".to_owned(),
+                            Ok(Err(_)) => "victim join: task error".to_owned(),
+                            Err(_) => "victim join: timeout (aborted; handle consumed)".to_owned(),
+                        }
+                    })
             }));
             outcomes.push(match result {
                 Ok(status) => status,
@@ -558,19 +455,21 @@ impl Drop for CleanupGuard<'_> {
             let state = session.state.clone();
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let deadline = self.cleanup_deadline;
-                self.fixture.rt.run(async move {
-                    let cap = deadline.saturating_duration_since(Instant::now());
-                    match tokio::time::timeout(cap, async {
-                        let mut state = state.lock().await;
-                        state.write.shutdown().await
+                self.fixture
+                    .rt
+                    .run_timeout(remaining(deadline), async move {
+                        let cap = deadline.saturating_duration_since(Instant::now());
+                        match tokio::time::timeout(cap, async {
+                            let mut state = state.lock().await;
+                            state.write.shutdown().await
+                        })
+                        .await
+                        {
+                            Ok(Ok(())) => "victim socket close: success".to_owned(),
+                            Ok(Err(_)) => "victim socket close: error".to_owned(),
+                            Err(_) => "victim socket close: timeout".to_owned(),
+                        }
                     })
-                    .await
-                    {
-                        Ok(Ok(())) => "victim socket close: success".to_owned(),
-                        Ok(Err(_)) => "victim socket close: error".to_owned(),
-                        Err(_) => "victim socket close: timeout".to_owned(),
-                    }
-                })
             }));
             outcomes.push(result.unwrap_or_else(|_| "victim socket close: panic".to_owned()));
         }
@@ -579,39 +478,51 @@ impl Drop for CleanupGuard<'_> {
             let state = session.state.clone();
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let deadline = self.cleanup_deadline;
-                self.fixture.rt.run(async move {
-                    let Some(tx_handle) = handle else {
-                        return "rollback: not needed".to_owned();
-                    };
-                    let mut state = state.lock().await;
-                    let request = DbRequest::TxRollback {
-                        db: DB_NAME.into(),
-                        tx_handle,
-                    };
-                    let cap = deadline.saturating_duration_since(Instant::now());
-                    match tokio::time::timeout(cap, exchange(&mut state, &request)).await {
-                        Ok(DbResponse::TxRolledBack { tx_handle: got }) if got == tx_handle => {
-                            "rollback: success".to_owned()
+                self.fixture
+                    .rt
+                    .run_timeout(remaining(deadline), async move {
+                        let Some(tx_handle) = handle else {
+                            return "rollback: not needed".to_owned();
+                        };
+                        let request = DbRequest::TxRollback {
+                            db: DB_NAME.into(),
+                            tx_handle,
+                        };
+                        let cap = deadline.saturating_duration_since(Instant::now());
+                        match tokio::time::timeout(cap, async move {
+                            let mut state = state.lock().await;
+                            exchange(&mut state, &request).await
+                        })
+                        .await
+                        {
+                            Ok(DbResponse::TxRolledBack { tx_handle: got }) if got == tx_handle => {
+                                "rollback: success".to_owned()
+                            }
+                            Ok(DbResponse::Error { .. }) => "rollback: server error".to_owned(),
+                            Ok(_) => "rollback: unexpected reply".to_owned(),
+                            Err(_) => "rollback: timeout".to_owned(),
                         }
-                        Ok(DbResponse::Error { .. }) => "rollback: server error".to_owned(),
-                        Ok(_) => "rollback: unexpected reply".to_owned(),
-                        Err(_) => "rollback: timeout".to_owned(),
-                    }
-                })
+                    })
             }));
             outcomes.push(result.unwrap_or_else(|_| "rollback: panic".to_owned()));
             let state = session.state.clone();
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let deadline = self.cleanup_deadline;
-                self.fixture.rt.run(async move {
-                    let mut state = state.lock().await;
-                    let cap = deadline.saturating_duration_since(Instant::now());
-                    match tokio::time::timeout(cap, state.write.shutdown()).await {
-                        Ok(Ok(())) => "holder socket close: success".to_owned(),
-                        Ok(Err(_)) => "holder socket close: error".to_owned(),
-                        Err(_) => "holder socket close: timeout".to_owned(),
-                    }
-                })
+                self.fixture
+                    .rt
+                    .run_timeout(remaining(deadline), async move {
+                        let cap = deadline.saturating_duration_since(Instant::now());
+                        match tokio::time::timeout(cap, async move {
+                            let mut state = state.lock().await;
+                            state.write.shutdown().await
+                        })
+                        .await
+                        {
+                            Ok(Ok(())) => "holder socket close: success".to_owned(),
+                            Ok(Err(_)) => "holder socket close: error".to_owned(),
+                            Err(_) => "holder socket close: timeout".to_owned(),
+                        }
+                    })
             }));
             outcomes.push(result.unwrap_or_else(|_| "holder socket close: panic".to_owned()));
         }
@@ -625,11 +536,11 @@ impl Drop for CleanupGuard<'_> {
 fn parked_request_is_cancelled_through_the_shell() {
     let start = Instant::now();
     let deadline = active_deadline(start);
-    let fixture_guard = FixtureShutdownGuard {
+    let mut fixture_guard = FixtureShutdownGuard {
         fixture: boot("parked_request_is_cancelled_through_the_shell"),
         shutdown_deadline: start + TOTAL_BOUND,
     };
-    let fixture = &*fixture_guard;
+    let fixture = &fixture_guard.fixture;
     let mut cleanup = CleanupGuard {
         fixture,
         holder: None,
@@ -650,7 +561,7 @@ fn parked_request_is_cancelled_through_the_shell() {
     cleanup.holder = Some(conn1.clone());
     let conn2 = login(fixture, SHELL_USER, a_password.as_bytes(), deadline);
     cleanup.victim_session = Some(conn2.clone());
-    let sid = fixture.rt.run({
+    let sid = fixture.rt.run_timeout(remaining(deadline), {
         let state = conn2.state.clone();
         async move {
             tokio::time::timeout(remaining(deadline), async move { state.lock().await.sid })
@@ -944,7 +855,7 @@ fn parked_request_is_cancelled_through_the_shell() {
     assert!(Instant::now() < deadline, "active deadline expired");
     let victim = cleanup.victim.take().expect("victim guard installed");
     let cleanup_deadline = cleanup.cleanup_deadline;
-    let joined = fixture.rt.run(async move {
+    let joined = fixture.rt.run_timeout(remaining(deadline), async move {
         let mut victim = victim;
         match tokio::time::timeout(remaining(deadline), &mut victim).await {
             Ok(result) => Ok(result),
@@ -980,6 +891,13 @@ fn parked_request_is_cancelled_through_the_shell() {
     conn1.deadline = cleanup.cleanup_deadline;
     let conn1 = rollback_tx(fixture, conn1, tx_handle);
     cleanup.tx_handle = None;
+    let holder_state = conn1.state.clone();
     close_session(fixture, conn1);
     cleanup.holder = None;
+    drop(cleanup);
+    super::access_activity_holders::teardown_deadline::finish_until(
+        &mut fixture_guard.fixture,
+        holder_state,
+        start + TOTAL_BOUND,
+    );
 }

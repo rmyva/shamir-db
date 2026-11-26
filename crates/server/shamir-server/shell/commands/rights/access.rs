@@ -669,9 +669,9 @@ fn project_rights(qv: &QueryValue, selector: &Selector) -> Result<Value, ShellEr
 }
 
 #[cfg(test)]
-#[path = "../tests/access_deadline_tests.rs"]
+#[path = "../../tests/commands/access/access_deadline_tests.rs"]
 mod access_deadline_tests;
 
 #[cfg(test)]
-#[path = "../tests/access_projection_tests.rs"]
+#[path = "../../tests/commands/access/access_projection_tests.rs"]
 mod access_projection_tests;

@@ -14,17 +14,19 @@ use std::sync::atomic::Ordering;
 #[cfg(any(test, feature = "test-hooks"))]
 use std::sync::Arc;
 
+mod flusher_join_failure;
+pub use flusher_join_failure::FlusherJoinFailure;
+
 /// Results of the appender's shutdown stage, in step order.
 ///
 /// Deliberately not `#[must_use]`: boot-rollback and test callers that do
 /// not own a shutdown report keep discarding it exactly as before.
 #[derive(Clone, Debug, Default)]
 pub struct AuditShutdownOutcome {
-    /// The background flusher task could not be joined cleanly: it panicked,
-    /// was cancelled, or ended by reporting a failed blocking job (a panic
-    /// after it had taken the buffer — those entries are lost and the appender
-    /// is latched fail-closed).
-    pub flusher_join_error: Option<String>,
+    /// The background flusher join failure: either its completed task reported
+    /// an inner blocking-job failure (blocking work ended), or the outer task
+    /// was lost to panic/cancellation (blocking work may still be running).
+    pub flusher_join_error: Option<FlusherJoinFailure>,
     /// The final drain or its log sync failed. The appender is latched
     /// fail-closed either way.
     pub flush_error: Option<String>,
@@ -80,9 +82,9 @@ impl FjallAuditAppender {
     /// flusher parked on the persistence gate is bounded by the caller's
     /// deadline rather than by the gate holder's I/O.
     ///
-    /// Returns `Err` for both failure shapes: the task itself did not join
-    /// (panic/cancel) and the task ended by reporting a failed blocking job.
-    pub async fn join_flusher(&self) -> Result<(), String> {
+    /// Distinguishes an inner blocking-job failure reported by a completed
+    /// task from an outer task that was lost to panic or cancellation.
+    pub async fn join_flusher(&self) -> Result<(), FlusherJoinFailure> {
         let handle = match &self.mode {
             Durab::Batched { task, .. } => task.lock().take(),
             Durab::Strict => None,
@@ -92,11 +94,8 @@ impl FjallAuditAppender {
         };
         match handle.await {
             Ok(Ok(())) => Ok(()),
-            // The flusher ended by reporting a failed blocking job (a panic
-            // after it had taken the buffer). Its buffered entries are gone and
-            // the appender is latched fail-closed, so the caller must see it.
-            Ok(Err(message)) => Err(message),
-            Err(error) => Err(error.to_string()),
+            Ok(Err(message)) => Err(FlusherJoinFailure::InnerBlockingJobFailed(message)),
+            Err(error) => Err(FlusherJoinFailure::TaskLost(error.to_string())),
         }
     }
 

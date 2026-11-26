@@ -2,13 +2,14 @@
 //! manuals (design `admin-shell.md` §4.10).
 //!
 //! `backup-verify`, `backup`, `restore` and `doctor` are declared INLINE in
-//! the binary (`src/main.rs`) instead of as reusable `clap::Args` structs,
-//! so the shell's integration test (`tests/admin/shell/maintenance/explain.rs`)
-//! — a separate crate — can neither name `Subcmd` nor instantiate a variant.
-//! This module is a `#[path]` child of the binary crate root, i.e. the one
-//! scope that can see the real parser, so each manual's tokens go through
-//! `Cli::try_parse_from` and the resulting variant's FIELDS are matched and
-//! compared:
+//! `src/engine/server/bootstrap_mode.rs` (re-exported as
+//! `shamir_server::server::{Cli, Subcmd}`) instead of as reusable `clap::Args`
+//! structs, so the shell's integration test
+//! (`tests/admin/shell/maintenance/explain/explain.rs`) — a separate crate —
+//! does not parse them; it pins the printed lines. This module is a `#[cfg(test)]`
+//! module of the LIBRARY target, selected by CI's `--lib` runs, so each
+//! manual's tokens go through `Cli::try_parse_from` and the resulting
+//! variant's FIELDS are matched and compared:
 //!
 //! ```text
 //! shamir-server backup-verify SNAPSHOT
@@ -18,7 +19,8 @@
 //!     --apply --pretty --json
 //! ```
 //!
-//! What this kills that a text scan of `src/main.rs` could not:
+//! What this kills that a text scan of `src/engine/server/bootstrap_mode.rs`
+//! could not:
 //!
 //! * a renamed long flag — `#[arg(long = "database")] db: Option<String>`
 //!   leaves the field declaration intact, so a declaration search passes
@@ -36,7 +38,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
-use crate::{Cli, Subcmd};
+use crate::server::{Cli, Subcmd};
 
 /// `shamir-server backup-verify SNAPSHOT` — the positional snapshot path.
 ///

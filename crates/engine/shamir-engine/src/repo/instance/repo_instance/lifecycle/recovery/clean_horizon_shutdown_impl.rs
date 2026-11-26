@@ -20,29 +20,73 @@ impl RepoInstance {
     }
 
     async fn shutdown_clean_inner(&self, budget: std::time::Duration) -> DbResult<()> {
+        let result = Box::pin(self.shutdown_clean_window(budget)).await;
+        // The cold-open close latch spans THIS shutdown window only: the
+        // repository stays usable after a flush (embedders and tests flush
+        // mid-life), so the latch is lifted when the window ends. A future
+        // dropped mid-window never gets here and leaves the latch closed.
+        self.core.cold_opens.reopen();
+        result
+    }
+
+    async fn shutdown_clean_window(&self, budget: std::time::Duration) -> DbResult<()> {
         let deadline = tokio::time::Instant::now() + budget;
         let lifecycle = self.worker_lifecycle();
         if let Some(lifecycle) = lifecycle {
             lifecycle.close();
         }
+        // Close cold-open admission at shutdown ENTRY (not after the
+        // lifecycle drain): a lifecycle failure or timeout must not leave
+        // cold opens unrefused and undrained. Fresh opens are refused with a
+        // typed error before their first side effect; opens already
+        // registered (inline or handed off) are drained below on EVERY path.
+        self.core.cold_opens.close();
 
-        let result = tokio::time::timeout_at(deadline, async {
-            if let Some(lifecycle) = lifecycle {
-                match Box::pin(timed_stage(
-                    &self.name,
-                    "lifecycle_drain",
-                    lifecycle.shutdown_until(deadline),
-                ))
-                .await
-                {
-                    Ok(WorkerTerminal::Completed) => {}
-                    Ok(WorkerTerminal::Failed(msg)) => {
-                        return Err(DbError::Storage(format!("worker failed: {msg}")));
-                    }
-                    Err(_) => return Err(DbError::Storage("worker shutdown timed out".into())),
+        // Lifecycle drain first. Its failure is remembered as the ORIGINAL
+        // failure; the cold-open drain below still runs, because the handoff
+        // may already have submitted a blocking store open that only the
+        // drain settles.
+        let mut original_failure: Option<DbError> = None;
+        if let Some(lifecycle) = lifecycle {
+            match Box::pin(timed_stage(
+                &self.name,
+                "lifecycle_drain",
+                lifecycle.shutdown_until(deadline),
+            ))
+            .await
+            {
+                Ok(WorkerTerminal::Completed) => {}
+                Ok(WorkerTerminal::Failed(msg)) => {
+                    original_failure = Some(DbError::Storage(format!("worker failed: {msg}")));
+                }
+                Err(_) => {
+                    original_failure = Some(DbError::Storage("worker shutdown timed out".into()))
                 }
             }
+        }
 
+        // Cold opens handed off by dropped callers run outside the
+        // lifecycle worker; drain them BEFORE commit quiescence, so a
+        // recovery still mutating storage cannot race the flush. Attempted
+        // on EVERY path (also after a lifecycle failure) — but it never
+        // masks the original failure.
+        let cold_open_drained = Box::pin(timed_stage(
+            &self.name,
+            "cold_open_drain",
+            self.core.cold_opens.drain(deadline),
+        ))
+        .await;
+        if !cold_open_drained && original_failure.is_none() {
+            original_failure = Some(DbError::Storage("cold open drain timed out".into()));
+        }
+        if let Some(err) = original_failure {
+            if let Some(lifecycle) = lifecycle {
+                lifecycle.quarantine("clean shutdown failed".to_string());
+            }
+            return Err(err);
+        }
+
+        let result = tokio::time::timeout_at(deadline, async {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             match tokio::time::timeout_at(
                 deadline,

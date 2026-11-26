@@ -20,6 +20,10 @@ use crate::shell::terminal::{self, SecretSource};
 pub(super) struct Session {
     pub(super) auth: AuthKind,
     pub(super) live: Option<(Profile, SessionClient)>,
+    /// The database of the export job THIS session started (interactive
+    /// `export online start`): the envelope database of its later
+    /// `export online status` / `cancel` (`jobs.rs::status_envelope`).
+    pub(super) job_database: Option<String>,
 }
 
 /// Injectable environment behind [`super::run_scripted`]: injected input,
@@ -87,7 +91,11 @@ pub(super) fn with_session<'a>(
 ) -> Result<(&'a Profile, &'a SessionClient), ShellError> {
     if session.is_none() {
         let auth = shell.auth;
-        *session = Some(Session { auth, live: None });
+        *session = Some(Session {
+            auth,
+            live: None,
+            job_database: None,
+        });
         let live = establish_profile(
             shell,
             mode,
@@ -100,6 +108,7 @@ pub(super) fn with_session<'a>(
         *session = Some(Session {
             auth,
             live: Some(live),
+            job_database: None,
         });
     }
     let (profile, client) = session

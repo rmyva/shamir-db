@@ -82,6 +82,59 @@ fn duplicate_discriminator_last_value_wins() {
 }
 
 #[test]
+fn missing_op_kind_is_rejected() {
+    let error = serde_json::from_str::<BatchOp>("{}").unwrap_err();
+    assert!(error.to_string().contains("Unknown operation type"));
+}
+
+/// Nested operations are buffered into `QueryValue::Map`, whose repeated keys
+/// collapse by insertion; preserve the established last-value-wins behavior.
+#[test]
+fn nested_duplicate_discriminator_last_value_wins() {
+    let input = r#"{
+        "batch": {
+            "id": null,
+            "queries": {
+                "nested_read": {
+                    "from": "first",
+                    "from": "last"
+                }
+            }
+        }
+    }"#;
+    match serde_json::from_str::<BatchOp>(input).unwrap() {
+        BatchOp::Batch(op) => match &op.batch.queries["nested_read"].op {
+            BatchOp::Read(read) => assert_eq!(read.from.table, "last"),
+            other => panic!("unexpected nested operation: {other:?}"),
+        },
+        other => panic!("unexpected operation: {other:?}"),
+    }
+}
+
+/// Nested repeated cancel discriminators collapse the same way before the typed wire struct.
+#[test]
+fn nested_duplicate_cancel_discriminator_last_value_wins() {
+    let input = r#"{
+        "batch": {
+            "id": null,
+            "queries": {
+                "nested_cancel": {
+                    "cancel_tx": 7,
+                    "cancel_tx": 8
+                }
+            }
+        }
+    }"#;
+    match serde_json::from_str::<BatchOp>(input).unwrap() {
+        BatchOp::Batch(op) => match &op.batch.queries["nested_cancel"].op {
+            BatchOp::CancelTx(handle) => assert_eq!(*handle, 8),
+            other => panic!("unexpected nested operation: {other:?}"),
+        },
+        other => panic!("unexpected operation: {other:?}"),
+    }
+}
+
+#[test]
 fn ambiguous_discriminator_error_is_preserved() {
     let op = mpack!({
         "from": "users",

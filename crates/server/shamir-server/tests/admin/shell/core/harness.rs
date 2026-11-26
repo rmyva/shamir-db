@@ -11,7 +11,7 @@
 use std::net::SocketAddr;
 use std::path::Path;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
 use zeroize::Zeroizing;
@@ -163,13 +163,24 @@ impl ShellFixture {
         hex::encode(self.pin)
     }
 
-    pub fn shutdown_with_timeout(&mut self, timeout: Duration) {
+    /// Shut down the server under an absolute deadline. The job's own timeout is
+    /// recomputed from the deadline when the job runs and an overrun PANICS the
+    /// job (it is never discarded as a success); the caller-side bound carries a
+    /// slack so that panic is the one reported. Callers on Drop paths must catch
+    /// the resulting caller panic.
+    pub fn shutdown_with_deadline(&mut self, deadline: Instant) {
         if let Some(server) = self.server.take() {
-            self.rt.run(async move {
-                let _ = tokio::time::timeout(timeout, server.shutdown())
-                    .await
-                    .expect("server shutdown deadline");
-            });
+            let cap = deadline.saturating_duration_since(Instant::now());
+            self.rt
+                .run_timeout(cap + super::runtime::DEADLINE_SLACK, async move {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if tokio::time::timeout(remaining, server.shutdown())
+                        .await
+                        .is_err()
+                    {
+                        panic!("fixture server shutdown exceeded the common deadline");
+                    }
+                });
         }
     }
 }
@@ -194,7 +205,54 @@ pub fn boot(name: &str) -> ShellFixture {
     boot_with(name, false, Default::default(), |_| {}, |_| None).0
 }
 
-/// Boot the same fixture on a READ-ONLY node (a follower).
+/// Boot with a data directory and export root as sibling directories inside
+/// the fixture TempDir. ExportRoot creates the private `export-root` leaf.
+pub fn boot_export(name: &str) -> ShellFixture {
+    boot_with(
+        name,
+        false,
+        Default::default(),
+        |config| {
+            let fixture_dir = config.data_dir.clone();
+            let data_dir = fixture_dir.join("data");
+            std::fs::create_dir_all(&data_dir).expect("create nested fixture data dir");
+            config.data_dir = data_dir;
+            config.security.export_root = Some(fixture_dir.join("export-root"));
+        },
+        |_| None,
+    )
+    .0
+}
+
+/// Boot with an enabled scheduled backup. The data directory and the
+/// existing private `scheduled-backups` destination are sibling directories
+/// inside the fixture TempDir. A one-hour interval avoids a scheduler run
+/// during this projection-only probe.
+pub fn boot_scheduled_backup(name: &str) -> ShellFixture {
+    boot_with(
+        name,
+        false,
+        Default::default(),
+        |config| {
+            let fixture_dir = config.data_dir.clone();
+            let data_dir = fixture_dir.join("data");
+            std::fs::create_dir_all(&data_dir).expect("create nested fixture data dir");
+            let destination = fixture_dir.join("scheduled-backups");
+            create_private_dir(&destination).expect("create private scheduled-backup destination");
+            config.data_dir = data_dir;
+            config.backup = Some(shamir_server::config::BackupScheduleConfig {
+                destination,
+                interval: "1h".into(),
+                window: None,
+                run_on_start: false,
+                retention: Default::default(),
+            });
+        },
+        |_| None,
+    )
+    .0
+}
+
 pub fn boot_follower(name: &str) -> ShellFixture {
     boot_with(name, false, NodeMode::ReadOnly, |_| {}, |_| None).0
 }

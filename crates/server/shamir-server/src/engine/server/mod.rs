@@ -19,7 +19,7 @@ mod server_launcher;
 mod store_release_barrier;
 
 pub use boot_error::BootError;
-pub use bootstrap_mode::BootstrapMode;
+pub use bootstrap_mode::{BootstrapMode, Cli, Subcmd};
 #[cfg(test)]
 pub(crate) use server_handle::drain_connections;
 #[cfg(test)]
@@ -32,5 +32,6 @@ pub(crate) use store_release_barrier::open_lock_is_discovery_gap;
 pub(crate) use store_release_barrier::wait_stores_released;
 #[cfg(test)]
 pub(crate) use store_release_barrier::{
-    bounded_probe_for_test, release_stores, ReleaseOutcome, UnverifiedReason,
+    bounded_probe_for_test, install_re_probe_gate, release_stores, ReleaseOutcome,
+    UnverifiedReason, RE_PROBE_SUBMITS,
 };

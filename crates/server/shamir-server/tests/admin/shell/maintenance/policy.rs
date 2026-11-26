@@ -1,10 +1,12 @@
 //! Pins discoverability: `shell --help` must advertise every command family
-//! this release ships, including the explained-only ones and the refused
-//! `backup schedule show`. The help text is a fixed literal, never argv — so
-//! this test spawns the real binary and only reads stderr, never echoes it.
+//! this release ships, including the explained-only ones, the working
+//! `backup schedule show` and the online-export family (whose `status` and
+//! `cancel` are interactive only). The help text is a fixed literal, never
+//! argv — so this test spawns the real binary and only reads stderr, never
+//! echoes it.
 
 /// The literals the fixed help text must carry, one per command family.
-const REQUIRED: [&str; 15] = [
+const REQUIRED: [&str; 18] = [
     "backup start --to DIR",
     "backup status",
     "backup cancel",
@@ -15,6 +17,9 @@ const REQUIRED: [&str; 15] = [
     "version stamp",
     "version migrate",
     "schema-migration status --database-id ID",
+    "export online start DATABASE [--repo R] [--table T] [--schema-only] [--include-artifacts] [--yes]",
+    "export online status (interactive only)",
+    "export online cancel [--yes] (interactive only)",
     "export logical",
     "import logical",
     "diag wal",

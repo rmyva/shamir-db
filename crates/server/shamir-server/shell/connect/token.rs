@@ -12,8 +12,8 @@ use std::time::Duration;
 use rustix::fs::{open, Mode, OFlags};
 use serde_json::Value;
 use shamir_client::{
-    ApiToken, Client, ClientError, TokenEndpoint, TokenHttpClient, TokenHttpOptions, TokenTrust,
-    TokenWsOptions,
+    ApiToken, Client, ClientError, ExportCancelReceipt, ExportStartReceipt, ExportStatusReceipt,
+    TokenEndpoint, TokenHttpClient, TokenHttpOptions, TokenTrust, TokenWsOptions,
 };
 use shamir_query_types::admin::activity::{
     ActivityPage, CancelOutcome, ListActivityReq, RequestExecId,
@@ -208,8 +208,38 @@ impl SessionClient {
         }
     }
 
-    /// Change mode bits on one securable resource (admin-shell R5 PR4;
-    /// design §4.3). SCRAM sessions only: §3.3 puts the rights commands
+    pub(in crate::shell) async fn start_export(
+        &self,
+        db: &str,
+        op: shamir_query_builder::ddl::migration::StartExport,
+    ) -> Result<ExportStartReceipt, ShellError> {
+        match self {
+            Self::Scram(client) => client.start_export(db, op).await.map_err(request_error),
+            Self::TokenWs(_) | Self::TokenRest(_) => Err(ShellError::TokenRequestDenied),
+        }
+    }
+
+    pub(in crate::shell) async fn export_status(
+        &self,
+        db: &str,
+    ) -> Result<ExportStatusReceipt, ShellError> {
+        match self {
+            Self::Scram(client) => client.export_status(db).await.map_err(request_error),
+            Self::TokenWs(_) | Self::TokenRest(_) => Err(ShellError::TokenRequestDenied),
+        }
+    }
+
+    pub(in crate::shell) async fn cancel_export(
+        &self,
+        db: &str,
+    ) -> Result<ExportCancelReceipt, ShellError> {
+        match self {
+            Self::Scram(client) => client.cancel_export(db).await.map_err(request_error),
+            Self::TokenWs(_) | Self::TokenRest(_) => Err(ShellError::TokenRequestDenied),
+        }
+    }
+
+    /// Change mode bits on a securable resource (admin-shell R5 PR4; design §4.3).
     /// OUTSIDE the token read-only subset, so a token session is refused
     /// HERE with the fixed typed denial BEFORE any request is sent (zero
     /// requests policy; the parser gates it too, and the server perimeter

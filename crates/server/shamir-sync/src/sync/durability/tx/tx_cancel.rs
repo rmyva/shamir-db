@@ -20,7 +20,7 @@ pub enum TxParkedState {
     Open(Arc<InteractiveTx>),
     /// The commit pipeline owns the handle: `begin_commit` reserved it and
     /// only its `TxCommitGuard` finishes the teardown.
-    Committing,
+    Committing(Arc<InteractiveTx>),
     /// No such handle (never minted, already removed, or replaced by a
     /// different transaction this call did not authorize).
     Gone,
@@ -34,7 +34,7 @@ impl TxRegistry {
         match self.open.get(&handle) {
             Some(entry) => match &*entry {
                 Parked::Open(tx) => TxParkedState::Open(Arc::clone(tx)),
-                Parked::Committing => TxParkedState::Committing,
+                Parked::Committing(tx) => TxParkedState::Committing(Arc::clone(tx)),
             },
             None => TxParkedState::Gone,
         }
@@ -53,7 +53,10 @@ impl TxRegistry {
                     TxParkedState::Open(self.teardown_open(slot, handle))
                 }
                 Parked::Open(_) => TxParkedState::Gone,
-                Parked::Committing => TxParkedState::Committing,
+                Parked::Committing(tx) if Arc::ptr_eq(tx, expected) => {
+                    TxParkedState::Committing(Arc::clone(tx))
+                }
+                Parked::Committing(_) => TxParkedState::Gone,
             },
             Entry::Vacant(_) => TxParkedState::Gone,
         }

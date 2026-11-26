@@ -18,8 +18,9 @@ use tokio::net::TcpStream;
 use tokio_util::sync::CancellationToken;
 
 use crate::observability::{
-    metrics_handler, spawn_with_byte_budget, AppState, CancelOnDrop, ObservabilityHandle,
-    ObservabilityShutdownOutcome, ObservabilityState, OBS_TASK_JOIN_TIMEOUT,
+    metrics_handler, spawn_with_byte_budget, spawn_with_prom_handle_for_tests, AppState,
+    CancelOnDrop, ObservabilityHandle, ObservabilityShutdownOutcome, ObservabilityState,
+    OBS_TASK_JOIN_TIMEOUT,
 };
 
 /// Bounded await for a shutdown that has nothing left to drain. Real time, no
@@ -305,4 +306,246 @@ async fn pre_cancelled_metrics_handler_answers_503_without_sampling_the_database
         .await
         .expect("metrics body");
     assert_eq!(&body[..], b"not ready\n");
+}
+
+/// Maximum time to rendezvous with a parked handler or the poller's first tick.
+const PARK_BOUND: Duration = Duration::from_secs(60);
+
+/// Whole-test bound for lifecycle regression tests.
+const TEST_BOUND: Duration = Duration::from_secs(180);
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelled_while_parked_metrics_sample_answers_503_without_releasing_the_park() {
+    tokio::time::timeout(TEST_BOUND, async {
+        let dir = TempDir::new().expect("tempdir");
+        let db = ShamirDb::init(SystemStoreConfig::Fjall(dir.path().join("system")))
+            .await
+            .expect("init db");
+        let state = ObservabilityState::new();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let release = state.arm_metrics_park(entered_tx);
+        let token = CancellationToken::new();
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let app_state = AppState {
+            state,
+            prom: Some(recorder.handle()),
+            db: Some(Arc::new(db)),
+            byte_budget: None,
+            shutdown: token.clone(),
+        };
+        let handler = tokio::spawn(metrics_handler(State(app_state)));
+        tokio::time::timeout(PARK_BOUND, entered_rx)
+            .await
+            .expect("handler must enter the parked sample")
+            .expect("park entry signal");
+
+        token.cancel();
+        let response = tokio::time::timeout(SHUTDOWN_BOUND, handler)
+            .await
+            .expect("cancellation must interrupt the parked sample")
+            .expect("handler task");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = to_bytes(response.into_body(), 64)
+            .await
+            .expect("metrics body");
+        assert_eq!(&body[..], b"not ready\n");
+        assert!(
+            release.is_closed(),
+            "cancellation must drop parked receiver without release"
+        );
+        // The handler future has completed; dropping this sender is the release-on-drop guard.
+        drop(release);
+
+    })
+    .await
+    .expect("cancelled_while_parked_metrics_sample_answers_503_without_releasing_the_park must finish inside TEST_BOUND");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn released_park_lets_metrics_handler_answer_200() {
+    tokio::time::timeout(TEST_BOUND, async {
+        let dir = TempDir::new().expect("tempdir");
+        let db = ShamirDb::init(SystemStoreConfig::Fjall(dir.path().join("system")))
+            .await
+            .expect("init db");
+        let state = ObservabilityState::new();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let release = state.arm_metrics_park(entered_tx);
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let app_state = AppState {
+            state,
+            prom: Some(recorder.handle()),
+            db: Some(Arc::new(db)),
+            byte_budget: None,
+            shutdown: CancellationToken::new(),
+        };
+        let handler = tokio::spawn(metrics_handler(State(app_state)));
+        tokio::time::timeout(PARK_BOUND, entered_rx)
+            .await
+            .expect("handler must enter the parked sample")
+            .expect("park entry signal");
+        let _ = release.send(());
+        let response = tokio::time::timeout(SHUTDOWN_BOUND, handler)
+            .await
+            .expect("released handler must finish")
+            .expect("handler task");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("metrics body");
+        assert!(!body.is_empty());
+    })
+    .await
+    .expect("released_park_lets_metrics_handler_answer_200 must finish inside TEST_BOUND");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelled_while_parked_poller_tick_joins_without_releasing_the_park() {
+    tokio::time::timeout(TEST_BOUND, async {
+        let dir = TempDir::new().expect("tempdir");
+        let db = ShamirDb::init(SystemStoreConfig::Fjall(dir.path().join("system")))
+            .await
+            .expect("init db");
+        let state = ObservabilityState::new();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release, _finished) = state.arm_poller_park(entered_tx);
+        let handle = spawn_with_byte_budget(
+            "127.0.0.1:0".parse().expect("addr"),
+            state,
+            false,
+            None,
+            None,
+            Some(Arc::new(db)),
+            false,
+        )
+        .await
+        .expect("spawn observability");
+        tokio::time::timeout(PARK_BOUND, entered_rx)
+            .await
+            .expect("poller must enter its parked tick")
+            .expect("park entry signal");
+
+        handle.cancel();
+        let outcome = tokio::time::timeout(SHUTDOWN_BOUND, handle.shutdown())
+            .await
+            .expect("cancelled parked poller must join");
+        assert!(outcome.poller_joined, "poller must join: {outcome:?}");
+        assert!(outcome.listener_joined, "listener must join: {outcome:?}");
+        assert!(
+            release.is_closed(),
+            "cancellation must drop parked receiver without release"
+        );
+        // The parked future was dropped with the task; dropping this sender is the release-on-drop guard.
+        drop(release);
+
+    })
+    .await
+    .expect("cancelled_while_parked_poller_tick_joins_without_releasing_the_park must finish inside TEST_BOUND");
+}
+
+/// Positive control of the cancellation race: a released tick runs to the END
+/// of its body before the token is cancelled, so a tick that is dropped by the
+/// token, returns early or panics never fires the completion handshake and the
+/// test times out. NOT covered: deleting or replacing `db.degraded_index_count()
+/// .await` or the `shamir_degraded_indexes_total` gauge writes, because the
+/// handshake is sent regardless of their results (the process-global metrics
+/// facade exposes no read of its installed recorder, and a local builder handle
+/// renders only what it recorded).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn released_park_lets_the_poller_tick_complete() {
+    tokio::time::timeout(TEST_BOUND, async {
+        let dir = TempDir::new().expect("tempdir");
+        let db = ShamirDb::init(SystemStoreConfig::Fjall(dir.path().join("system")))
+            .await
+            .expect("init db");
+        let state = ObservabilityState::new();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release, finished) = state.arm_poller_park(entered_tx);
+        let handle = spawn_with_byte_budget(
+            "127.0.0.1:0".parse().expect("addr"),
+            state,
+            false,
+            None,
+            None,
+            Some(Arc::new(db)),
+            false,
+        )
+        .await
+        .expect("spawn observability");
+        tokio::time::timeout(PARK_BOUND, entered_rx)
+            .await
+            .expect("poller must enter its parked tick")
+            .expect("park entry signal");
+
+        let _ = release.send(());
+        // Completion fires only after the whole tick, including the database await
+        // and gauge write. Await before cancellation so the biased select cannot drop it.
+        tokio::time::timeout(PARK_BOUND, finished)
+            .await
+            .expect("the released tick must run to its last statement")
+            .expect("tick-finished signal");
+        let outcome = tokio::time::timeout(SHUTDOWN_BOUND, handle.shutdown())
+            .await
+            .expect("completed tick must join");
+        assert!(outcome.poller_joined, "poller must join: {outcome:?}");
+    })
+    .await
+    .expect("released_park_lets_the_poller_tick_complete must finish inside TEST_BOUND");
+}
+
+/// Wiring the live router to a token other than the handle's leaves the parked
+/// request unanswered, so the response read times out. Driving `axum::serve`
+/// with another token does NOT stop the handler's own answer: that mutation is
+/// caught by the `listener_joined` assertion, not by the socket. The exact body
+/// is compared after the header separator. The socket observes the real route,
+/// but parking remains before the real `ShamirDb` await (the same limitation as
+/// the direct-handler test).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelled_while_parked_live_metrics_route_answers_503_through_the_handle() {
+    tokio::time::timeout(TEST_BOUND, async {
+        let dir = TempDir::new().expect("tempdir");
+        let db = ShamirDb::init(SystemStoreConfig::Fjall(dir.path().join("system")))
+            .await
+            .expect("init db");
+        let state = ObservabilityState::new();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let release = state.arm_metrics_park(entered_tx);
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = spawn_with_prom_handle_for_tests(
+            "127.0.0.1:0".parse().expect("addr"),
+            state,
+            Some(recorder.handle()),
+            None,
+            Some(Arc::new(db)),
+        )
+        .await
+        .expect("spawn observability with pre-built recorder");
+        let mut conn = TcpStream::connect(handle.bound_addr).await.expect("connect");
+        conn.write_all(b"GET /metrics HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+            .await
+            .expect("write request");
+        tokio::time::timeout(PARK_BOUND, entered_rx)
+            .await
+            .expect("the live /metrics route must enter the parked sample")
+            .expect("park entry signal");
+        handle.cancel();
+        let mut response = Vec::new();
+        tokio::time::timeout(SHUTDOWN_BOUND, conn.read_to_end(&mut response))
+            .await
+            .expect("cancelled live route must answer")
+            .expect("read response");
+        let text = String::from_utf8_lossy(&response);
+        assert!(text.starts_with("HTTP/1.1 503"), "observed prefix: {:?}", text.get(..32));
+        let body = text.split_once("\r\n\r\n").map(|(_, body)| body);
+        assert_eq!(body, Some("not ready\n"), "observed response: {text:?}");
+        assert!(release.is_closed(), "cancel must drop parked receiver without release");
+        drop(release);
+        let outcome = tokio::time::timeout(SHUTDOWN_BOUND, handle.shutdown())
+            .await
+            .expect("cancelled live server must join");
+        assert!(outcome.listener_joined, "listener must join: {outcome:?}");
+        assert!(outcome.poller_joined, "idle poller must join: {outcome:?}");
+    })
+    .await
+    .expect("cancelled_while_parked_live_metrics_route_answers_503_through_the_handle must finish inside TEST_BOUND");
 }

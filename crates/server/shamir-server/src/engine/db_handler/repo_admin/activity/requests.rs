@@ -13,8 +13,9 @@
 //! [`HashIndex::iter`]`(&scc::Guard)` and [`HashIndex::peek_with`] —
 //! epoch-based, lock-free reader paths. The WRITERS (`insert_sync`,
 //! `remove_sync`) do take brief internal bucket locks, but they are used
-//! only on the registration/deregistration path (one insert + one removal
-//! per batch, the whole hot-path cost); readers never block on them —
+//! only on the registration/deregistration path (one checked id mint, one
+//! insert and one identity-checked removal per batch, the whole hot-path
+//! cost); readers never block on them —
 //! `HashMap::iter_sync` / `DashMap::iter` were rejected because they take
 //! locks a reader would contend on.
 //!
@@ -201,9 +202,18 @@ impl ActivityRequests {
     ) -> InFlightRequest {
         let entry = Arc::new(entry);
         self.in_flight.fetch_add(1, Ordering::Relaxed);
-        // Cannot collide: `id` is minted fresh from the handler-local
-        // `AtomicU64` for every admitted batch.
-        let _ = self.index.insert_sync(entry.id.0, Arc::clone(&entry));
+        // Collision-safe: the mirror is incremented first, then rolled
+        // back if the insert loses a key race (impossible with the
+        // disjoint CHECKED mint in `export_activity`, but enforced here so
+        // a failed insert can never leave the gauge counting a row that
+        // does not exist).
+        if self
+            .index
+            .insert_sync(entry.id.0, Arc::clone(&entry))
+            .is_err()
+        {
+            self.in_flight.fetch_sub(1, Ordering::Relaxed);
+        }
         InFlightRequest {
             table: Arc::clone(self),
             entry,
@@ -291,11 +301,19 @@ impl Drop for InFlightRequest {
     fn drop(&mut self) {
         // Preserve the winner of the cancel/completion race.
         self.finish();
-        // 2. Remove exactly once — the guard uniquely owns the key.
-        let removed = self.table.index.remove_sync(&self.entry.id.0);
-        // 3. Decrement the mirror once, only for a real removal — keeps
-        //    the mirror in exact agreement with the live entry count.
-        if removed {
+        // 2. Removal tied to ENTRY IDENTITY: only OUR row leaves, and only
+        //    then the mirror decrements. A foreign row under the same key
+        //    (impossible with the disjoint checked mint, enforced for
+        //    defence in depth) is never removed — either guard could
+        //    otherwise remove the other's row by key alone.
+        let ours = self
+            .table
+            .index
+            .peek_with(&self.entry.id.0, |_, v| Arc::ptr_eq(v, &self.entry))
+            == Some(true);
+        if ours && self.table.index.remove_sync(&self.entry.id.0) {
+            // 3. Decrement the mirror once, only for a real removal — keeps
+            //    the mirror in exact agreement with the live entry count.
             self.table.in_flight.fetch_sub(1, Ordering::Relaxed);
         }
     }
@@ -305,8 +323,8 @@ impl crate::db_handler::ShamirDbHandler {
     /// R4b-1 — register one admitted unit of work in the in-flight
     /// activity table and return the RAII guard that owns the entry AND
     /// the per-session in-flight request slot (released on drop, every
-    /// exit path). ONE insert + ONE removal per admission (the whole
-    /// hot-path cost); the minted [`RequestExecId`] and the carried
+    /// exit path). One checked id mint, ONE insert and ONE identity-checked
+    /// removal per admission (the whole hot-path cost); the minted [`RequestExecId`] and the carried
     /// client `rid` are read off the returned guard
     /// ([`InFlightRequest::id`], [`InFlightRequest::client_rid`]). Shared
     /// by the batch execute path and the interactive-tx open/execute
@@ -351,7 +369,7 @@ impl crate::db_handler::ShamirDbHandler {
                     .ok_or(())?,
             )
         };
-        let exec_id = RequestExecId(self.next_request_exec_id());
+        let exec_id = RequestExecId(self.next_request_exec_id().ok_or(())?);
         let mut entry = RequestEntry::new(exec_id, session, db.to_string(), op_kind, client_rid);
         entry.cancellable = cancellable;
         Ok(Arc::clone(&self.activity_requests).register_with_slot(entry, slot))

@@ -25,7 +25,7 @@ use super::{backup_metrics, RunRecord};
 /// the guard re-publishes nothing. A panic in the published window (the
 /// `outcome` sender is already taken) accounts ONE retention failure for a
 /// scheduled run, never a second copy counter.
-pub(in crate::boot::config::diagnostics::backup_online) struct RunGuard {
+pub(super) struct RunGuard {
     record: Arc<Mutex<RunRecord>>,
     /// The run's live stage hint, read at unwind time (before the permit
     /// drops, the adapter's port-call hints are still consistent).
@@ -41,9 +41,9 @@ pub(in crate::boot::config::diagnostics::backup_online) struct RunGuard {
     /// directory the protocol verified and kept. No filesystem probing
     /// at unwind time: an unrelated `manifest.json` under the operator
     /// root must never be mistaken for a completed run.
-    pub(in crate::boot::config::diagnostics::backup_online) completed_dir: Option<PathBuf>,
+    pub(super) completed_dir: Option<PathBuf>,
     started_at: Instant,
-    pub(in crate::boot::config::diagnostics::backup_online) armed: bool,
+    pub(super) armed: bool,
     /// Whether the body already accounted the COPY outcome (`note_finished`):
     /// an explicit flag, because a MANUAL run has no sender at all and
     /// `outcome.is_none()` could not tell "published" from "never published".
@@ -57,7 +57,7 @@ pub(in crate::boot::config::diagnostics::backup_online) struct RunGuard {
 }
 
 impl RunGuard {
-    pub(in crate::boot::config::diagnostics::backup_online) fn new(
+    pub(super) fn new(
         record: Arc<Mutex<RunRecord>>,
         run_state: Arc<PortRunState>,
         started_at_unix_ns: u128,
@@ -83,10 +83,7 @@ impl RunGuard {
 
     /// Publish the COPY outcome at protocol completion; does NOT disarm (the
     /// guard must stay live across retention so a later panic still records).
-    pub(in crate::boot::config::diagnostics::backup_online) fn publish_outcome(
-        &mut self,
-        verified: bool,
-    ) {
+    pub(super) fn publish_outcome(&mut self, verified: bool) {
         // The accounting is done for EVERY run here; only a scheduled one has a sender.
         self.copy_accounted = true;
         if let Some(outcome) = self.outcome.take() {
@@ -103,7 +100,7 @@ impl RunGuard {
 
     /// Disarm after the final record publication (`running = false`) and send
     /// the late FINISHED signal; the run is fully over.
-    pub(in crate::boot::config::diagnostics::backup_online) fn disarm(&mut self) {
+    pub(super) fn disarm(&mut self) {
         self.armed = false;
         self.send_finished();
     }

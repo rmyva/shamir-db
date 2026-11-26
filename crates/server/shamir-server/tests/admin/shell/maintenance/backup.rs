@@ -140,8 +140,166 @@ fn destination(dir: &TempDir) -> String {
 
 // ── Tests ────────────────────────────────────────────────────────────
 
+#[test]
+fn backup_status_scheduled_fixture_projects_the_legacy_key_set() {
+    // (a) The EXACT frozen 16-field key list of the legacy `backup status`
+    // projection, on a scheduled AND an unscheduled node; (b) the server's
+    // optional `schedule` key must be ABSENT from the output; (c) the
+    // schedule-independent fields must be EQUAL after normalising ONLY the
+    // two per-fixture fields, each normalisation named at its site below.
+    // Nothing here is compared byte-for-byte: payloads are parsed JSON.
+    const LEGACY_KEYS: [&str; 16] = [
+        "backup_id",
+        "destination",
+        "dest_dir",
+        "started_at_unix_ns",
+        "running",
+        "cancel_requested",
+        "stage",
+        "failed",
+        "failed_stage",
+        "excluded_repos",
+        "repos_in_snapshot",
+        "repos_created_during",
+        "repos",
+        "progress_stage",
+        "progress_started_at_unix_ns",
+        "current_run_note",
+    ];
+
+    fn normalized_status(fixture: &ShellFixture, name: &str) -> serde_json::Map<String, Value> {
+        let data = result(
+            fixture,
+            &["--", "backup", "status"],
+            "backup status",
+            "BackupStatus",
+        );
+        let mut object = data
+            .as_object()
+            .expect("backup status payload object")
+            .clone();
+        let keys: std::collections::BTreeSet<&str> = object.keys().map(String::as_str).collect();
+        let expected: std::collections::BTreeSet<&str> = LEGACY_KEYS.into_iter().collect();
+        assert_eq!(keys, expected, "{name}: legacy key set changed");
+        assert!(
+            !object.contains_key("schedule"),
+            "{name}: the internal schedule key must not be projected"
+        );
+        // Normalisation 1: `destination` is the fixture's own data directory
+        // (the registry seeds it from `data_dir`) — a per-fixture path.
+        object.insert(
+            "destination".into(),
+            Value::String(String::from("<fixture-destination>")),
+        );
+        // Normalisation 2: `progress_started_at_unix_ns` is the wall-clock
+        // timestamp `BackupProgress::new()` mints for the fixture's registry
+        // record — per-fixture by construction.
+        object.insert(
+            "progress_started_at_unix_ns".into(),
+            Value::String(String::from("<fixture-progress-start>")),
+        );
+        object
+    }
+
+    let scheduled = super::harness::boot_scheduled_backup(
+        "backup_status_scheduled_fixture_projects_the_legacy_key_set",
+    );
+    seed_catalogue(&scheduled);
+    use_admin_profile(&scheduled);
+    let scheduled_status = normalized_status(&scheduled, "scheduled");
+
+    let unscheduled = boot("backup_status_unscheduled_fixture_projects_the_legacy_key_set");
+    seed_catalogue(&unscheduled);
+    use_admin_profile(&unscheduled);
+    let unscheduled_status = normalized_status(&unscheduled, "unscheduled");
+
+    assert_eq!(
+        scheduled_status, unscheduled_status,
+        "schedule changed the projected status payload"
+    );
+}
+
 /// A fresh fixture reports no running online copy: the typed status
 /// projection answers `running: false` on a node that never started one.
+/// Batch `start` is the ONLY export command that reaches the server on an
+/// export-less node: batch `status`/`cancel` are refused by the dispatcher's
+/// session-only gate before any dial (owned by
+/// `export_online.rs::batch_status_cancel_are_session_only_refusals`), and
+/// the interactive unavailable outcome of `status`/`cancel` is pinned at the
+/// mapping layer (`shell/connect/tests/error_mapping.rs`).
+#[test]
+fn export_online_unconfigured_is_typed_without_path_or_secret() {
+    let fixture = boot("export_online_unconfigured_is_typed_without_path_or_secret");
+    seed_catalogue(&fixture);
+    use_admin_profile(&fixture);
+    let run = run_checked(
+        &fixture,
+        &["--", "export", "online", "start", DB_NAME, "--yes"],
+    );
+    refused_run(
+        &run,
+        "export online start",
+        Some("StartExport"),
+        "online_export_unavailable",
+        5,
+    );
+    let output = String::from_utf8_lossy(&run.stdout);
+    assert!(!output.contains('/'));
+    assert!(!output.contains('\\'));
+    assert!(!output.contains(fixture.canary.as_str()));
+}
+
+#[test]
+fn backup_schedule_show_enabled_projects_schedule_schema() {
+    let fixture = super::harness::boot_scheduled_backup(
+        "backup_schedule_show_enabled_projects_schedule_schema",
+    );
+    seed_catalogue(&fixture);
+    use_admin_profile(&fixture);
+    let data = result(
+        &fixture,
+        &["--", "backup", "schedule", "show"],
+        "backup schedule show",
+        "BackupStatus",
+    );
+    assert_eq!(data["state"], "configured");
+    assert_eq!(data["enabled"], true);
+    assert_eq!(data["interval_seconds"], "3600");
+    assert_eq!(data["window"], Value::Null);
+    assert_eq!(data["keep_last"], "7");
+    assert_eq!(data["run_on_start"], false);
+    assert!(data["next_run"]
+        .as_str()
+        .is_some_and(|value| value.ends_with('Z') && value.contains('T')));
+    assert_eq!(data["last_run"], Value::Null);
+    let runs = data["runs"].as_object().expect("runs counters");
+    assert_eq!(runs.len(), 8);
+    for (name, value) in runs {
+        let counter = value.as_str().expect("decimal-string counter");
+        assert!(
+            !counter.is_empty() && counter.bytes().all(|byte| byte.is_ascii_digit()),
+            "runs.{name} is not decimal"
+        );
+    }
+}
+
+#[test]
+fn backup_schedule_show_disabled_is_typed_success() {
+    let fixture = boot("backup_schedule_show_disabled_is_typed_success");
+    seed_catalogue(&fixture);
+    use_admin_profile(&fixture);
+    let data = result(
+        &fixture,
+        &["--", "backup", "schedule", "show"],
+        "backup schedule show",
+        "BackupStatus",
+    );
+    assert_eq!(
+        data,
+        serde_json::json!({"state": "schedule_not_configured"})
+    );
+}
+
 #[test]
 fn backup_status_reports_no_running_copy() {
     let fixture = boot("backup_status_reports_no_running_copy");

@@ -315,6 +315,16 @@ async fn staged_exit(exit: Exit) {
     wake.0.notified().await;
     writer.await;
     assert!(fixture.service.wait_idle().await);
+    // The gate's per-instance transition counters: the admitted freeze left
+    // the instance with exactly ONE rise and ONE thaw, whatever the exit
+    // path was (success, verification error, cancel, shutdown, disconnect,
+    // eviction, panic). Mutant: a double raise or a missed thaw leaves a
+    // count that is not exactly (1, 1).
+    assert_eq!(
+        fixture.gate.freeze_transition_counts(),
+        (1, 1),
+        "one admitted freeze exit must leave exactly one rise and one thaw"
+    );
     diag.mark("writer woke and worker drained");
     let status = fixture.service.status_for(&fixture.owner, DB).unwrap();
     let expected = match exit {
@@ -437,6 +447,14 @@ fn directory_and_scope_denials_precede_freeze() {
             admission.is_ok(),
             "mutator must be admitted concurrently with refusal"
         );
+        // Counterfactual for the same race: a froze-and-thawed mutant leaves
+        // one rise and one thaw behind even though the mutator won; the
+        // per-instance counters must still be (0, 0) after the refusal.
+        assert_eq!(
+            fixture.gate.freeze_transition_counts(),
+            (0, 0),
+            "the concurrent denial must leave zero freeze transitions"
+        );
         fixture
             .db
             .set_resource_meta(
@@ -447,6 +465,16 @@ fn directory_and_scope_denials_precede_freeze() {
             .unwrap();
         let denied = fixture.start().await;
         assert_eq!(denied.unwrap_err(), ServiceError::Denied);
+        // The refusal must NEVER have raised the freeze: with the gate's
+        // per-instance transition counters at (0, 0) the test now
+        // distinguishes never-froze from froze-and-thawed. Mutant: raising
+        // the freeze while returning the denial (even if it thaws again)
+        // leaves a nonzero rise count and fails here.
+        assert_eq!(
+            fixture.gate.freeze_transition_counts(),
+            (0, 0),
+            "a scope denial must leave the gate with zero freeze rises and zero thaws"
+        );
         // This is an immediate post-refusal admission, not merely a later state check.
         assert!(fixture.gate.enter_mutation().is_ok());
         assert!(fixture.service.status_for(&fixture.owner, DB).is_none());

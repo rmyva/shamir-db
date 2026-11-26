@@ -3,25 +3,35 @@
 //! a regular file under the staged copy. The copy walks the SOURCE tree, not
 //! the verified list, so a deletion that raced the copy (e.g. the snapshot
 //! removed mid-restore) would otherwise publish an INCOMPLETE target with no
-//! error. Listing comparison only — no re-hash: the staged bytes are the
-//! copy of the already-verified bytes. `symlink_metadata` is deliberately
-//! non-following, so a staged symlink is refused rather than dereferenced.
-//! The typed [`RestoreError::StagedFileMissing`] carries ONLY the
-//! manifest-relative file name — never the joined staging path, which
-//! would leak the restore's absolute scratch root into CLI output.
+//! error. The staged file is opened once and its bytes are hashed against
+//! the verified manifest before publication.
+//! The typed refusals carry ONLY the manifest-relative file name — never
+//! the joined staging path, which would leak the restore's absolute scratch
+//! root into CLI output. Absence ([`RestoreError::StagedFileMissing`]),
+//! present-but-different ([`RestoreError::StagedFilePresentButDifferent`])
+//! and present-but-not-regular ([`RestoreError::StagedFileNotARegularFile`])
+//! are truthfully distinct (round-2 finding 5).
 
 use std::fs;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 
+use sha2::{Digest, Sha256};
+
+use crate::sync::durability::backup::open_plain_snapshot_file;
 use crate::sync::durability::backup::ManifestFileEntry;
 
 use super::RestoreError;
 
 /// Verify that every manifest-listed file exists as a regular file under the
-/// staged temp dir. First failure is typed: [`RestoreError::StagedFileMissing`]
-/// for an absent / non-regular entry, [`RestoreError::ManifestVerification`]
-/// for a hostile manifest-controlled path, [`RestoreError::Io`] for any other
+/// staged temp dir and re-hashes to its verified entry (the second line of
+/// defense behind the copy gate's own in-pass hashing). First failure is
+/// typed and truthful: [`RestoreError::StagedFileMissing`] ONLY for a
+/// genuinely absent entry, [`RestoreError::StagedFileNotARegularFile`] for
+/// a link/directory refused by the no-follow open,
+/// [`RestoreError::StagedFilePresentButDifferent`] for a size/sha256
+/// mismatch vs the manifest, [`RestoreError::ManifestVerification`] for a
+/// hostile manifest-controlled path, [`RestoreError::Io`] for any other
 /// metadata error (never claim "missing" without proof).
 pub(super) fn verify_staged_files(
     temp_dir: &Path,
@@ -29,13 +39,60 @@ pub(super) fn verify_staged_files(
 ) -> Result<(), RestoreError> {
     for entry in files {
         let staged = staged_path(temp_dir, &entry.path)?;
-        match fs::symlink_metadata(&staged) {
-            Ok(meta) if meta.is_file() => {}
-            // The error names the MANIFEST-RELATIVE entry path only — the
-            // joined staging path would expose the absolute scratch root.
-            Ok(_) => return Err(RestoreError::StagedFileMissing(PathBuf::from(&entry.path))),
+        // Presence probe FIRST, so "not a regular file" (link, directory)
+        // is truthfully distinguished from absence (round-2 finding 5).
+        // The staged copy was written by this same restore and is not
+        // concurrently mutated, so the probe-to-open gap here is not a
+        // hostile TOCTOU surface — and the no-follow open below still
+        // type-checks the object actually opened.
+        let present = match fs::symlink_metadata(&staged) {
+            Ok(meta) => meta.is_file(),
             // A vanished parent directory surfaces as NotADirectory on both
             // platforms; anything else is not proof of absence.
+            Err(e) if e.kind() == ErrorKind::NotFound || e.kind() == ErrorKind::NotADirectory => {
+                return Err(RestoreError::StagedFileMissing(PathBuf::from(&entry.path)))
+            }
+            Err(e) => return Err(RestoreError::Io(e)),
+        };
+        if !present {
+            return Err(RestoreError::StagedFileNotARegularFile(entry.path.clone()));
+        }
+        // ONE no-follow open of the staged leaf: the handle whose bytes are
+        // hashed is the handle whose metadata was type-checked, so a swap
+        // between a metadata probe and a second open cannot widen what gets
+        // published. The error names the MANIFEST-RELATIVE entry path only —
+        // the joined staging path would expose the absolute scratch root.
+        match open_plain_snapshot_file(&staged) {
+            Ok(mut file) => {
+                let mut hasher = Sha256::new();
+                let mut size = 0u64;
+                let mut buffer = [0u8; 64 * 1024];
+                loop {
+                    let n = file.read(&mut buffer)?;
+                    if n == 0 {
+                        break;
+                    }
+                    hasher.update(&buffer[..n]);
+                    size += n as u64;
+                }
+                let actual_sha256 = hex::encode(hasher.finalize());
+                if size != entry.size_bytes || actual_sha256 != entry.sha256 {
+                    return Err(RestoreError::StagedFilePresentButDifferent {
+                        path: entry.path.clone(),
+                        expected_sha256: entry.sha256.clone(),
+                        expected_size_bytes: entry.size_bytes,
+                        actual_sha256,
+                        actual_size_bytes: size,
+                    });
+                }
+            }
+            // Refused by the no-follow open (reparse point / non-regular
+            // leaf that appeared after the probe — including a directory,
+            // which opens successfully on Unix and is refused by the
+            // regularity check inside the open).
+            Err(e) if e.kind() == ErrorKind::InvalidData => {
+                return Err(RestoreError::StagedFileNotARegularFile(entry.path.clone()))
+            }
             Err(e) if e.kind() == ErrorKind::NotFound || e.kind() == ErrorKind::NotADirectory => {
                 return Err(RestoreError::StagedFileMissing(PathBuf::from(&entry.path)))
             }

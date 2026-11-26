@@ -214,5 +214,5 @@ fn group_id(qv: &QueryValue, name: &str) -> Result<u64, ShellError> {
 }
 
 #[cfg(test)]
-#[path = "../tests/access_mutation_tests.rs"]
+#[path = "../../tests/commands/access/access_mutation_tests.rs"]
 mod access_mutation_tests;

@@ -137,6 +137,62 @@ async fn wire_cancel(handler: &ShamirDbHandler, caller: &Session, id: u64) -> Db
     rmp_serde::from_slice(&result).unwrap()
 }
 
+/// Commit took the parked context to the commit facade handoff, not yet engine
+/// driver ownership; cancel answers already_committing and commit then completes.
+#[tokio::test]
+async fn cancel_during_facade_handoff_answers_already_committing() {
+    let diag = FlakeGuard::with_watchdog(
+        "cancel_during_facade_handoff_answers_already_committing",
+        TIMEOUT,
+    );
+    tokio::time::timeout(TIMEOUT, async {
+        let (db, base, owner_actor) = fixture().await;
+        let owner = session(1, 1, false);
+        let id = parked(&base, &db, &owner_actor, &owner).await;
+        let reached = Arc::new(tokio::sync::Barrier::new(2));
+        let resume = Arc::new(tokio::sync::Barrier::new(2));
+        let handler =
+            base.clone()
+                .with_commit_handoff_pause(id, Arc::clone(&reached), Arc::clone(&resume));
+        let task_handler = handler.clone();
+        let commit = tokio::spawn(async move { wire_commit(&task_handler, &owner, id).await });
+        reached.wait().await;
+        assert!(matches!(
+            wire_cancel(&base, &session(2, 2, true), id).await,
+            DbResponse::CancelOutcome {
+                outcome: CancelOutcome::AlreadyCommitting
+            }
+        ));
+        resume.wait().await;
+        let DbResponse::TxCommitted { transaction } = commit.await.unwrap() else {
+            panic!("commit did not complete");
+        };
+        assert!(transaction.is_committed());
+        assert!(matches!(base.tx_registry().peek(id), TxParkedState::Gone));
+    })
+    .await
+    .expect("commit/cancel handoff scenario timed out");
+    diag.mark("commit took parked context and reached commit facade handoff (not engine driver ownership); cancel answered already_committing and commit completed");
+}
+
+async fn wire_commit(handler: &ShamirDbHandler, caller: &Session, id: u64) -> DbResponse {
+    let bytes = rmp_serde::to_vec_named(&DbRequest::TxCommit {
+        query_version: CURRENT_QUERY_LANG_VERSION,
+        visibility_wait: None,
+        db: "app".into(),
+        tx_handle: id,
+    })
+    .unwrap();
+    let result = tokio::time::timeout(
+        TIMEOUT,
+        handler.handle(caller, &bytes, &ConnectionServices::without_push(0)),
+    )
+    .await
+    .expect("commit dispatch timed out")
+    .unwrap();
+    rmp_serde::from_slice(&result).unwrap()
+}
+
 /// Raw-native-path decoded-request accounting (token REST/WS decode separately and are not counted). The cursor case, busy CancelTx case, successful CancelRequest case, and permission denial are all native-path assertions. A denial is still a successfully decoded request and must not be hidden from this counter.
 #[tokio::test]
 async fn decoded_request_counter_covers_cancellation_dispatches() {
@@ -545,7 +601,7 @@ async fn foreign_cancel_tx_removed_committing_reservation_answers_finished() {
         ));
         assert!(matches!(
             base.tx_registry().peek(id),
-            TxParkedState::Committing
+            TxParkedState::Committing(_)
         ));
         drop(second_committing);
         drop(second);
@@ -702,11 +758,11 @@ async fn wire_cursor_cancel(handler: &ShamirDbHandler, caller: &Session, id: u64
 }
 
 /// Kills mutant `busy_gone_reports_not_cancellable`: a cross-user cancel
-/// captures an open tx while its context is held, then removal occurs during
-/// the post-authorization pause. Parent must report `AlreadyFinished`.
+/// captures an open tx, then its handle is reused during the post-authorization
+/// pause. The stale cancel must not remove or cancel the replacement.
 #[tokio::test]
-async fn removed_busy_tx_answers_already_finished() {
-    let diag = FlakeGuard::with_watchdog("removed_busy_tx_answers_already_finished", TIMEOUT);
+async fn stale_cancel_does_not_remove_reused_handle() {
+    let diag = FlakeGuard::with_watchdog("stale_cancel_does_not_remove_reused_handle", TIMEOUT);
     tokio::time::timeout(TIMEOUT, async {
         let (db, base, owner_actor) = fixture().await;
         let owner = session(1, 1, false);
@@ -751,8 +807,8 @@ async fn removed_busy_tx_answers_already_finished() {
             .expect("register replacement under removed handle");
         resume.wait().await;
         let response = task.await;
-        drop(ctx_guard);
         drop(removed);
+        drop(ctx_guard);
         drop(tx);
         assert!(matches!(
             response.unwrap(),
@@ -768,8 +824,51 @@ async fn removed_busy_tx_answers_already_finished() {
         );
     })
     .await
-    .expect("busy removed-handle scenario timed out");
-    diag.mark("removed busy transaction answered already_finished");
+    .expect("stale cancel handle-reuse scenario timed out");
+    diag.mark("stale cancel preserved replacement transaction");
+}
+
+/// Kills mutant `busy_gone_reports_not_cancellable`: the authorized handle
+/// disappears during the post-authorization pause and has no replacement.
+#[tokio::test]
+async fn stale_cancel_of_removed_handle_answers_already_finished() {
+    let diag = FlakeGuard::with_watchdog(
+        "stale_cancel_of_removed_handle_answers_already_finished",
+        TIMEOUT,
+    );
+    tokio::time::timeout(TIMEOUT, async {
+        let (db, base, owner_actor) = fixture().await;
+        let owner = session(1, 1, false);
+        let caller = session(2, 2, true);
+        let id = parked(&base, &db, &owner_actor, &owner).await;
+        let tx = base.tx_registry().get_owned(id, &owner.session_id).unwrap();
+        let ctx_guard = tx.ctx().lock().await;
+        let reached = Arc::new(tokio::sync::Barrier::new(2));
+        let resume = Arc::new(tokio::sync::Barrier::new(2));
+        let handler = base.clone().with_cancel_authorized_pause(
+            CancelPauseTarget::Transaction,
+            id,
+            Arc::clone(&reached),
+            Arc::clone(&resume),
+        );
+        let task_handler = handler.clone();
+        let task = tokio::spawn(async move { wire_cancel(&task_handler, &caller, id).await });
+        reached.wait().await;
+        drop(base.tx_registry().remove(id).expect("remove authorized tx"));
+        resume.wait().await;
+        assert!(matches!(
+            task.await.unwrap(),
+            DbResponse::CancelOutcome {
+                outcome: CancelOutcome::AlreadyFinished
+            }
+        ));
+        drop(ctx_guard);
+        drop(tx);
+        assert!(matches!(base.tx_registry().peek(id), TxParkedState::Gone));
+    })
+    .await
+    .expect("stale cancellation without replacement timed out");
+    diag.mark("stale cancel without replacement answered already-finished");
 }
 
 /// Kills mutant `cancel_release_awaited_inline`: aborting the cancel dispatch

@@ -426,6 +426,25 @@ impl MemBufferStore {
         let shutdown = Arc::new(AtomicBool::new(false));
 
         // Background flusher.
+        //
+        // Maintenance-gate note (task #2021 item 3): this task is
+        // deliberately NOT enrolled in the server's maintenance/freeze
+        // gate. A freeze stops LOGICAL writers at the engine level: AFTER
+        // the enrolled writers have drained and the snapshot is pinned, no
+        // new dirty entries are produced for the frozen content — but the
+        // freeze intent itself does NOT stop this flusher; it keeps
+        // RELOCATING pre-existing dirty entries into `inner` (under
+        // `drain_lock`) and gives moka a TTL/eviction tick on the
+        // read-accelerator cache. Readers probe `dirty` first and then
+        // `inner` behind the same store facade, so the relocation is
+        // invisible to a pinned snapshot: every probe returns the same
+        // value whether the entry still sits in `dirty` or has already
+        // landed in `inner`, and the cache tick can never serve stale
+        // state (every hit is validated against the striped revisions).
+        // The gate's snapshot guarantee is therefore genuinely narrower
+        // than "everything on the server is stopped": the MemBuffer
+        // flusher and TTL maintenance keep running during a freeze, by
+        // design (see the online-export section of the operations guide).
         let weak_state = Arc::downgrade(&state);
         let weak_notify = Arc::downgrade(&notify);
         let weak_shutdown = Arc::downgrade(&shutdown);

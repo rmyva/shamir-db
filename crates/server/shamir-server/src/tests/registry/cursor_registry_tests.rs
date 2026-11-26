@@ -33,6 +33,80 @@ async fn make_cursor(seed: u64) -> Cursor {
 }
 
 #[tokio::test]
+async fn final_page_selection_cannot_remove_replacement() {
+    let reg = CursorRegistry::new();
+    let old = reg.register(71, SID_A, make_cursor(71).await, 16).unwrap();
+    let (selected, _lease) = reg.get_owned_for_fetch(71, &SID_A).unwrap();
+    assert!(Arc::ptr_eq(&selected, &old));
+    assert!(Arc::ptr_eq(
+        &reg.remove_identity(71, &selected).unwrap(),
+        &old
+    ));
+    let replacement = reg.register(71, SID_A, make_cursor(72).await, 16).unwrap();
+
+    assert!(reg.remove_identity(71, &selected).is_none());
+    assert!(Arc::ptr_eq(
+        &reg.get_owned(71, &SID_A).unwrap(),
+        &replacement
+    ));
+    assert_eq!(reg.len(), 1);
+    assert_eq!(reg.open_count_for_session(&SID_A), 1);
+}
+
+#[tokio::test]
+async fn cancel_selection_cannot_remove_replacement() {
+    let reg = CursorRegistry::new();
+    let old = reg.register(72, SID_A, make_cursor(72).await, 16).unwrap();
+    let selected = reg.get_owned(72, &SID_A).unwrap();
+    assert!(Arc::ptr_eq(&selected, &old));
+    assert!(Arc::ptr_eq(
+        &reg.remove_identity(72, &selected).unwrap(),
+        &old
+    ));
+    let replacement = reg.register(72, SID_A, make_cursor(73).await, 16).unwrap();
+
+    assert!(reg.remove_identity(72, &selected).is_none());
+    assert!(Arc::ptr_eq(
+        &reg.get_owned(72, &SID_A).unwrap(),
+        &replacement
+    ));
+    assert_eq!(reg.len(), 1);
+    assert_eq!(reg.open_count_for_session(&SID_A), 1);
+}
+
+#[tokio::test]
+async fn remove_all_for_session_preserves_replacement_after_selection() {
+    let reg = CursorRegistry::new();
+    let old = reg.register(73, SID_A, make_cursor(73).await, 16).unwrap();
+    let mut replacement = Some(make_cursor(74).await);
+    let mut selected = false;
+
+    let removed = reg.remove_all_for_session_with(&SID_A, |id, selected_cursor| {
+        assert!(Arc::ptr_eq(selected_cursor, &old));
+        assert_eq!(id, 73);
+        assert!(Arc::ptr_eq(
+            &reg.remove_identity(id, selected_cursor).unwrap(),
+            &old
+        ));
+        let current = reg
+            .register(id, SID_A, replacement.take().unwrap(), 16)
+            .unwrap();
+        assert!(!Arc::ptr_eq(&current, selected_cursor));
+        selected = true;
+    });
+
+    assert!(selected, "production cleanup selected the old cursor");
+    assert!(
+        removed.is_empty(),
+        "stale selection must not remove replacement"
+    );
+    let current = reg.get_owned(73, &SID_A).unwrap();
+    assert!(!Arc::ptr_eq(&current, &old));
+    assert_eq!(reg.len(), 1);
+    assert_eq!(reg.open_count_for_session(&SID_A), 1);
+}
+
+#[tokio::test]
 async fn remove_all_for_session_removes_only_owned_cursors() {
     let reg = CursorRegistry::new();
     for id in 1..=2 {

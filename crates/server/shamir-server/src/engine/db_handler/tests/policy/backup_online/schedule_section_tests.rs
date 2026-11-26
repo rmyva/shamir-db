@@ -22,9 +22,8 @@ use shamir_types::types::value::QueryValue;
 use tokio_util::sync::CancellationToken;
 
 use crate::boot::config::diagnostics::backup_online::metrics::{
-    clear_schedule_state_if, export_last_success_seconds_for_test, install_schedule_info,
-    note_next_run_unix_ns, note_schedule_last_run, note_scheduled_run_outcome, schedule_state,
-    set_export_last_success_for_test, ScheduleInfo, ScheduledLastRun,
+    export_last_success_seconds_for_test, set_export_last_success_for_test, ScheduleInfo,
+    ScheduleState, ScheduledLastRun,
 };
 use crate::boot::config::diagnostics::backup_online::schedule::runner::spawn_for_test;
 use crate::boot::config::diagnostics::backup_online::OnlineBackupRegistry;
@@ -74,16 +73,6 @@ async fn fixture(root: &Path) -> (Arc<ShamirDb>, OnlineBackupRegistry) {
         tokio::runtime::Handle::current(),
     );
     (db, registry)
-}
-
-fn reset_schedule_state() {
-    let generation = install_schedule_info(ScheduleInfo {
-        interval_secs: 60,
-        window: None,
-        keep_last: 7,
-        run_on_start: false,
-    });
-    clear_schedule_state_if(generation);
 }
 
 #[async_trait]
@@ -181,24 +170,26 @@ fn schedule_info() -> ScheduleInfo {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn superuser_reply_through_real_adapter_lists_schedule_keys() {
-    reset_schedule_state();
     let tmp = tempfile::tempdir().expect("tempdir");
     let deadline = Instant::now() + OVERALL;
     let (_db, registry) = tokio::time::timeout(remaining(deadline), fixture(tmp.path()))
         .await
         .expect("bounded fixture");
     let registry = Arc::new(registry);
-    let h = tokio::time::timeout(remaining(deadline), handler(tmp.path(), registry))
-        .await
-        .expect("bounded handler fixture");
-    let generation = install_schedule_info(schedule_info());
-    note_schedule_last_run(ScheduledLastRun {
+    // The section is served from THIS registry's own schedule cell: seed it
+    // there, not in any process global.
+    let schedule_state = registry.schedule_cell();
+    let generation = schedule_state.install_schedule_info(schedule_info());
+    schedule_state.note_schedule_last_run(ScheduledLastRun {
         started_at_unix_ns: 1_701_234_567_890_123_456,
         result: "completed",
         stage: "Done".into(),
         reason: Some("reported-reason".into()),
     });
-    note_next_run_unix_ns(generation, 1_701_234_999);
+    schedule_state.note_next_run_unix_ns(generation, 1_701_234_999);
+    let h = tokio::time::timeout(remaining(deadline), handler(tmp.path(), registry))
+        .await
+        .expect("bounded handler fixture");
     let value = status(&h, true, deadline).await.expect("superuser status");
     let QueryValue::Map(reply) = value else {
         panic!("status reply map expected")
@@ -257,7 +248,6 @@ async fn superuser_reply_through_real_adapter_lists_schedule_keys() {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn scheduler_exit_removes_the_schedule_section() {
-    reset_schedule_state();
     let tmp = tempfile::tempdir().expect("tempdir");
     let deadline = Instant::now() + OVERALL;
     let (_db, registry) = tokio::time::timeout(remaining(deadline), fixture(tmp.path()))
@@ -313,7 +303,6 @@ async fn scheduler_exit_removes_the_schedule_section() {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn two_scheduler_generations_are_independent() {
-    reset_schedule_state();
     let tmp = tempfile::tempdir().expect("tempdir");
     let deadline = Instant::now() + OVERALL;
     let (_db, registry) = tokio::time::timeout(remaining(deadline), fixture(tmp.path()))
@@ -394,7 +383,6 @@ async fn two_scheduler_generations_are_independent() {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn aborting_the_scheduler_task_removes_the_section() {
-    reset_schedule_state();
     let tmp = tempfile::tempdir().expect("tempdir");
     let deadline = Instant::now() + OVERALL;
     let (_db, registry) = tokio::time::timeout(remaining(deadline), fixture(tmp.path()))
@@ -444,7 +432,6 @@ async fn aborting_the_scheduler_task_removes_the_section() {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn failed_scheduled_run_publishes_stable_last_run_and_survives_a_manual_run() {
-    reset_schedule_state();
     let root = tempfile::tempdir().expect("data root");
     let manual_dest = tempfile::tempdir().expect("manual destination");
     let deadline = Instant::now() + OVERALL;
@@ -581,16 +568,18 @@ async fn failed_scheduled_run_publishes_stable_last_run_and_survives_a_manual_ru
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn status_read_leaves_the_exported_success_stamp_untouched() {
-    reset_schedule_state();
     let tmp = tempfile::tempdir().expect("tempdir");
     let deadline = Instant::now() + OVERALL;
     let (_db, registry) = tokio::time::timeout(remaining(deadline), fixture(tmp.path()))
         .await
         .expect("bounded fixture");
-    let h = tokio::time::timeout(remaining(deadline), handler(tmp.path(), Arc::new(registry)))
+    let registry = Arc::new(registry);
+    registry
+        .schedule_cell()
+        .install_schedule_info(schedule_info());
+    let h = tokio::time::timeout(remaining(deadline), handler(tmp.path(), registry))
         .await
         .expect("bounded handler");
-    install_schedule_info(schedule_info());
     let far_future = 4_000_000_000;
     set_export_last_success_for_test(far_future);
     let value = status(&h, true, deadline).await.expect("status");
@@ -610,15 +599,17 @@ async fn status_read_leaves_the_exported_success_stamp_untouched() {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn non_superuser_is_refused_with_a_configured_schedule() {
-    reset_schedule_state();
-    install_schedule_info(schedule_info());
     let tmp = tempfile::tempdir().expect("tempdir");
     let deadline = Instant::now() + OVERALL;
     let (_db, registry) = tokio::time::timeout(remaining(deadline), fixture(tmp.path()))
         .await
         .expect("bounded fixture");
+    let registry = Arc::new(registry);
+    registry
+        .schedule_cell()
+        .install_schedule_info(schedule_info());
     let port = Arc::new(CountingPort {
-        inner: Arc::new(registry),
+        inner: registry,
         calls: AtomicUsize::new(0),
     });
     let h = tokio::time::timeout(remaining(deadline), handler(tmp.path(), port.clone()))
@@ -635,8 +626,8 @@ async fn non_superuser_is_refused_with_a_configured_schedule() {
 #[serial]
 #[test]
 fn typed_cancelled_outcome_is_labeled_cancelled() {
-    reset_schedule_state();
-    install_schedule_info(ScheduleInfo {
+    let schedule = ScheduleState::default();
+    schedule.install_schedule_info(ScheduleInfo {
         interval_secs: 60,
         window: None,
         keep_last: 7,
@@ -646,8 +637,9 @@ fn typed_cancelled_outcome_is_labeled_cancelled() {
         stage: BackupStage::Preparing,
         cleanup: None,
     };
-    note_scheduled_run_outcome(&Err(error), 42);
-    let run = schedule_state()
+    schedule.note_scheduled_run_outcome(&Err(error), 42);
+    let run = schedule
+        .snapshot()
         .expect("schedule installed")
         .last_run
         .expect("cancel outcome");

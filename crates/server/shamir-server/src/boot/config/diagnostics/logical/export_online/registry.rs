@@ -113,10 +113,9 @@ impl RunState {
         }
     }
 
-    /// Snapshot mapped onto the wire status receipt. `sections` currently
-    /// reports the item count: the dump's own section counter is wired by
-    /// the runner step; until then the two counters coincide rather than
-    /// lying (documented gap of this step).
+    /// Snapshot mapped onto the wire status receipt. `sections` is the
+    /// dump's own section counter, fed separately from the item count by
+    /// the runner's step hook and the completed report.
     fn receipt(&self, export_id: &str) -> ExportStatusReceipt {
         let inner = self.inner.lock();
         let phase = if inner.publishing {

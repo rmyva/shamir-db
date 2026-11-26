@@ -38,7 +38,7 @@ use shamir_storage::storage_in_memory::InMemoryRepo;
 use shamir_tx::IsolationLevel;
 use shamir_types::access::Actor;
 use shamir_types::types::value::InnerValue;
-use shamir_wal::{WalAppendError, WalOpV2, WalSink};
+use shamir_wal::{WalAppendError, WalOpV2};
 
 use crate::query::batch::{execute_batch_unchecked, BatchResolver, TableResolver};
 use crate::query::TableRef;
@@ -99,11 +99,10 @@ async fn rv_wal_3b29232e_seal_fsync_failure_leaves_commit_indeterminate() {
     // the repo's `repo_wal` OnceCell initialises; process-global state, hence
     // #[serial] + remove_var before the (blocking) reopen below.
     std::env::set_var("SHAMIR_WAL_SEGMENT_MAX_BYTES", "1024");
-    // Arm ONCE (static, cross-repo); #[serial] keeps this test alone in the
-    // process. The FIRST rotation then fails its seal fsync.
-    WalSink::arm_fail_next_seal_sync_for_test();
-
     let repo = reopen_disk_repo("sealfault", repo_dir.clone(), vec![TableConfig::new("t")]).await;
+    let wal = repo.wal_group().await.expect("repository WAL");
+    // Arm only this repository's WAL after initialization.
+    wal.arm_fail_next_seal_sync_for_test();
 
     let big = format!("rv-wal-{}", "p".repeat(512));
     let mut failure = None;
@@ -112,7 +111,12 @@ async fn rv_wal_3b29232e_seal_fsync_failure_leaves_commit_indeterminate() {
         // Serial test, no concurrent writers: this is the visible floor the
         // batch's tx registers as its snapshot (register_snapshot).
         let snap = repo.consistent_version().await.unwrap();
-        let response = batch_insert(&repo, &value).await;
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            batch_insert(&repo, &value),
+        )
+        .await
+        .expect("WAL indeterminate test batch must finish within 120 seconds");
         let info = response
             .transaction
             .expect("transactional batch always attaches transaction metadata");
@@ -156,7 +160,12 @@ async fn rv_wal_3b29232e_seal_fsync_failure_leaves_commit_indeterminate() {
     // reason, NOT indeterminate.
     assert!(repo.repo_wal().await.unwrap().requires_reopen());
     {
-        let response = batch_insert(&repo, "after-fault").await;
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            batch_insert(&repo, "after-fault"),
+        )
+        .await
+        .expect("post-fault batch must finish within 120 seconds");
         let info = response.transaction.expect("tx metadata");
         assert_eq!(info.status, "aborted");
         assert_eq!(info.reason.as_deref(), Some("wal_requires_reopen"));

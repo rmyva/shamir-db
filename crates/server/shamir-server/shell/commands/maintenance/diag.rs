@@ -78,5 +78,5 @@ pub(in crate::shell) async fn durability(
 }
 
 #[cfg(test)]
-#[path = "tests/hostile_projection_tests.rs"]
+#[path = "../../tests/commands/maintenance/hostile_projection_tests.rs"]
 mod hostile_projection_tests;

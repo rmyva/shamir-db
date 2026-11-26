@@ -7,9 +7,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{sleep_until, Instant};
 use tokio_util::sync::CancellationToken;
 
-use super::super::metrics::{
-    enable_schedule, install_schedule_info, note_scheduled, ScheduleInfo, ScheduledResult,
-};
+use super::super::metrics::{enable_schedule, note_scheduled, ScheduleInfo, ScheduledResult};
 use super::super::progress_attribution::unix_nanos;
 use super::super::registry::ScheduledRunSignals;
 use super::super::{OnlineBackupRegistry, StartBackupError};
@@ -18,11 +16,16 @@ use crate::config::{DailyWindow, ResolvedSchedule};
 /// Clears this scheduler's schedule cells on ANY exit of the task's future:
 /// normal end, unwind, or future drop (task abort). Checked against the
 /// scheduler's generation, so an older exit never clears a newer schedule.
-struct ScheduleCellsGuard(u64);
+/// The handle is the OWNING REGISTRY's `ScheduleState` (item 3): an exit
+/// clears only its own registry's cell, never another registry's section.
+struct ScheduleCellsGuard {
+    state: Arc<super::super::metrics::ScheduleState>,
+    generation: u64,
+}
 
 impl Drop for ScheduleCellsGuard {
     fn drop(&mut self) {
-        super::super::metrics::clear_schedule_state_if(self.0);
+        self.state.clear_schedule_state_if(self.generation);
     }
 }
 
@@ -57,14 +60,18 @@ fn spawn_with_observer(
 ) -> JoinHandle<()> {
     let boot = Instant::now();
     let boot_unix_nanos = unix_nanos();
-    let generation = install_schedule_info(ScheduleInfo {
+    let schedule_state = registry.schedule_cell();
+    let generation = schedule_state.install_schedule_info(ScheduleInfo {
         interval_secs: schedule.interval.as_secs(),
         window: schedule.window.as_ref().map(DailyWindow::label),
         keep_last: schedule.retention.keep_last,
         run_on_start: schedule.run_on_start,
     });
     enable_schedule();
-    let cells_guard = ScheduleCellsGuard(generation);
+    let cells_guard = ScheduleCellsGuard {
+        state: Arc::clone(&schedule_state),
+        generation,
+    };
     let boot_for_publish = boot;
     tokio::spawn(async move {
         let _cells_guard = cells_guard;
@@ -89,18 +96,19 @@ fn spawn_with_observer(
                 }
             },
             move |next| {
+                // The adapter boundary is HERE: the wall-clock stamp stays
+                // u128 into the cell, so an interval beyond u64::MAX nanos
+                // keeps its real value (0 still means "no next run").
                 let nanos = next
                     .map(|deadline| {
-                        boot_unix_nanos
-                            .saturating_add(
-                                deadline
-                                    .saturating_duration_since(boot_for_publish)
-                                    .as_nanos(),
-                            )
-                            .min(u128::from(u64::MAX)) as u64
+                        boot_unix_nanos.saturating_add(
+                            deadline
+                                .saturating_duration_since(boot_for_publish)
+                                .as_nanos(),
+                        )
                     })
                     .unwrap_or(0);
-                super::super::metrics::note_next_run_unix_ns(generation, nanos);
+                schedule_state.note_next_run_unix_ns(generation, nanos);
             },
         )
         .await;

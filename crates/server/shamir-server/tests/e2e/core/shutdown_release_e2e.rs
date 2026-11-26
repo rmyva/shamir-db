@@ -426,3 +426,66 @@ async fn restart_rejects_tampered_audit_log_without_rewriting_it() {
         "rejected boot changed audit.log"
     );
 }
+
+/// An EXPORT-ENABLED server (`security.export_root` set, runner enabled at
+/// boot, NO export ever started) must still release every store at shutdown:
+/// `ShutdownOwner` keeps only the export DRAIN handle, and the service
+/// reference — owner of `Arc<ShamirDb>` and the durable user directory — is
+/// dropped before the store-release probe.
+///
+/// Kills the mutant that restores `online_export: self.online_export.clone()`
+/// in `ServerHandle::take_shutdown_owner` (or removes the
+/// `drop(self.online_export.take())` before the probe): the probe then
+/// observes the stores still held, the report is unclean (`StillLocked`,
+/// exit 70) and the immediate relaunch below can fail with `Locked`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn export_enabled_idle_shutdown_releases_the_stores() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let temp = tempfile::TempDir::new().expect("tempdir");
+    let data_dir = temp.path().to_path_buf();
+    // The export root must lie OUTSIDE the data directory (placement check in
+    // `export_online/root.rs`), so it gets its own temporary parent.
+    let export_temp = tempfile::TempDir::new().expect("export tempdir");
+    let export_root = export_temp.path().join("export-root");
+
+    let mut config = make_config(&data_dir);
+    config.security.export_root = Some(export_root.clone());
+    let launcher = ServerLauncher {
+        config,
+        node_mode: Default::default(),
+        bootstrap: BootstrapMode::Password {
+            username: "admin".into(),
+            password: Zeroizing::new(PASSWORD.to_vec()),
+        },
+    };
+    let handle = launcher.launch().await.expect("export-enabled launch");
+    let report = timeout(AUDIT_PHASE_TIMEOUT, Box::pin(handle.shutdown()))
+        .await
+        .expect("export-enabled shutdown timed out");
+    assert!(
+        report.is_clean(),
+        "export-enabled idle shutdown: {report:?}"
+    );
+    assert_eq!(
+        report.exit_code(),
+        0,
+        "an idle export-enabled server must not report still-held stores"
+    );
+
+    // Release proof: the same data dir relaunches immediately without a lock
+    // error (no retry, on purpose).
+    let mut config = make_config(&data_dir);
+    config.security.export_root = Some(export_root);
+    let handle = ServerLauncher {
+        config,
+        node_mode: Default::default(),
+        bootstrap: BootstrapMode::Password {
+            username: "admin".into(),
+            password: Zeroizing::new(PASSWORD.to_vec()),
+        },
+    }
+    .launch()
+    .await
+    .expect("relaunch must not hit a store lock left by the export-enabled shutdown");
+    drop(handle.shutdown().await);
+}

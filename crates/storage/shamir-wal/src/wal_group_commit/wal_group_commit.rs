@@ -138,6 +138,12 @@ pub struct WalGroupCommit {
 }
 
 impl WalGroupCommit {
+    /// Test-only: arm the seal-fsync fault on this group's own WAL sink.
+    #[doc(hidden)]
+    pub fn arm_fail_next_seal_sync_for_test(&self) {
+        self.sink.arm_fail_next_seal_sync_for_test();
+    }
+
     pub fn new(sink: Arc<WalSink>) -> Self {
         Self {
             sink: Arc::clone(&sink),

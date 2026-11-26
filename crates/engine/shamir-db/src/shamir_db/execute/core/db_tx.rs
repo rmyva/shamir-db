@@ -422,15 +422,104 @@ impl ShamirDb {
         let tx_id = tx.tx_id.0;
         let snapshot_version = tx.snapshot_version;
         let wait = wait.unwrap_or_else(|| repo.commit_visibility_wait());
-        match repo.commit_tx_with_options(tx, wait).await {
-            Ok(outcome) => Ok(TransactionInfo::committed(
-                outcome.tx_id,
-                outcome.snapshot_version,
-                outcome.commit_version,
-                outcome.materialized(),
-            )
-            .with_visibility(outcome.visibility)),
-            Err(commit_err) => Ok(commit_err.into_transaction_info(tx_id, snapshot_version)),
+        commit_on_repo(&repo, tx, tx_id, snapshot_version, wait).await
+    }
+
+    /// Commits a context taken out of a parked transaction. The repository is resolved BY NAME,
+    /// exactly like the unbound facade: the caller authorized Database:Write for THIS name and the
+    /// commit event carries this name. When `bound` (the repository resolved when the transaction
+    /// was parked) is given, the name must still resolve to that SAME repository: a name that no
+    /// longer resolves, or that now resolves to a different repository, is refused with a typed
+    /// error and the record locks are released through `release`, which is bound to the parked
+    /// repository (so a rename or a re-creation cannot strand them nor divert the commit).
+    /// Authorization is deliberately not taken here so the parked-commit caller can hold it under
+    /// its cleanup guard, keeping the release alive across cancellation.
+    ///
+    /// Known limit: after `disarm()` hands the context to the engine, cleanup is the pipeline's
+    /// responsibility. Before `CommitDriver::new` (`entry.rs:756`), the pipeline awaits at
+    /// `entry.rs:685-756`; dropped requests in those windows may strand Level-3 locks. See task #2020.
+    pub async fn tx_commit_parked_as(
+        &self,
+        db_name: &str,
+        repo_name: &str,
+        bound: Option<&crate::engine::repo::RepoInstance>,
+        tx: crate::engine::tx::TxContext,
+        release: ParkedTxRelease,
+        wait: Option<VisibilityWait>,
+    ) -> Result<TransactionInfo, BatchError> {
+        let Some(db) = self.get_db(db_name) else {
+            release_parked_tx(tx, &release).await;
+            return Err(BatchError::QueryError {
+                alias: String::new(),
+                message: format!("Database '{}' not found", db_name),
+                code: None,
+            });
+        };
+        let Some(repo) = db.get_repo(repo_name) else {
+            release_parked_tx(tx, &release).await;
+            return Err(BatchError::QueryError {
+                alias: String::new(),
+                message: format!("Repository '{}' not found", repo_name),
+                code: None,
+            });
+        };
+        if let Some(bound) = bound {
+            let same = match (bound.tx_gate().await, repo.tx_gate().await) {
+                (Ok(parked), Ok(current)) => std::sync::Arc::ptr_eq(&parked, &current),
+                _ => false,
+            };
+            if !same {
+                release_parked_tx(tx, &release).await;
+                return Err(BatchError::QueryError {
+                    alias: String::new(),
+                    message: format!(
+                        "Repository '{}' changed since the transaction began",
+                        repo_name
+                    ),
+                    code: None,
+                });
+            }
         }
+        let tx_id = tx.tx_id.0;
+        let snapshot_version = tx.snapshot_version;
+        let wait = wait.unwrap_or_else(|| repo.commit_visibility_wait());
+        commit_on_repo(&repo, tx, tx_id, snapshot_version, wait).await
+    }
+}
+
+/// The release hook of a parked interactive transaction, bound to the repository resolved at
+/// parking time (the server's `TxAbortRelease` adapts directly). Invoked once when parked commit
+/// ends outside the pipeline.
+pub type ParkedTxRelease = std::sync::Arc<
+    dyn Fn(crate::engine::tx::TxContext) -> futures::future::BoxFuture<'static, ()> + Send + Sync,
+>;
+
+async fn release_parked_tx(tx: crate::engine::tx::TxContext, release: &ParkedTxRelease) {
+    if tx.locked_keys.is_empty() {
+        return;
+    }
+    match tokio::spawn((release)(tx)).await {
+        Ok(()) => (),
+        Err(error) if error.is_panic() => log::error!("parked transaction lock release panicked"),
+        Err(error) => log::warn!("parked transaction lock release task failed: {error}"),
+    }
+}
+
+async fn commit_on_repo(
+    repo: &crate::engine::repo::RepoInstance,
+    tx: crate::engine::tx::TxContext,
+    tx_id: u64,
+    snapshot_version: u64,
+    wait: VisibilityWait,
+) -> Result<TransactionInfo, BatchError> {
+    match repo.commit_tx_with_options(tx, wait).await {
+        Ok(outcome) => Ok(TransactionInfo::committed(
+            outcome.tx_id,
+            outcome.snapshot_version,
+            outcome.commit_version,
+            outcome.materialized(),
+        )
+        .with_visibility(outcome.visibility)),
+        Err(commit_err) => Ok(commit_err.into_transaction_info(tx_id, snapshot_version)),
     }
 }

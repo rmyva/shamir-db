@@ -41,7 +41,7 @@ mod shutdown;
 
 use format::entry_to_line;
 use rotation::RotationState;
-pub use shutdown::{AuditFinalFlush, AuditShutdownOutcome};
+pub use shutdown::{AuditFinalFlush, AuditShutdownOutcome, FlusherJoinFailure};
 
 #[cfg(test)]
 #[path = "tests/audit_appender_tests_manifest.rs"]

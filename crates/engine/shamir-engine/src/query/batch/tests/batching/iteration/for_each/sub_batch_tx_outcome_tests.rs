@@ -251,8 +251,14 @@ async fn transactional_sub_batch_indeterminate_commit_reports_typed_reopen_with_
     );
     let req = outer.build();
 
-    shamir_wal::WalSink::arm_fail_next_seal_sync_for_test();
-    let result = execute_batch(&req, &resolver, None, None, Actor::System, "test").await;
+    let wal = repo.wal_group().await.unwrap();
+    wal.arm_fail_next_seal_sync_for_test();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        execute_batch(&req, &resolver, None, None, Actor::System, "test"),
+    )
+    .await
+    .expect("SubBatch indeterminate execution must finish within 120 seconds");
 
     let err = result.expect_err("an indeterminate outcome must fail the container");
     assert_eq!(

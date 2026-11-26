@@ -43,13 +43,15 @@
 //!
 //! 3b. **Staged presence re-check** (staged_listing.rs): every file the
 //!    VERIFIED manifest lists must exist as a regular file under the staged
-//!    temp dir (a cheap listing comparison, no re-hash — a
-//!    `symlink_metadata` per entry). The copy walks the SOURCE tree, not the
-//!    verified list, so a deletion that raced the copy (e.g. a snapshot
-//!    removed mid-restore) would otherwise publish an INCOMPLETE target
-//!    with no error. Any absent or non-regular entry refuses with
-//!    [`RestoreError::StagedFileMissing`], cleans up the staged copy and
-//!    leaves `data_dir` untouched.
+//!    temp dir AND re-hash to its verified entry. The copy pass itself
+//!    already hashed every copied file against the verified manifest
+//!    (round-2 finding 1), so this pass is the second line of defense — a
+//!    consistency check of the copy. Absence, a byte mismatch and a
+//!    non-regular entry each refuse with their own typed variant
+//!    ([`RestoreError::StagedFileMissing`],
+//!    [`RestoreError::StagedFilePresentButDifferent`],
+//!    [`RestoreError::StagedFileNotARegularFile`]), cleans up the staged
+//!    copy and leaves `data_dir` untouched.
 //! 4. **Invalidate sessions IN THE STAGED COPY, before anything touches the
 //!    live `data_dir`**: open the `users` store INSIDE the temp dir (NOT
 //!    `data_dir`'s) and call `invalidate_all_tickets(now_ns)` there, then
@@ -80,22 +82,30 @@
 //!    it's still there.
 
 use std::fs;
+use std::io::Read;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use sha2::{Digest, Sha256};
 use shamir_db::engine::meta::repo_identity::RepoIdentity;
 use shamir_db::ShamirDb;
 use thiserror::Error;
 
-use super::offline::{self as backup, copy_dir_recursive, BackupError, VerifiedManifest};
-use super::online::manifest::{self as online_manifest, BackupKind, ManifestV2};
+use super::offline::{
+    self as backup, copy_dir_recursive, BackupError, CopyGateError, RestoreCopyLedger,
+    VerifiedManifest,
+};
+use super::online::manifest::{BackupKind, ManifestV2};
 use super::snapshot_lease;
 use crate::format_stamp::{restore_snapshot_gate, EpochPolicy};
 use crate::meta_port::MetaError;
 use crate::user_directory::FjallUserDirectory;
 
+use classify::{classify_snapshot_kind, SnapshotKind};
+
 mod catalogue;
+mod classify;
 mod fjall_locks;
 mod online;
 mod staged_listing;
@@ -179,17 +189,62 @@ pub enum RestoreError {
     #[error("staged system catalogue access failed: {0}")]
     Catalogue(shamir_db::DbError),
     /// Step 3b staged presence re-check: a file the VERIFIED manifest lists
-    /// is absent from (or not a regular file under) the staged copy — the
-    /// snapshot's source tree lost it between verification and enumeration.
-    /// Publishing would produce an INCOMPLETE target, so the restore refuses
-    /// (staged copy cleaned up, `data_dir` untouched). Names ONLY the
-    /// manifest-relative file (finding 6: never the joined staging path).
+    /// is ABSENT from the staged copy — the snapshot's source tree lost it
+    /// between verification and enumeration. A present-but-different or
+    /// present-but-non-regular file gets its own typed variant below; this
+    /// one is only ever proof of genuine absence. Publishing would produce
+    /// an INCOMPLETE target, so the restore refuses (staged copy cleaned
+    /// up, `data_dir` untouched). Names ONLY the manifest-relative file
+    /// (finding 6: never the joined staging path).
     #[error(
         "staged copy is missing a file listed in the verified manifest: {0} — \
          the snapshot changed between verification and the copy; refusing to \
          publish an incomplete restore"
     )]
     StagedFileMissing(PathBuf),
+    /// Step-3 copy gate (round-2 finding 1b): a REGULAR file the snapshot
+    /// walk found that the verified manifest does not list (outside the
+    /// format's root control files). Manifest-relative path only.
+    #[error(
+        "snapshot contains a file the verified manifest does not list: {0} — \
+         refusing to publish a restore that verification never covered"
+    )]
+    StagedFileUnmanifested(String),
+    /// Finding 5 (round 2): the file IS present but its bytes differ from
+    /// the verified manifest entry (size and/or sha256) — truthfully
+    /// distinct from [`Self::StagedFileMissing`]. Manifest-relative only.
+    #[error(
+        "staged file differs from the verified manifest entry: {path} \
+         (expected sha256 {expected_sha256}, {expected_size_bytes} bytes; \
+         found sha256 {actual_sha256}, {actual_size_bytes} bytes)"
+    )]
+    StagedFilePresentButDifferent {
+        path: String,
+        expected_sha256: String,
+        expected_size_bytes: u64,
+        actual_sha256: String,
+        actual_size_bytes: u64,
+    },
+    /// Finding 5 (round 2): the manifest-listed name exists under the
+    /// staged copy but the no-follow open refused it as a link / directory
+    /// / other non-regular object — truthfully distinct from absence.
+    #[error(
+        "staged copy holds a non-regular file where the verified manifest \
+         lists a regular file: {0}"
+    )]
+    StagedFileNotARegularFile(String),
+    /// Restore step 0 (kind classification): the classifier's no-follow
+    /// open of the ROOT `manifest.json` refused it as a non-regular object
+    /// (symlink / reparse point / directory). Distinct from the
+    /// verification-stage refusal of the same shape
+    /// ([`Self::ManifestVerification`]) so the control-file link
+    /// regressions can attribute the refusal to the CLASSIFIER stage.
+    /// Manifest-relative path only.
+    #[error(
+        "snapshot control file is not a regular file (link or reparse \
+         point): {path} — refusing before any probe or copy runs"
+    )]
+    ControlFileNotRegular { path: String },
 }
 
 /// Outcome of a successful restore.
@@ -310,13 +365,17 @@ where
     // ---- Step 1: verify the manifest consumed by the chosen path ----
     // ONLINE (classified from the raw manifest): verify FIRST and consume
     // ONLY the manifest this verification returns — the classifier's decode
-    // is never trusted beyond the boolean probe-path choice. The source
+    // is never trusted beyond the boolean probe-path choice. Verification
+    // also returns the SHA-256 of the exact manifest BYTES it consumed
+    // (round-2 finding 1c); the step-3a check below proves the staged copy
+    // carries those bytes and not a re-read replacement. The source
     // manifest is assumed FIXED for the duration of the command (documented
     // operator prerequisite: a snapshot directory is immutable while being
-    // restored); the staged bytes are the copy of those verified bytes and
-    // are NOT re-hashed; its file list drives the staged presence re-check.
-    let verified_manifest: VerifiedManifest = if online_classified {
-        let (report, manifest) = backup::verify_manifest_for_restore(&source)?;
+    // restored); its file list drives the step-3 copy gate AND the staged
+    // presence re-check, which now RE-HASHES every listed staged file as a
+    // second line of defense.
+    let (verified_manifest, manifest_digest): (VerifiedManifest, String) = if online_classified {
+        let (report, manifest, manifest_digest) = backup::verify_manifest_for_restore(&source)?;
         if !matches!(report.kind, BackupKind::Online) {
             // Classified online but verified as something else: the
             // classification decode is stale — refuse as corrupt rather
@@ -339,7 +398,7 @@ where
                 other => RestoreError::ManifestVerification(other),
             })?;
         }
-        manifest
+        (manifest, manifest_digest)
     } else {
         // The legacy probe NO LONGER runs here (finding 6): it MUTATES the
         // target, so it now waits until the staged presence re-check below
@@ -351,7 +410,7 @@ where
         // legacy-classified snapshot that verifies as ONLINE — refuses with
         // the same typed error instead of letting the replay pipeline run
         // against a target that was only guarded by the legacy probe. ----
-        let (report, manifest) = backup::verify_manifest_for_restore(&source)?;
+        let (report, manifest, manifest_digest) = backup::verify_manifest_for_restore(&source)?;
         if matches!(report.kind, BackupKind::Online) {
             return Err(RestoreError::ManifestVerification(
                 BackupError::ManifestInvalid(
@@ -359,7 +418,7 @@ where
                 ),
             ));
         }
-        manifest
+        (manifest, manifest_digest)
     };
 
     // ---- Step 2b: verify the SOURCE snapshot's format stamp (design 3.5).
@@ -407,13 +466,100 @@ where
     }
     let mut bytes = 0u64;
     let mut files = 0u64;
-    if let Err(e) = copy_dir_recursive(&source, &temp_dir, &mut bytes, &mut files, false, true) {
+    // Round-2 finding 1a/1b: the walk is BOUND to the verified manifest —
+    // every copied regular file is hashed in the copy pass and compared to
+    // its verified entry before it counts as copied, and an unlisted
+    // regular file (outside the control-file union) refuses typed.
+    let ledger = RestoreCopyLedger::new(
+        &source,
+        verified_manifest.files(),
+        // Derived from the SAME verified manifest's variant — the ledger's
+        // root control-file allow-set equals that verifier's (v1:
+        // manifest.json only; v2: manifest.json + backup.meta.json).
+        verified_manifest.allows_backup_meta(),
+    );
+    if let Err(e) = copy_dir_recursive(
+        &source,
+        &temp_dir,
+        &mut bytes,
+        &mut files,
+        false,
+        true,
+        Some(&ledger),
+    ) {
         // N-6: the error message for this failure gives the operator no
         // reference to `temp_dir` at all — clean it up best-effort (log,
         // don't let a cleanup failure mask the original error) rather than
         // leaving an orphaned `*.restore_tmp_*` directory behind.
         cleanup_staged_temp_dir(&temp_dir);
-        return Err(RestoreError::Io(e));
+        return Err(match e {
+            CopyGateError::Io(io) => RestoreError::Io(io),
+            CopyGateError::NotARegularFile { path } => {
+                RestoreError::StagedFileNotARegularFile(path)
+            }
+            CopyGateError::UnmanifestedFile(rel) => RestoreError::StagedFileUnmanifested(rel),
+            CopyGateError::ListedFileMismatch {
+                path,
+                expected_sha256,
+                expected_size_bytes,
+                actual_sha256,
+                actual_size_bytes,
+            } => RestoreError::StagedFilePresentButDifferent {
+                path,
+                expected_sha256,
+                expected_size_bytes,
+                actual_sha256,
+                actual_size_bytes,
+            },
+        });
+    }
+
+    // ---- Step 3a (round-2 finding 1c, digest-compare choice): re-hash the
+    // staged `manifest.json` and require it to equal the digest
+    // verification computed over the manifest bytes it consumed — a
+    // mismatch means the copy did not carry the verified bytes. Refusal
+    // cleans the staged copy; `data_dir` untouched. ----
+    let staged_manifest = temp_dir.join(backup::MANIFEST_FILE_NAME);
+    // Every error out of this read loop must run the same staged-copy
+    // cleanup as the open-failure and digest-mismatch branches below:
+    // compute the digest into a Result FIRST, clean up, then propagate.
+    let staged_digest = match backup::open_plain_snapshot_file(&staged_manifest) {
+        Ok(mut file) => {
+            let mut hasher = Sha256::new();
+            let mut buffer = [0u8; 64 * 1024];
+            let mut read_result = Ok(());
+            loop {
+                match file.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(n) => hasher.update(&buffer[..n]),
+                    Err(e) => {
+                        read_result = Err(e);
+                        break;
+                    }
+                }
+            }
+            match read_result {
+                Ok(()) => hex::encode(hasher.finalize()),
+                Err(e) => {
+                    cleanup_staged_temp_dir(&temp_dir);
+                    return Err(RestoreError::Io(e));
+                }
+            }
+        }
+        // The copy pass just copied this exact name; absence or a
+        // non-regular object here is an internal inconsistency.
+        Err(e) => {
+            cleanup_staged_temp_dir(&temp_dir);
+            return Err(RestoreError::Io(e));
+        }
+    };
+    if staged_digest != manifest_digest {
+        cleanup_staged_temp_dir(&temp_dir);
+        return Err(RestoreError::ManifestVerification(
+            BackupError::ManifestInvalid(
+                "staged manifest bytes differ from the manifest bytes verification consumed".into(),
+            ),
+        ));
     }
     // Last source read done — release the shared lease before any staging
     // mutation, so retention is never blocked by non-reading work.
@@ -436,12 +582,14 @@ where
     };
 
     // ---- Step 3b: staged presence re-check — every file the verified
-    // manifest lists must exist as a regular file under the staged copy
-    // (cheap listing comparison, NO re-hash). The verified manifest and the
-    // staged bytes are only trustworthy while the source cannot change; a
-    // deletion that raced the copy would otherwise publish an INCOMPLETE
-    // target silently. Refusal cleans the staged copy; `data_dir` is
-    // untouched. ----
+    // manifest lists must exist as a REGULAR file under the staged copy AND
+    // re-hash to its verified entry (finding 1d: now the SECOND line of
+    // defense behind the step-3 copy gate's in-pass hashing — a consistency
+    // check of the copy itself). Refusals are typed and truthful: absence
+    // is [`RestoreError::StagedFileMissing`], present-but-different is
+    // [`RestoreError::StagedFilePresentButDifferent`], non-regular is
+    // [`RestoreError::StagedFileNotARegularFile`]. Refusal cleans the
+    // staged copy; `data_dir` is untouched. ----
     if let Err(e) = staged_listing::verify_staged_files(&temp_dir, verified_manifest.files()) {
         cleanup_staged_temp_dir(&temp_dir);
         return Err(e);
@@ -617,78 +765,6 @@ where
         );
     }
     Ok(report)
-}
-
-/// Snapshot kind as classified from the raw manifest header.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SnapshotKind {
-    /// v2 manifest with `kind = "online"`: run the online pipeline, bypass
-    /// the supplied probe.
-    Online,
-    /// v1 manifest, or a v2 manifest with `kind = "offline"`: the legacy
-    /// pipeline, with the supplied probe moved AFTER the staged presence
-    /// re-check (finding 6).
-    Legacy,
-}
-
-/// Fallible kind classification from the raw manifest header. Reuses the
-/// verify-side error semantics ([`BackupError::ManifestMissing`],
-/// [`BackupError::Io`], [`BackupError::ManifestInvalid`] wrapped in
-/// [`RestoreError::ManifestVerification`]) so an unclassifiable or malformed
-/// snapshot refuses BEFORE any probe callback runs — in particular before
-/// the legacy server liveness probe, which MUTATES the target on refusal
-/// and must never fire for a corrupt source (P1). Only a header that is
-/// both readable and recognized (v1, or v2 with a known `kind`) yields a
-/// classification; the manifest actually consumed later still comes
-/// exclusively from `verify_manifest`/`verify_manifest_for_restore`.
-fn classify_snapshot_kind(from: &Path) -> Result<SnapshotKind, RestoreError> {
-    let manifest_path = from.join(backup::MANIFEST_FILE_NAME);
-    let refuse = |e| RestoreError::ManifestVerification(e);
-    let raw = fs::read_to_string(&manifest_path).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            refuse(BackupError::ManifestMissing(manifest_path.clone()))
-        } else {
-            refuse(BackupError::Io(e))
-        }
-    })?;
-    let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
-        refuse(BackupError::ManifestInvalid(format!(
-            "decode {}: {e}",
-            manifest_path.display()
-        )))
-    })?;
-    let version = value
-        .get("format_version")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| {
-            refuse(BackupError::ManifestInvalid(
-                "manifest is missing a numeric format_version".into(),
-            ))
-        })?;
-    match version {
-        1 => Ok(SnapshotKind::Legacy),
-        v if v == online_manifest::MANIFEST_FORMAT_VERSION_V2 as u64 => {
-            // Match the production `ManifestV2` decoder's compatibility rule:
-            // an ABSENT `kind` field decodes there to `Offline` (serde
-            // `#[serde(default = "offline_kind")]`), so classification must
-            // treat it the same way and stay on the legacy path. A PRESENT
-            // but non-string or unknown `kind` (including JSON null) is not
-            // something the decoder tolerates for routing, so refuse —
-            // fail-closed before any probe callback.
-            match value.get("kind") {
-                Some(serde_json::Value::String(s)) if s == "online" => Ok(SnapshotKind::Online),
-                Some(serde_json::Value::String(s)) if s == "offline" => Ok(SnapshotKind::Legacy),
-                None => Ok(SnapshotKind::Legacy),
-                other => Err(refuse(BackupError::ManifestInvalid(format!(
-                    "v2 manifest has no known kind (online|offline), found: {other:?}"
-                )))),
-            }
-        }
-        found => Err(refuse(BackupError::ManifestInvalid(format!(
-            "decode {}: unsupported manifest format_version: found {found}",
-            manifest_path.display()
-        )))),
-    }
 }
 
 const RESTORE_MARKER: &str = ".shamir_restore_epoch";

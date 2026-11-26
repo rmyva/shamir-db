@@ -1,13 +1,16 @@
 use shamir_connect::server::session::Session;
 use shamir_db::query::batch::{BatchError, BatchOp, BatchRequest};
 use shamir_query_types::batch::{BatchTreeVisitor, IsolationLevel, VisibilityWait};
+use shamir_types::access::{Action, ResourcePath};
 use std::sync::Arc;
 
 use crate::tx_registry::{InteractiveTx, TxAbortRelease, TxRegistryError};
 
 use super::activity::server_busy_response;
 use super::admin::{check_destructive_hmacs, is_coarse_admin_gate_exempt};
-use super::handler::{DbResponse, ShamirDbHandler, INTERACTIVE_TX_MAX_LIFETIME};
+use super::handler::{
+    DbResponse, ParkedCommitCleanup, ShamirDbHandler, INTERACTIVE_TX_MAX_LIFETIME,
+};
 
 use crate::db_handler::config::NodeMode;
 
@@ -114,6 +117,33 @@ impl ShamirDbHandler {
         let iso = isolation.unwrap_or(IsolationLevel::Snapshot);
 
         let actor = super::handler::session_actor(session);
+        if let Err(e) = self
+            .db
+            .authorize_access(
+                &actor,
+                &ResourcePath::Database {
+                    db: db_name.to_string(),
+                },
+                Action::Read,
+            )
+            .await
+        {
+            let err = BatchError::query_coded("", "access_denied", e.to_string());
+            return DbResponse::Error {
+                code: super::handler::error_code(&err).to_string(),
+                message: err.to_string(),
+            };
+        }
+        let pre = self
+            .db
+            .get_db(db_name)
+            .and_then(|db| db.get_repo(repo_name));
+        let pre_gate = match &pre {
+            Some(repo) => repo.tx_gate().await.ok(),
+            None => None,
+        };
+        #[cfg(test)]
+        self.begin_pause.pause().await;
         // `ShamirDb::tx_begin_as` still speaks the wire-string vocabulary;
         // `IsolationLevel::as_str` is exactly that vocabulary (v4 enum).
         let begin = self
@@ -130,6 +160,23 @@ impl ShamirDbHandler {
             }
         };
 
+        let post_repo = self
+            .db
+            .get_db(db_name)
+            .and_then(|db| db.get_repo(repo_name));
+        let post_gate = match &post_repo {
+            Some(repo) => repo.tx_gate().await.ok(),
+            None => None,
+        };
+        let bound = match (&pre_gate, &post_gate) {
+            (Some(a), Some(b)) if Arc::ptr_eq(a, b) => post_repo,
+            _ => None,
+        };
+        if bound.is_none() {
+            drop(tx);
+            drop(guard);
+            return server_busy_response();
+        }
         let handle = tx.tx_id.0;
         let snapshot_version = tx.snapshot_version;
         let it = InteractiveTx::new(
@@ -140,8 +187,15 @@ impl ShamirDbHandler {
             db_name.to_string(),
             repo_name.to_string(),
             INTERACTIVE_TX_MAX_LIFETIME,
-            self.tx_abort_release(db_name, repo_name),
+            super::activity::tx_abort_release(bound.clone()),
         );
+        let it = if let Some(inst) = bound {
+            it.with_bound_repo(inst)
+        } else {
+            it
+        };
+        // The release-tail owner is bound by the registry at registration
+        // (`TxRegistry::register_activity`), never by the caller.
         match self.tx_registry.register_activity(
             handle,
             it,
@@ -508,13 +562,15 @@ impl ShamirDbHandler {
             // Admin can write directly, not just stage changes. The task owns
             // admission and the bounded slot through execution and cleanup.
             // fire-and-forget: detached by design if the reply waiter is dropped.
-            self.owned_mutation_tasks()
-                .spawn(execute)
-                .await
-                .unwrap_or_else(|_| DbResponse::Error {
+            match self.owned_mutation_tasks().spawn(execute) {
+                Some(worker) => worker.await.unwrap_or_else(|_| DbResponse::Error {
                     code: "internal_error".into(),
                     message: "cannot complete database request".into(),
-                })
+                }),
+                // Shutdown closed worker admission; refuse instead of starting
+                // work the flush cannot wait for.
+                None => server_busy_response(),
+            }
         } else {
             execute.await
         }
@@ -621,13 +677,42 @@ impl ShamirDbHandler {
                 };
             }
         };
-        let repo = it.repo().to_string();
         let actor = super::handler::session_actor(session);
         let tx = it.ctx().lock().await.take();
-        let commit = match tx {
+        let mut cleanup = ParkedCommitCleanup::new(tx, Arc::clone(it.abort_release()));
+        #[cfg(test)]
+        self.pause_commit_after_take(tx_handle).await;
+        if let Err(e) = self
+            .db
+            .authorize_access(
+                &actor,
+                &ResourcePath::Database {
+                    db: db_name.to_string(),
+                },
+                Action::Write,
+            )
+            .await
+        {
+            let err = BatchError::query_coded("", "access_denied", e.to_string());
+            cleanup.release_now().await;
+            return DbResponse::Error {
+                code: super::handler::error_code(&err).to_string(),
+                message: err.to_string(),
+            };
+        }
+        let release = Arc::clone(&cleanup.release);
+        let commit = match cleanup.disarm() {
             Some(tx) => {
+                drop(cleanup);
                 self.db
-                    .tx_commit_as_with_options(actor, db_name, &repo, tx, wait)
+                    .tx_commit_parked_as(
+                        db_name,
+                        it.repo(),
+                        it.bound_repo(),
+                        tx,
+                        release,
+                        Some(wait),
+                    )
                     .await
             }
             None => Err(BatchError::QueryError {

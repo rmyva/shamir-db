@@ -63,11 +63,14 @@ impl ShamirDbHandler {
             Ok(r) => r,
             Err(e) => return error_response(&e),
         };
-        // Check registration without opening a manager/cell. Absent tables
-        // share the fixed refusal used by table-Read ACL denials.
-        if repo.table_config(&table_name).is_none() {
+        // Capture the table incarnation before name-based authorization.
+        // Missing/unpinnable registrations share the fixed unavailable refusal.
+        let Some(authorized_config) = repo.table_config(&table_name) else {
             return error_response(&crate::db_handler::operator_state::table_unavailable_error());
-        }
+        };
+        let Some(authorized_registration) = repo.table_registration(&table_name) else {
+            return error_response(&crate::db_handler::operator_state::table_unavailable_error());
+        };
         if let Err(e) =
             authorize_cursor_read(&self.db, &actor, db_name, &repo_name, &table_name).await
         {
@@ -118,6 +121,30 @@ impl ShamirDbHandler {
                 return error_response(&wrap_table_lookup_err(&self.db, db_name, &repo_name, e));
             }
         };
+        // Test-only pause after acquisition, before the identity re-check.
+        #[cfg(test)]
+        self.create_cursor_identity_pause().await;
+        let repo = match resolve_repo(&self.db, db_name, &repo_name) {
+            Ok(repo) => repo,
+            Err(_) => {
+                return error_response(&crate::db_handler::operator_state::table_unavailable_error())
+            }
+        };
+        let Some(current_config) = repo.table_config(&table_name) else {
+            return error_response(&crate::db_handler::operator_state::table_unavailable_error());
+        };
+        let Some(current_registration) = repo.table_registration(&table_name) else {
+            return error_response(&crate::db_handler::operator_state::table_unavailable_error());
+        };
+        if current_config.store_id != authorized_config.store_id
+            || !authorized_registration.same_registration(&current_registration)
+        {
+            return error_response(&BatchError::query_coded(
+                "",
+                "access_denied",
+                "the authorized table registration changed during the request",
+            ));
+        }
         let gate = match repo.tx_gate().await {
             Ok(g) => g,
             Err(e) => return error_response(&wrap_engine_err(e)),

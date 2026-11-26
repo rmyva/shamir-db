@@ -167,7 +167,7 @@ fn activity_sessions_lists_own_session() {
 /// cannot hold an interactive transaction across the wire), so an empty
 /// `rows` array with `rows_truncated: false` passes every assertion here. The
 /// row PROJECTION — including every real `op_kind` label — is pinned by
-/// `shell/commands/tests/activity_field_tests.rs`.
+/// `shell/tests/commands/access/activity_field_tests.rs`.
 #[test]
 fn activity_requests_reports_paging_marker() {
     let secure = boot_secure("activity_requests_reports_paging_marker");
@@ -564,7 +564,7 @@ fn activity_all_lists_another_actors_session_and_own_scope_does_not() {
 /// rows in ONE page and passes every assertion below — the server sees one
 /// request either way and the fixture has no seam to observe the outgoing
 /// `limit`. The page-size and continuation rules themselves are pinned against
-/// a counting fake in `commands/tests/access_deadline_tests.rs`
+/// a counting fake in `shell/tests/commands/access/access_deadline_tests.rs`
 /// (`collect_pages`), which fails if the cap check or the continuation
 /// forwarding is removed.
 #[test]

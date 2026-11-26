@@ -101,6 +101,10 @@ fn run_binary(cwd: &Path, env: Option<(&'static str, String)>, args: &[&str]) ->
     })
 }
 
+#[cfg(test)]
+#[path = "output_goldens.rs"]
+mod output_goldens;
+
 // ── Record / envelope assertion helpers ──────────────────────────────
 
 /// Parse stdout as EXACTLY one LF-terminated JSON record (the §5 batch

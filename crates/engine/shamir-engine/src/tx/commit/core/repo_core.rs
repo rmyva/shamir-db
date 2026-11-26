@@ -52,6 +52,10 @@ pub struct RepoCore {
         Option<Arc<ForegroundLifecycle<ReceiptApplyJob, DbResult<ApplyOutcome>>>>,
     /// Per-open cache for the completed-reseed lifecycle record (see `durability_repo_impl.rs`).
     pub(crate) replication_armed: Arc<std::sync::atomic::AtomicBool>,
+    /// Lifecycle owner of cold-table opens handed off by dropped callers
+    /// (`HandoffOnDrop` in `catalog_access.rs`); shutdown drains it before
+    /// commit quiescence (`clean_horizon_shutdown_impl.rs`).
+    pub(crate) cold_opens: Arc<crate::tx::commit::cold_open::ColdOpenTasks>,
     pub(crate) wal_segment_bytes: u64,
     #[cfg(test)]
     pub(crate) journal_publish_hook: Arc<arc_swap::ArcSwapOption<JournalPublishHook>>,

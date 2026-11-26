@@ -151,6 +151,8 @@ pub struct SegmentSet {
     pub(crate) sync_test: super::sync_test_seam::SyncTestSeam,
     #[cfg(test)]
     fail_retry_write: std::sync::atomic::AtomicBool,
+    // Test-only one-shot seal-fsync fault, scoped to this WAL/repository.
+    fail_next_seal_sync: std::sync::atomic::AtomicBool,
 }
 
 /// Format a segment file name from its seq: `NNNNNNNN.wal` (zero-padded 8).
@@ -237,6 +239,7 @@ impl SegmentSet {
                 sync_test: super::sync_test_seam::SyncTestSeam::default(),
                 #[cfg(test)]
                 fail_retry_write: std::sync::atomic::AtomicBool::new(false),
+                fail_next_seal_sync: std::sync::atomic::AtomicBool::new(false),
                 truncate_gate: Arc::new(tokio::sync::Mutex::new(())),
                 #[cfg(test)]
                 truncate_fail_seq: Mutex::new(None),
@@ -366,6 +369,7 @@ impl SegmentSet {
             sync_test: super::sync_test_seam::SyncTestSeam::default(),
             #[cfg(test)]
             fail_retry_write: std::sync::atomic::AtomicBool::new(false),
+            fail_next_seal_sync: std::sync::atomic::AtomicBool::new(false),
             truncate_gate: Arc::new(tokio::sync::Mutex::new(())),
             #[cfg(test)]
             truncate_fail_seq: Mutex::new(None),
@@ -377,6 +381,10 @@ impl SegmentSet {
                 active_seq,
             })),
         })
+    }
+
+    pub(crate) fn arm_fail_next_seal_sync_for_test(&self) {
+        self.fail_next_seal_sync.store(true, Ordering::Release);
     }
 
     #[cfg(test)]
@@ -598,7 +606,7 @@ impl SegmentSet {
             // Test seam (RV-WAL-3B29232E): models the seal fsync failing after
             // the frames were written — exactly the outcome the WAL cannot
             // prove rolled back (tickets go UNKNOWN).
-            if WalSink::take_fail_next_seal_sync_for_test() {
+            if WalSink::take_fail_next_seal_sync_for_test(&self.fail_next_seal_sync) {
                 return Err(DbError::Storage(
                     "SegmentSet injected seal fsync failure".into(),
                 ));

@@ -120,3 +120,50 @@ pub(in crate::engine::server) fn fire_repo_flush_probe() {
         probe();
     }
 }
+
+/// One-shot probe fired at the ENTRY of the store-release stage's zero-budget
+/// branch (`server_handle/core.rs`, `release_budget.is_zero()`). Test-only: a
+/// deadline test that exhausts every stage deadline at once must be able to
+/// PROVE the zero-budget verdict came from this branch and not from the outer
+/// future being abandoned before the stage was ever reached — the advance past
+/// the outer deadline also expires the `timeout_at` in `drain_server`, so
+/// without this rendezvous the branch entry is not guaranteed.
+#[cfg(test)]
+static RELEASE_ZERO_BUDGET_PROBE: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
+
+/// Clears an unfired [`arm_release_zero_budget_probe`]; a probe that fires
+/// removes itself from the slot.
+#[cfg(test)]
+pub(crate) struct ReleaseZeroBudgetProbeGuard;
+
+#[cfg(test)]
+impl Drop for ReleaseZeroBudgetProbeGuard {
+    fn drop(&mut self) {
+        *RELEASE_ZERO_BUDGET_PROBE
+            .lock()
+            .expect("release zero-budget probe") = None;
+    }
+}
+
+/// Arm ONE zero-budget-branch-entry probe.
+#[cfg(test)]
+pub(crate) fn arm_release_zero_budget_probe(
+    probe: impl FnOnce() + Send + 'static,
+) -> ReleaseZeroBudgetProbeGuard {
+    *RELEASE_ZERO_BUDGET_PROBE
+        .lock()
+        .expect("release zero-budget probe") = Some(Box::new(probe));
+    ReleaseZeroBudgetProbeGuard
+}
+
+/// Fire and consume the zero-budget-branch probe, if any.
+#[cfg(test)]
+pub(in crate::engine::server) fn fire_release_zero_budget_probe() {
+    let probe = RELEASE_ZERO_BUDGET_PROBE
+        .lock()
+        .expect("release zero-budget probe")
+        .take();
+    if let Some(probe) = probe {
+        probe();
+    }
+}

@@ -8,3 +8,4 @@ pub mod common;
 pub mod data_shape;
 pub mod lifecycle;
 pub mod pagination;
+pub mod terminal;

@@ -38,7 +38,9 @@ pub(in crate::engine::db_handler) use cancel::CancelPauseTarget;
 pub(in crate::engine::db_handler) use requests::server_busy_response;
 pub(in crate::engine::db_handler) use requests::ActivityRequests;
 
-#[cfg(test)]
+// Unconditional (same `pub(in crate::engine::db_handler)` reach as the
+// definitions): the export-activity projection in `handler/` also names
+// these two types, not only registry tests.
 pub(in crate::engine::db_handler) use requests::{InFlightRequest, RequestEntry};
 
 #[cfg(test)]

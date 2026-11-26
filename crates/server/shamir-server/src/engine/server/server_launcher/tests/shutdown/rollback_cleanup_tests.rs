@@ -5,8 +5,15 @@
 //! Mutant killed: the function's body removed, or its `tracing::error!` level
 //! lowered to debug — the ring captures debug too, so the level assertion is
 //! what fails, not only the "no record at all" case.
+//!
+//! This first test only checks the FORMATTER (`log_rollback_cleanup` given a
+//! hand-built report). The real failed-launch wiring — a launch that fails
+//! AFTER the stores opened, the REAL teardown-produced report, the stage
+//! name, and the stores actually released — is covered by
+//! [`a_real_failed_launch_after_the_stores_open_reports_real_cleanup`] below.
 
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -18,11 +25,18 @@ use shamir_connect::server::lockout::{
 };
 use shamir_connect::server::rate_limit::InMemoryRateLimiter;
 use shamir_db::ShutdownReport;
+use shamir_private_dir::create_private_dir;
 use shamir_test_diag::{ring::shared_ring, try_install_global_tracing_ring};
 use tokio_util::sync::CancellationToken;
 
 use super::rollback_cleanup::{join_meta_snapshot, log_rollback_cleanup};
+use crate::config::{
+    Config, KdfConfig, ListenerConfig, ListenerKind, LoggingConfig, ObservabilityConfig, TlsConfig,
+};
+use crate::db_handler::NodeMode;
 use crate::server::meta_sinks::spawn_meta_snapshot_task;
+use crate::server::server_launcher::audit_teardown::inject_teardown_error;
+use crate::server::{BootstrapMode, ServerLauncher};
 
 #[test]
 fn launch_rollback_cleanup_logs_errors_and_repository_failures() {
@@ -182,4 +196,164 @@ fn rollback_meta_snapshot_join_is_bounded_with_a_saturated_blocking_pool() {
             "the expired join must be logged at ERROR: {records:?}"
         );
     });
+}
+
+/// Generous bound for a real (failed or relaunched) boot and its shutdown.
+const ROLLBACK_BOUND: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// A server config whose data listener binds `127.0.0.1:<port>`; port 0 lets
+/// the OS pick. No fixed observability port, so parallel tests never collide.
+fn rollback_boot_config(data_dir: PathBuf, port: u16) -> Config {
+    Config {
+        data_dir: data_dir.clone(),
+        logging: LoggingConfig {
+            level: "warn".into(),
+            slow_query_threshold_ms: 0,
+            file: None,
+            flush_interval_ms: 2000,
+        },
+        durability: Default::default(),
+        transactions: Default::default(),
+        tokens: Default::default(),
+        kdf_defaults: KdfConfig {
+            memory_kb: 19_456,
+            time: 2,
+            parallelism: 1,
+            argon2_version: 0x13,
+        },
+        argon2_concurrent_max: 64,
+        listeners: vec![ListenerConfig {
+            kind: ListenerKind::Http,
+            addr: format!("127.0.0.1:{port}"),
+            profile: None,
+            http: crate::boot::config::HttpListenerSettings {
+                tls: Some(false),
+                ..Default::default()
+            },
+            path: None,
+            kdf_override: None,
+            browser_origin_allowlist: Vec::new(),
+        }],
+        tls: TlsConfig {
+            cert_path: data_dir.join("cert.pem"),
+            key_path: data_dir.join("key.pem"),
+        },
+        security: crate::config::SecurityConfig::default(),
+        audit: Default::default(),
+        observability: ObservabilityConfig {
+            addr: "127.0.0.1:0".into(),
+            allow_public_metrics: false,
+        },
+        replication: None,
+        backup: None,
+    }
+}
+
+/// A REAL failed launch whose failure fires AFTER the stores were opened: the
+/// HTTP listener cannot bind because the test already holds its port, so
+/// `launch()` rolls back through the shared audit teardown and
+/// `log_rollback_cleanup("listener bind", ..)` with the REAL cleanup report
+/// object. A teardown failure after the stores opened is not deterministically
+/// reproducible through the bind failure alone, so the real report is given
+/// one typed error through the cfg(test) seam INSIDE `teardown_audit` itself,
+/// added to the teardown's own report before it returns — so a rollback arm
+/// that discards teardown's entries or logs a different report object fails
+/// the log assertion. The teardown's own failure-to-entry mapping is pinned by
+/// the audit-teardown tests; this test pins the report-object identity, the
+/// logging path, the stage name, the boot error and the store release.
+///
+/// Mutants killed: the rollback logging a FABRICATED report instead of the
+/// real one; the cleanup log dropped entirely; the boot error swallowed; and
+/// the rollback leaking the stores (the relaunch then cannot take the
+/// data_dir's fjall locks and fails).
+#[test]
+fn a_real_failed_launch_after_the_stores_open_reports_real_cleanup() {
+    let _ = try_install_global_tracing_ring();
+    let blocker = std::net::TcpListener::bind("127.0.0.1:0").expect("bind the port blocker");
+    let port = blocker.local_addr().expect("blocker address").port();
+    let _injection = inject_teardown_error(
+        "injected rollback teardown failure after the stores opened".to_string(),
+    );
+
+    let temp = tempfile::tempdir().expect("test root");
+    let data_dir = temp.path().join("data");
+    create_private_dir(&data_dir).expect("private data directory");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime");
+
+    let deadline = std::time::Instant::now() + ROLLBACK_BOUND;
+
+    let boot_data_dir = data_dir.clone();
+    let launch = runtime.block_on(async {
+        tokio::time::timeout_at(
+            tokio::time::Instant::from_std(deadline),
+            Box::pin(
+                ServerLauncher {
+                    config: rollback_boot_config(boot_data_dir, port),
+                    bootstrap: BootstrapMode::Skip,
+                    node_mode: NodeMode::ReadWrite,
+                }
+                .launch(),
+            ),
+        )
+        .await
+    });
+    let launch = launch.expect("failed launch bounded");
+    let error = match launch {
+        Ok(_handle) => panic!("the held port must fail the launch after the stores opened"),
+        Err(error) => error,
+    };
+    assert!(
+        matches!(&error, crate::server::BootError::Bind(message)
+            if message.contains(&port.to_string())),
+        "the launch must fail on the listener bind with the held port: {error}"
+    );
+
+    let records = shared_ring().snapshot();
+    assert!(
+        records.iter().any(|record| record.level == "ERROR"
+            && record.message.contains("launch rollback cleanup error")
+            && record.message.contains("stage=\"listener bind\"")
+            && record
+                .message
+                .contains("error=\"injected rollback teardown failure after the stores opened\"")),
+        "the REAL cleanup report's error must be logged at ERROR for stage \
+         \"listener bind\": {records:?}"
+    );
+
+    // The stores opened before the failure and must be RELEASED by the
+    // rollback: a relaunch on the same data_dir takes the fjall locks again.
+    let relaunch_data_dir = data_dir.clone();
+    let handle = runtime
+        .block_on(async {
+            tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                Box::pin(
+                    ServerLauncher {
+                        config: rollback_boot_config(relaunch_data_dir, 0),
+                        bootstrap: BootstrapMode::Skip,
+                        node_mode: NodeMode::ReadWrite,
+                    }
+                    .launch(),
+                ),
+            )
+            .await
+        })
+        .expect("relaunch bounded")
+        .expect("the relaunch must take the stores back: the rollback released them");
+    let clean = runtime
+        .block_on(async {
+            tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                crate::runtime::drain_server(handle, std::time::Duration::from_secs(30)),
+            )
+            .await
+        })
+        .expect("relaunch shutdown bounded");
+    assert!(
+        clean.is_clean(),
+        "the relaunch shutdown must be clean: {clean:?}"
+    );
 }

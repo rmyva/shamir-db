@@ -19,7 +19,7 @@ use tempfile::TempDir;
 
 use super::super::super::metrics::{
     arm_action, backup_metrics_snapshot, enable_schedule, install_backup_meta_store, note_success,
-    set_export_last_success_for_test, ArmingAction, ClockOverride,
+    set_export_last_success_for_test, ArmingAction, ClockOverride, ScheduleInfo, ScheduleState,
 };
 use crate::server_meta::ServerMetaStore;
 
@@ -275,6 +275,73 @@ fn unreadable_armed_at_row_drives_the_production_arming_path_without_a_write() {
     assert!(
         dir.path().exists(),
         "the store stays alive for the whole test"
+    );
+}
+
+/// The next-run cell keeps the runner's u128 wall-clock stamp VERBATIM: all
+/// upstream arithmetic is u128 and the runner's publish closure is the only
+/// u64 adapter (and it no longer clamps), so a boundary value must be stored
+/// verbatim, `0` must publish "no next run", and the generation fence must
+/// reject a stale scheduler's write. The unclamped u64 overflow itself is
+/// proven end-to-end through the runner in
+/// `two_registry_sections::huge_interval_next_run_survives_u128_to_the_cell_unclamped`.
+///
+/// Mutants caught: clamping to `u128::MAX - 1` (or any sentinel) at the cell;
+/// dropping the generation fence (`update(None, …)`), which would let an
+/// older scheduler clobber the live schedule's next run.
+#[test]
+fn next_run_cell_is_the_u64_boundary_and_fences_stale_generations() {
+    let state = ScheduleState::default();
+    let generation = state.install_schedule_info(ScheduleInfo {
+        interval_secs: 60,
+        window: None,
+        keep_last: 1,
+        run_on_start: false,
+    });
+    assert_eq!(generation, 1, "generations start at 1");
+    state.note_next_run_unix_ns(generation, u128::MAX);
+    assert_eq!(
+        state
+            .snapshot()
+            .expect("schedule installed")
+            .next_run_unix_ns,
+        Some(u128::MAX),
+        "the boundary value is stored verbatim, not clamped or narrowed"
+    );
+    state.note_next_run_unix_ns(generation, 0);
+    assert_eq!(
+        state
+            .snapshot()
+            .expect("schedule installed")
+            .next_run_unix_ns,
+        None,
+        "0 publishes no next run"
+    );
+
+    let newer = state.install_schedule_info(ScheduleInfo {
+        interval_secs: 60,
+        window: None,
+        keep_last: 1,
+        run_on_start: false,
+    });
+    assert_eq!(newer, 2, "generations are per-registry and monotonic");
+    state.note_next_run_unix_ns(generation, 7);
+    assert_eq!(
+        state
+            .snapshot()
+            .expect("schedule installed")
+            .next_run_unix_ns,
+        None,
+        "a stale generation's next-run write must be rejected"
+    );
+    state.note_next_run_unix_ns(newer, u128::MAX - 1);
+    assert_eq!(
+        state
+            .snapshot()
+            .expect("schedule installed")
+            .next_run_unix_ns,
+        Some(u128::MAX - 1),
+        "the live generation's write applies"
     );
 }
 

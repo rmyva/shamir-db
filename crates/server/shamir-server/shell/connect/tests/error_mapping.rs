@@ -60,6 +60,93 @@ fn token_channel_denied_is_denied() {
     assert_eq!(request_error(error), ShellError::Denied);
 }
 
+#[test]
+fn online_export_server_codes_have_exact_shell_outcomes() {
+    for (code, expected, stable_code, exit) in [
+        (
+            "online_export_already_running",
+            ShellError::ExportBusy,
+            "online_export_already_running",
+            5,
+        ),
+        (
+            "export_scope_denied",
+            ShellError::Denied,
+            "permission_denied",
+            4,
+        ),
+        (
+            "online_export_invalid_scope",
+            ShellError::Server,
+            "server_error",
+            5,
+        ),
+        (
+            "online_export_unsupported",
+            ShellError::Server,
+            "server_error",
+            5,
+        ),
+        (
+            "online_export_scope_unavailable",
+            ShellError::Server,
+            "server_error",
+            5,
+        ),
+        (
+            "online_export_invalid_form",
+            ShellError::Server,
+            "server_error",
+            5,
+        ),
+        ("internal_error", ShellError::Server, "server_error", 5),
+        (
+            "server_shutting_down",
+            ShellError::Server,
+            "server_error",
+            5,
+        ),
+        (
+            "online_export_not_found",
+            ShellError::ExportNotFound,
+            "online_export_not_found",
+            5,
+        ),
+        (
+            "online_export_unavailable",
+            ShellError::ExportUnavailable,
+            "online_export_unavailable",
+            5,
+        ),
+        (
+            "online_export_not_configured",
+            ShellError::ExportUnavailable,
+            "online_export_unavailable",
+            5,
+        ),
+    ] {
+        let mapped = server_code(code);
+        assert_eq!(mapped, expected, "wrong mapping for {code}");
+        assert_eq!(
+            mapped.code(),
+            stable_code,
+            "wrong stable shell code for {code}"
+        );
+        assert_eq!(mapped.exit(), exit, "wrong exit class for {code}");
+        assert_eq!(
+            mapped.message(),
+            match expected {
+                ShellError::Denied => "permission denied by the server",
+                ShellError::ExportBusy => "an online export job is already running on this server; wait for it to finish or cancel it",
+                ShellError::ExportNotFound => "no online export job is visible to this session",
+                ShellError::ExportUnavailable => "online export is not configured or unavailable on this node",
+                _ => "the operation failed on the server",
+            },
+            "wrong fixed local message for {code}"
+        );
+    }
+}
+
 /// The ACL-mutation refusals keep their OWN typed error (and therefore their
 /// own stable code and exit) instead of collapsing into `Server`; an
 /// unlisted code still maps to `Server`, so the allowlist stays closed.
@@ -69,6 +156,15 @@ fn acl_mutation_codes_are_typed() {
     assert_eq!(server_code("hmac_mismatch"), ShellError::HmacMismatch);
     assert_eq!(server_code("hmac_required"), ShellError::HmacRequired);
     assert_eq!(server_code("unknown_db"), ShellError::UnknownDb);
+    assert_eq!(
+        server_code("online_export_already_running"),
+        ShellError::ExportBusy
+    );
+    assert_eq!(server_code("export_scope_denied"), ShellError::Denied);
+    assert_eq!(
+        server_code("online_export_not_found"),
+        ShellError::ExportNotFound
+    );
     assert_eq!(
         server_code("not_an_allowlisted_code"),
         ShellError::Server,

@@ -860,5 +860,5 @@ fn serve(mode: shamir_query_types::durability::ReplicationServe) -> &'static str
 }
 
 #[cfg(test)]
-#[path = "tests/state_projection_tests.rs"]
+#[path = "../tests/commands/state_projection_tests.rs"]
 mod state_projection_tests;
