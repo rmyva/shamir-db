@@ -459,6 +459,11 @@ CI is segmented into two tiers to keep the shared runner pool responsive
 * **test-build — the compile budget, split from the run.** The full matrix
   compiles selected lib test binaries once per OS in `test-build`, then packs
   them for the lib `test` job. Integration builds its selected targets in place.
+* **Alert rules.** The composite action `.github/actions/alert-rules` runs
+  `promtool check rules` over `deploy/alerts/*.rules.yml` from a digest-pinned
+  `prom/prometheus` image in the `fast` and `fmt` jobs, only when
+  `deploy/alerts/**` changed since the base (manual dispatch and the weekly
+  schedule always run it). Raise the image digest in the action deliberately.
 * All three workflows cancel superseded PR runs via `concurrency`.
 * **Explicit triggers of the FULL tier on a draft (the ONLY two).**
   1. The commit-message marker: the line `[ci full]` alone on its own line

@@ -1,0 +1,39 @@
+name: 'Prometheus alert rules'
+description: >
+  Validates deploy/alerts/*.rules.yml with `promtool check rules` from a
+  digest-pinned prom/prometheus image (v3.16.0 manifest list). Runs only when
+  something under deploy/alerts changed since the base (the merge base on a
+  pull request, the previous tip on a master push); manual dispatch and the
+  weekly schedule always run it. Needs a full-history checkout. Raise the
+  digest deliberately.
+
+runs:
+  using: composite
+  steps:
+    - name: promtool check rules
+      shell: bash
+      env:
+        BEFORE: ${{ github.event.before }}
+        IMAGE: prom/prometheus@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06
+      run: |
+        set -euo pipefail
+        case "$GITHUB_EVENT_NAME" in
+          push) base="$BEFORE" ;;
+          pull_request) git fetch --no-tags origin master; base=$(git merge-base origin/master HEAD) ;;
+          *) base="" ;;
+        esac
+        if [ -n "$base" ] && git diff --quiet "$base" HEAD -- deploy/alerts; then
+          echo "alert rules: no change under deploy/alerts since $base, skipped"
+          exit 0
+        fi
+        shopt -s nullglob
+        files=(deploy/alerts/*.rules.yml)
+        if [ "${#files[@]}" -eq 0 ]; then
+          echo "alert rules: no *.rules.yml files found, refusing a vacuous pass" >&2
+          exit 1
+        fi
+        args=()
+        for f in "${files[@]}"; do
+          args+=("/rules/$(basename "$f")")
+        done
+        docker run --rm --entrypoint /bin/promtool -v "$PWD/deploy/alerts:/rules:ro" "$IMAGE" check rules "${args[@]}"

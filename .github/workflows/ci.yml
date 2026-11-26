@@ -205,6 +205,10 @@ jobs:
       # unconditionally, including docs-only diffs (which skip clippy/tests).
       - name: layout check
         run: python3 -I scripts/ci/check_layout.py
+      # Prometheus rules (deploy/alerts): `promtool check rules` from a
+      # digest-pinned image, only when deploy/alerts changed since the base
+      # (manual dispatch and the weekly schedule always run it).
+      - uses: ./.github/actions/alert-rules
       - name: wasm32 guest check (matrix flag)
         if: needs.affected.outputs.run_wasm32 == 'true'
         shell: bash
@@ -264,6 +268,9 @@ jobs:
     if: needs.plan.outputs.full == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # full history: the alert rules step needs the merge base
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@eb0a44f258ec94ab9ee0f14f998f4cf332c25d3a  # 1.95.0
         with:
           components: rustfmt
@@ -276,6 +283,10 @@ jobs:
       # cover every PR and every master push).
       - name: layout check
         run: python3 -I scripts/ci/check_layout.py
+      # Prometheus rules (deploy/alerts): `promtool check rules` from a
+      # digest-pinned image, only when deploy/alerts changed since the base
+      # (manual dispatch and the weekly schedule always run it).
+      - uses: ./.github/actions/alert-rules
 
   # Lint on ubuntu and windows on every PR (macOS joins on workflow_dispatch
   # and the weekly schedule: CI-05, the macOS runner queue is the bottleneck).
