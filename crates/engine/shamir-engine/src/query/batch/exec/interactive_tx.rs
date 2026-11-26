@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use crate::query::batch::authorized::Authorized;
 use crate::query::batch::batch_execute::{execute_plan_tx, filter_results};
 use crate::query::batch::batch_validate::{
@@ -9,6 +7,7 @@ use crate::query::batch::exec_scope::ExecScope;
 use crate::query::batch::executor_traits::{AdminExecutor, BatchResolver, FunctionInvoker};
 #[cfg(test)]
 use crate::query::batch::BatchRequest;
+use crate::query::batch::BatchTxPort;
 use crate::query::batch::{BatchError, BatchResponse};
 #[cfg(test)]
 use shamir_types::access::Actor;
@@ -43,10 +42,10 @@ use shamir_types::access::Actor;
 /// held until commit/rollback — dropping it early lets GC reclaim versions
 /// the open tx still needs (see `RepoCore::begin_tx`).
 pub async fn open_interactive_tx(
-    repo: &crate::tx::RepoCore,
+    repo: &impl BatchTxPort,
     iso: shamir_tx::IsolationLevel,
 ) -> shamir_storage::error::DbResult<(shamir_tx::TxContext, shamir_tx::SnapshotGuard)> {
-    repo.begin_tx(iso).await
+    repo.begin_interactive_batch(iso).await
 }
 
 /// EXECUTE one batch inside an already-open interactive tx, WITHOUT
@@ -171,8 +170,8 @@ pub(crate) async fn execute_in_open_tx_unchecked(
 /// caller only AFTER this returns — the snapshot must stay alive through
 /// commit so SSI read-set validation and history reads remain correct.
 pub async fn commit_interactive_tx(
-    repo: &crate::tx::RepoCore,
+    repo: &impl BatchTxPort,
     tx: shamir_tx::TxContext,
 ) -> Result<crate::tx::TxOutcome, crate::tx::CommitError> {
-    crate::tx::commit::commit_tx_with_options(tx, repo, repo.commit_visibility_wait()).await
+    repo.commit_interactive_batch(tx).await
 }

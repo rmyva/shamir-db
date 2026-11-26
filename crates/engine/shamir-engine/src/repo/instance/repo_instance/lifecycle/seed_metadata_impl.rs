@@ -9,7 +9,7 @@ impl RepoInstance {
     pub async fn flush_seed_metadata(&self) -> DbResult<()> {
         self.repo_interner().await?.persist().await?;
         self.core
-            .repo
+            .repo()
             .store_get("__interner__")
             .await?
             .flush()

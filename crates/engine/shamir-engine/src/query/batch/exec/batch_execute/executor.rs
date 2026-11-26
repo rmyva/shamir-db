@@ -17,6 +17,7 @@ use crate::query::batch::query_runner::QueryRunner;
 use crate::query::batch::query_runner::{build_resolved_refs, resolve_skip, skipped_query_result};
 #[cfg(test)]
 use crate::query::batch::result_size::ResultSize;
+use crate::query::batch::BatchTxPort;
 #[cfg(test)]
 use crate::query::batch::QueryEntry;
 use crate::query::batch::{BatchError, BatchOp, BatchPlan, BatchRequest, BatchResponse};
@@ -253,7 +254,7 @@ async fn flush_if_synced_durability(
                 message: format!("resolve_repo({}): {}", repo_name, e),
                 code: None,
             })?;
-        repo.synced_flush()
+        BatchTxPort::synced_flush(&repo)
             .await
             .map_err(|e| BatchError::QueryError {
                 alias: String::new(),
@@ -269,11 +270,13 @@ async fn flush_if_synced_durability(
         // coverage before fsync. Success covers that captured generation;
         // R advances only through covered predecessors. Successful sync
         // alone does not guarantee immediate replication serving across holes.
-        repo.sync_wal().await.map_err(|e| BatchError::QueryError {
-            alias: String::new(),
-            message: format!("synced wal {}/{}: {}", db_name, repo_name, e),
-            code: None,
-        })?;
+        BatchTxPort::sync_wal(&repo)
+            .await
+            .map_err(|e| BatchError::QueryError {
+                alias: String::new(),
+                message: format!("synced wal {}/{}: {}", db_name, repo_name, e),
+                code: None,
+            })?;
     }
     Ok(())
 }

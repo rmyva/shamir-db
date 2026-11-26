@@ -155,7 +155,7 @@ impl<'a> QueryRunner<'a> {
                     &repo,
                     tx,
                     alias,
-                    wait.unwrap_or_else(|| repo.commit_visibility_wait()),
+                    wait.unwrap_or_else(|| repo.default_visibility_wait()),
                     self.scope.cancel_handle().cloned(),
                 )
                 .await?;
@@ -372,7 +372,7 @@ impl<'a> QueryRunner<'a> {
                         &repo,
                         tx,
                         alias,
-                        wait.unwrap_or_else(|| repo.commit_visibility_wait()),
+                        wait.unwrap_or_else(|| repo.default_visibility_wait()),
                         self.scope.cancel_handle().cloned(),
                     )
                     .await?;
@@ -573,7 +573,7 @@ impl<'a> QueryRunner<'a> {
                         &repo,
                         tx,
                         alias,
-                        wait.unwrap_or_else(|| repo.commit_visibility_wait()),
+                        wait.unwrap_or_else(|| repo.default_visibility_wait()),
                         self.scope.cancel_handle().cloned(),
                     )
                     .await?;
@@ -707,7 +707,7 @@ impl<'a> QueryRunner<'a> {
                     &repo,
                     tx,
                     alias,
-                    wait.unwrap_or_else(|| repo.commit_visibility_wait()),
+                    wait.unwrap_or_else(|| repo.default_visibility_wait()),
                     self.scope.cancel_handle().cloned(),
                 )
                 .await?;

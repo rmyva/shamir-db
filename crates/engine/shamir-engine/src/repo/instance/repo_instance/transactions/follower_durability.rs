@@ -16,13 +16,15 @@ impl RepoInstance {
     }
 
     pub fn validate_repo_wide_atomic_batch(&self, destination: &str) -> DbResult<()> {
-        self.core.repo.validate_repo_wide_atomic_batch(destination)
+        self.core
+            .repo()
+            .validate_repo_wide_atomic_batch(destination)
     }
 
     /// Raw named-store access, test-only: every caller lives under `tests/`,
     /// so this would be dead code in the non-test build.
     #[cfg(all(test, feature = "fjall"))]
     pub(crate) async fn raw_store(&self, name: &str) -> DbResult<Arc<dyn Store>> {
-        self.core.repo.store_get(name).await
+        self.core.repo().store_get(name).await
     }
 }

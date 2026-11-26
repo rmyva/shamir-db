@@ -142,13 +142,13 @@ impl RepoInstance {
     /// Catalogue install; see `TableCatalog`.
     #[cfg(feature = "test-util")]
     pub fn install_table_for_test(&self, name: &str, table: TableManager) {
-        self.core.catalog.install_table_for_test(name, table)
+        self.core.catalog().install_table_for_test(name, table)
     }
 
     /// Test-only: direct cell-map size (cold-resolver retention probe).
     #[cfg(feature = "test-util")]
     pub fn table_cell_count(&self) -> usize {
-        self.core.catalog.table_cell_count()
+        self.core.catalog().table_cell_count()
     }
 
     /// Catalogue read; see `TableCatalog`.
@@ -175,7 +175,7 @@ impl RepoInstance {
         let Some((_data, info, _history)) = self.core.mapped_table_store_names(table_name) else {
             return Ok(None);
         };
-        let Some(store) = self.core.repo.store_get_existing(&info).await? else {
+        let Some(store) = self.core.repo().store_get_existing(&info).await? else {
             return Ok(None);
         };
         crate::validator::persistence::load_validators_metadata(&store).await
@@ -200,7 +200,7 @@ impl RepoInstance {
     /// refusals (schema activation, table rename).
     pub fn table_validator_bindings_in_doubt(&self, table_name: &str) -> bool {
         self.core
-            .catalog
+            .catalog()
             .initialized_table(table_name)
             .is_some_and(|table| table.validator_bindings_in_doubt())
     }
@@ -212,12 +212,12 @@ impl RepoInstance {
 
     /// Catalogue read; see `TableCatalog`.
     pub fn table_config(&self, name: &str) -> Option<TableConfig> {
-        self.core.catalog.table_config(name)
+        self.core.catalog().table_config(name)
     }
 
     /// Live registration identity; see `TableCatalog::table_registration`.
     pub fn table_registration(&self, name: &str) -> Option<TableRegistration> {
-        self.core.catalog.table_registration(name)
+        self.core.catalog().table_registration(name)
     }
 
     #[cfg(test)]
@@ -228,12 +228,12 @@ impl RepoInstance {
 
     /// Catalogue read; see `TableCatalog`.
     pub fn table_count(&self) -> usize {
-        self.core.catalog.table_count()
+        self.core.catalog().table_count()
     }
 
     /// Catalogue read; see `TableCatalog`.
     pub async fn degraded_index_count(&self) -> u64 {
-        self.core.catalog.degraded_index_count().await
+        self.core.catalog().degraded_index_count().await
     }
 
     /// Rename table stores using the repository's normal write admission.
@@ -256,7 +256,7 @@ impl RepoInstance {
     pub async fn rename_table_stores(&self, from: &str, to: &str) -> DbResult<bool> {
         let permit = self
             .core
-            .durability_handle
+            .durability_handle()
             .write_domain
             .admit()
             .await
@@ -268,7 +268,7 @@ impl RepoInstance {
     pub async fn repo_identity(&self) -> DbResult<RepoIdentity> {
         let permit = self
             .core
-            .durability_handle
+            .durability_handle()
             .write_domain
             .admit()
             .await
@@ -282,10 +282,15 @@ impl RepoInstance {
         permit: &RepoWritePermit,
     ) -> DbResult<RepoIdentity> {
         self.core
-            .durability_handle
+            .durability_handle()
             .write_domain
             .debug_check_permit(permit);
-        let _guard = self.core.durability_handle.marker_write_mutex.lock().await;
+        let _guard = self
+            .core
+            .durability_handle()
+            .marker_write_mutex
+            .lock()
+            .await;
         let store = self.tx_info_store().await?;
         RepoIdentity::load_or_create(&store).await
     }
@@ -294,7 +299,7 @@ impl RepoInstance {
     pub async fn bump_history_epoch(&self) -> DbResult<RepoIdentity> {
         let permit = self
             .core
-            .durability_handle
+            .durability_handle()
             .write_domain
             .admit()
             .await
@@ -308,7 +313,7 @@ impl RepoInstance {
     pub async fn apply_restore_operation(&self, operation: [u8; 16]) -> DbResult<RepoIdentity> {
         let permit = self
             .core
-            .durability_handle
+            .durability_handle()
             .write_domain
             .admit()
             .await
@@ -324,10 +329,15 @@ impl RepoInstance {
         permit: &RepoWritePermit,
     ) -> DbResult<RepoIdentity> {
         self.core
-            .durability_handle
+            .durability_handle()
             .write_domain
             .debug_check_permit(permit);
-        let _guard = self.core.durability_handle.marker_write_mutex.lock().await;
+        let _guard = self
+            .core
+            .durability_handle()
+            .marker_write_mutex
+            .lock()
+            .await;
         let store = self.tx_info_store().await?;
         RepoIdentity::bump(&store, Some(operation)).await
     }
@@ -376,7 +386,7 @@ impl RepoInstance {
     {
         let permit = self
             .core
-            .durability_handle
+            .durability_handle()
             .write_domain
             .admit()
             .await
@@ -388,7 +398,7 @@ impl RepoInstance {
             ));
         }
         let (source, destination, destination_identity_matches) =
-            self.core.catalog.config_pair_matches(from, to, &config);
+            self.core.catalog().config_pair_matches(from, to, &config);
         let source_matches = source
             .as_ref()
             .is_some_and(|source| source.store_id.as_ref() == expected_source_id);
@@ -467,16 +477,16 @@ impl RepoInstance {
     {
         let permit = self
             .core
-            .durability_handle
+            .durability_handle()
             .write_domain
             .admit()
             .await
             .map_err(|error| DbError::Internal(error.to_string()))?;
         self.check_rename_pair(from, to)?;
-        if !self.core.catalog.has_table(from) {
+        if !self.core.catalog().has_table(from) {
             return Ok(false);
         }
-        if self.core.catalog.has_table(to) {
+        if self.core.catalog().has_table(to) {
             return Err(DbError::Validation(format!("Table '{to}' already exists")));
         }
         let pair = self.take_rename_fence(from, to);
@@ -554,7 +564,7 @@ impl RepoInstance {
         permit: &RepoWritePermit,
     ) -> DbResult<bool> {
         self.core
-            .durability_handle
+            .durability_handle()
             .write_domain
             .debug_check_permit(permit);
         // F-68 (#895) cluster D / task #124 diagnostic instrumentation:
@@ -562,10 +572,10 @@ impl RepoInstance {
         let rts_started = std::time::Instant::now();
         log::debug!("rename_table_stores: enter from={from} to={to}");
         self.check_rename_pair(from, to)?;
-        if !self.core.catalog.has_table(from) {
+        if !self.core.catalog().has_table(from) {
             return Ok(false);
         }
-        if self.core.catalog.has_table(to) {
+        if self.core.catalog().has_table(to) {
             return Err(DbError::Validation(format!("Table '{to}' already exists")));
         }
         self.check_table_rename_fence(from)?;
@@ -611,13 +621,13 @@ impl RepoInstance {
         freeze: &RenameFreeze,
     ) -> DbResult<Option<TableConfig>> {
         self.core
-            .durability_handle
+            .durability_handle()
             .write_domain
             .debug_check_permit(permit);
-        let Some(config) = self.core.catalog.table_config(from) else {
+        let Some(config) = self.core.catalog().table_config(from) else {
             return Ok(None);
         };
-        if self.core.catalog.has_table(to) {
+        if self.core.catalog().has_table(to) {
             return Err(DbError::Validation(format!("Table '{to}' already exists")));
         }
         // 0. Force-drain the source table's MVCC overlay into
@@ -634,7 +644,7 @@ impl RepoInstance {
         // and the drainer's `iter_sync` over this map parks its thread on it,
         // so holding it across the awaits below wedges a current-thread
         // runtime (#589 class).
-        if let Some(mvcc) = self.core.catalog.mvcc_for_table(from) {
+        if let Some(mvcc) = self.core.catalog().mvcc_for_table(from) {
             // F-68 (#895) cluster D / task #124: timestamped before/after
             // around `drain_to_history` — this synchronously walks the overlay
             // and writes each drained version to `__history__`, the one
@@ -669,7 +679,7 @@ impl RepoInstance {
         new_config.validate_store_name()?;
         let destination_names =
             super::table_store::table_store_names(to, new_config.store_id.as_ref());
-        let existing = self.core.repo.stores_list().await?;
+        let existing = self.core.repo().stores_list().await?;
         if existing.iter().any(|name| {
             [
                 destination_names.data.as_str(),
@@ -683,19 +693,19 @@ impl RepoInstance {
             )));
         }
         super::table_store::copy_table_store(
-            &self.core.repo,
+            &self.core.repo(),
             &source_names.data,
             &destination_names.data,
         )
         .await?;
         super::table_store::copy_table_store(
-            &self.core.repo,
+            &self.core.repo(),
             &source_names.info,
             &destination_names.info,
         )
         .await?;
         super::table_store::copy_table_store(
-            &self.core.repo,
+            &self.core.repo(),
             &source_names.history,
             &destination_names.history,
         )
@@ -711,7 +721,7 @@ impl RepoInstance {
         permit: &RepoWritePermit,
     ) -> DbResult<()> {
         self.core
-            .durability_handle
+            .durability_handle()
             .write_domain
             .debug_check_permit(permit);
         let to = config.name.clone();
@@ -720,10 +730,10 @@ impl RepoInstance {
                 "rename source and destination must differ".into(),
             ));
         }
-        if self.core.catalog.has_table(&to) {
+        if self.core.catalog().has_table(&to) {
             return Err(DbError::Validation(format!("Table '{to}' already exists")));
         }
-        if !self.core.catalog.has_table(from) {
+        if !self.core.catalog().has_table(from) {
             return Err(DbError::NotFound(format!("Table '{from}' not found")));
         }
         self.remove_table(from, permit);

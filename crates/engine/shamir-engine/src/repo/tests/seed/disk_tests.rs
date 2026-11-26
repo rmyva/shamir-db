@@ -104,7 +104,7 @@ async fn disk_cold_reopen_preserves_receipt_counts_bindings_and_local_floor() {
     );
     assert_eq!(cold.replication_bookmark().await.unwrap(), 73);
     assert_eq!(cold.table_config("items").unwrap().store_id, source_item_id);
-    let stores = cold.core.repo.stores_list().await.unwrap();
+    let stores = cold.core.repo().stores_list().await.unwrap();
     assert!(stores
         .iter()
         .any(|name| name.starts_with("__history__items--")));

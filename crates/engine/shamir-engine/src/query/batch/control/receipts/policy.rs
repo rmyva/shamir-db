@@ -71,7 +71,7 @@ pub(in crate::query::batch) async fn validate(
                 // execution reports the real error where it always did.
                 if let Ok(repo) = resolver.resolve_repo(repo_name).await {
                     bounded |= matches!(
-                        repo.commit_visibility_wait(),
+                        repo.default_visibility_wait(),
                         VisibilityWait::Bounded { .. }
                     );
                 }
@@ -82,7 +82,7 @@ pub(in crate::query::batch) async fn validate(
                 if wait.is_none() {
                     if let Ok(repo) = resolver.resolve_repo(&call.repo).await {
                         bounded |= matches!(
-                            repo.commit_visibility_wait(),
+                            repo.default_visibility_wait(),
                             VisibilityWait::Bounded { .. }
                         );
                     }

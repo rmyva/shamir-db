@@ -7,40 +7,14 @@ use crate::repo::repo_instance::RepoInstance;
 use crate::repo::repo_types::BoxRepo;
 use crate::table::table_manager::table_token_for;
 use crate::table::{TableConfig, TableManager};
-use shamir_storage::error::{DbError, DbResult};
+use crate::tx::test_seams::TableInitHook;
+use shamir_storage::error::DbError;
 use shamir_storage::storage_in_memory::{InMemoryRepo, InMemoryStore};
 use shamir_storage::types::Store;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Notify;
 use tokio::time::timeout;
-
-/// Per-instance, one-shot setup seam; Notify has one waiter per direction.
-/// `notify_one` stores a permit even if the receiver has not polled yet.
-pub(crate) struct TableInitHook {
-    entered: Notify,
-    resume: Notify,
-    fail: bool,
-}
-
-impl TableInitHook {
-    fn new(fail: bool) -> Arc<Self> {
-        Arc::new(Self {
-            entered: Notify::new(),
-            resume: Notify::new(),
-            fail,
-        })
-    }
-
-    pub(crate) async fn run(&self) -> DbResult<()> {
-        if self.fail {
-            return Err(DbError::Internal("B09 injected setup failure".into()));
-        }
-        self.entered.notify_one();
-        self.resume.notified().await;
-        Ok(())
-    }
-}
 
 fn make_repo() -> RepoInstance {
     RepoInstance::new(
@@ -112,7 +86,7 @@ async fn cancelled_caller_keeps_cold_open_admitted_until_publication() {
     repo.core.table_init_hook.store(Some(Arc::clone(&hook)));
     let worker_repo = repo.clone();
     let worker = tokio::spawn(async move { worker_repo.get_table("orders").await });
-    timeout(DEADLINE, hook.entered.notified()).await.unwrap();
+    timeout(DEADLINE, hook.wait_entered()).await.unwrap();
     worker.abort();
     let outcome = timeout(DEADLINE, worker).await.unwrap();
     assert!(matches!(outcome, Err(error) if error.is_cancelled()));
@@ -123,15 +97,15 @@ async fn cancelled_caller_keeps_cold_open_admitted_until_publication() {
         "caller cancellation must not release the cold open's permit"
     );
     assert_unregistered(&repo);
-    assert!(repo.core.catalog.initialized_table("orders").is_none());
+    assert!(repo.core.catalog().initialized_table("orders").is_none());
 
-    hook.resume.notify_one();
+    hook.resume();
     let permit = timeout(DEADLINE, next_admission).await.unwrap().unwrap();
     // No retry has run yet: the cancelled caller's open must have published
     // a coherent manager before releasing admission.
     let published = repo
         .core
-        .catalog
+        .catalog()
         .initialized_table("orders")
         .expect("cold open must publish before releasing admission");
     assert_coherent(&repo, &published);
@@ -159,14 +133,14 @@ async fn retired_initializer_cannot_disrupt_replacement() {
     repo.core.table_init_hook.store(Some(Arc::clone(&hook)));
     let worker_repo = repo.clone();
     let worker = tokio::spawn(async move { worker_repo.get_table("orders").await });
-    hook.entered.notified().await;
+    hook.wait_entered().await;
     assert!(repo.remove_table_for_test("orders"));
     repo.add_table_for_test(TableConfig::new("orders"));
     let replacement_repo = repo.clone();
     let mut replacement = Box::pin(replacement_repo.get_table("orders"));
     assert!(futures::poll!(replacement.as_mut()).is_pending());
     contended.notified().await;
-    hook.resume.notify_one();
+    hook.resume();
     let result = worker.await.unwrap();
     assert!(matches!(
         result,
@@ -192,9 +166,9 @@ async fn dropped_config_rolls_back_retired_publication() {
     repo.core.table_init_hook.store(Some(Arc::clone(&hook)));
     let worker_repo = repo.clone();
     let worker = tokio::spawn(async move { worker_repo.get_table("orders").await });
-    hook.entered.notified().await;
+    hook.wait_entered().await;
     assert!(repo.remove_table_for_test("orders"));
-    hook.resume.notify_one();
+    hook.resume();
     assert!(matches!(worker.await.unwrap(), Err(DbError::NotFound(_))));
     assert_unregistered(&repo);
     repo.add_table_for_test(TableConfig::new("orders"));

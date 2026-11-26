@@ -327,7 +327,7 @@ impl TableResolver for BoundedResolver {
 impl BatchResolver for BoundedResolver {
     async fn resolve_repo(&self, name: &str) -> DbResult<crate::tx::RepoCore> {
         let mut core = self.0.resolve_repo(name).await?;
-        core.horizon.set_commit_visibility_wait(STATUS);
+        core.set_commit_visibility_wait(STATUS);
         Ok(core)
     }
 }

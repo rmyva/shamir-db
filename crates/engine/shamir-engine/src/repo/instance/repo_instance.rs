@@ -1,8 +1,8 @@
-use crate::repo::fk_reverse_cache::FkReverseCache;
 use crate::repo::instance::support::metrics::{EngineMetrics, EngineMetricsSnapshot};
 use crate::repo::journal::backend::durability_handle::retention_gate::RetentionGate;
 use crate::repo::repo_types::BoxRepo;
 pub use crate::repo::version_provider::repo_token;
+use crate::table::fk_reverse_cache::FkReverseCache;
 // R2a-1d: the tx-layer test tree names the typed barrier failures. R2a
 // step 3a (server adapter) additionally needs to NAME `SealHold`,
 // `OnlineBackupError` (barrier failures / seal holds) and
@@ -152,33 +152,19 @@ impl RepoInstance {
         let live = Arc::new(());
         let rename_fence = Arc::new(scc::HashMap::with_hasher(THasher::default()));
         let rename_fence_len = Arc::new(AtomicUsize::new(0));
-        let core = crate::tx::commit::core::RepoCore {
-            name: name.clone(),
+        let core = crate::tx::RepoCore::from_shell(
+            name.clone(),
             repo,
             catalog,
             durability_handle,
             horizon,
-            truncation_pins: Arc::new(crate::tx::drain::truncation_pin::TruncationPin::new()),
-            live_weak: Arc::downgrade(&live),
-            rename_fence: crate::tx::commit::rename_fence::RenameFenceView::new(
+            Arc::downgrade(&live),
+            crate::tx::commit::rename_fence::RenameFenceView::new(
                 Arc::clone(&rename_fence),
                 Arc::clone(&rename_fence_len),
             ),
-            fk_reverse_cache: Arc::new(FkReverseCache::new()),
-            receipt_worker: Arc::new(OnceCell::new()),
-            worker_lifecycle: Some(Arc::new(ForegroundLifecycle::new())),
-            replication_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            cold_opens: Arc::new(ColdOpenTasks::new()),
-            wal_segment_bytes: crate::repo::durability_policy::effective_wal_segment_bytes(),
-            #[cfg(test)]
-            journal_publish_hook: Arc::new(arc_swap::ArcSwapOption::empty()),
-            #[cfg(test)]
-            table_init_hook: Arc::new(arc_swap::ArcSwapOption::empty()),
-            #[cfg(test)]
-            clean_horizon_test_state: Arc::new(std::sync::OnceLock::new()),
-            #[cfg(test)]
-            background_drainer_disabled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        };
+            crate::repo::durability_policy::effective_wal_segment_bytes(),
+        );
         Self {
             name,
             live: Some(live),

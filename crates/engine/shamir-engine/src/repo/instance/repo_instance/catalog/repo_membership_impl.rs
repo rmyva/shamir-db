@@ -94,15 +94,15 @@ impl RepoInstance {
     /// S5c-X PR6b-2a: callers must pass a permit for this repository.
     pub(crate) fn add_table(&self, config: TableConfig, permit: &RepoWritePermit) {
         self.core
-            .durability_handle
+            .durability_handle()
             .write_domain
             .debug_check_permit(permit);
         self.add_table_inner(config);
     }
 
     fn add_table_inner(&self, config: TableConfig) {
-        self.core.catalog.register_table_with(config, || {
-            self.core.fk_reverse_cache.invalidate();
+        self.core.catalog().register_table_with(config, || {
+            self.core.fk_reverse_cache().invalidate();
         });
     }
 
@@ -116,15 +116,15 @@ impl RepoInstance {
     /// S5c-X PR6b-2a: callers must pass a permit for this repository.
     pub(crate) fn remove_table(&self, table_name: &str, permit: &RepoWritePermit) -> bool {
         self.core
-            .durability_handle
+            .durability_handle()
             .write_domain
             .debug_check_permit(permit);
         self.remove_table_inner(table_name)
     }
 
     fn remove_table_inner(&self, table_name: &str) -> bool {
-        self.core.catalog.remove_table_with(table_name, || {
-            self.core.fk_reverse_cache.invalidate();
+        self.core.catalog().remove_table_with(table_name, || {
+            self.core.fk_reverse_cache().invalidate();
         })
     }
 }

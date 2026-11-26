@@ -9,6 +9,7 @@ use crate::query::batch::query_runner::{
     QueryRunner,
 };
 use crate::query::batch::result_size::ResultSize;
+use crate::query::batch::BatchTxPort;
 use crate::query::batch::{BatchError, BatchOp, BatchPlan, BatchRequest, QueryEntry};
 use crate::query::read::QueryResult;
 use shamir_query_types::batch::{
@@ -205,7 +206,7 @@ pub(in crate::query::batch) async fn execute_transactional_impl(
 
     let visibility_wait = request
         .visibility_wait
-        .unwrap_or_else(|| repo.commit_visibility_wait());
+        .unwrap_or_else(|| repo.default_visibility_wait());
 
     // Parse isolation (strict typed enum — exhaustive match, no fallback).
     let iso = match request.isolation {
@@ -214,14 +215,14 @@ pub(in crate::query::batch) async fn execute_transactional_impl(
         Some(WireIsolationLevel::Snapshot) | None => shamir_tx::IsolationLevel::Snapshot,
     };
 
-    let (mut tx, _guard) = repo
-        .begin_tx(iso)
-        .await
-        .map_err(|e| BatchError::QueryError {
-            alias: String::new(),
-            message: format!("begin_tx: {}", e),
-            code: None,
-        })?;
+    let (mut tx, _guard) =
+        repo.begin_interactive_batch(iso)
+            .await
+            .map_err(|e| BatchError::QueryError {
+                alias: String::new(),
+                message: format!("begin_tx: {}", e),
+                code: None,
+            })?;
     tx.set_cancel_handle(scope.cancel_handle().cloned());
     // Thread the actor into the tx for commit-time provenance (R2).
     tx.set_actor(actor.clone());
@@ -276,7 +277,7 @@ pub(in crate::query::batch) async fn execute_transactional_impl(
             // locks live in the per-table MvccStore, not in TxContext, so
             // dropping TxContext alone does not free them). No-op for
             // Snapshot / Serializable (locked_keys is empty).
-            crate::tx::release_pessimistic_locks(&tx, &repo).await;
+            repo.release_interactive_batch_locks(&tx).await;
 
             // #666: a deadline-exceeded abort keeps its identity all the
             // way to the caller — `ExecutionTimedOut` is a top-level batch
@@ -309,13 +310,9 @@ pub(in crate::query::batch) async fn execute_transactional_impl(
         }
         Ok(results) => {
             let commit_started = Instant::now();
-            let commit_result = crate::tx::ack::commit_tx_with_cancel(
-                tx,
-                &repo,
-                visibility_wait,
-                scope.cancel_handle().cloned(),
-            )
-            .await;
+            let commit_result = repo
+                .commit_explicit_batch(tx, visibility_wait, scope.cancel_handle().cloned())
+                .await;
             QueryRunner::observe_commit(
                 resolver,
                 &repo_name,

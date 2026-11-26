@@ -1,4 +1,4 @@
-use crate::query::batch::BatchError;
+use crate::query::batch::{BatchError, BatchTxPort};
 use shamir_engine_query::query::write::WriteResult;
 use shamir_query_types::batch::VisibilityWait;
 use shamir_storage::error::DbResult;
@@ -16,8 +16,152 @@ mod follower_durability;
 mod receipt_worker_impl;
 mod write_domain_membership;
 
+#[async_trait::async_trait]
+impl BatchTxPort for crate::tx::RepoCore {
+    async fn commit_implicit_batch(
+        &self,
+        tx: shamir_tx::TxContext,
+        wait: VisibilityWait,
+        cancel: Option<Arc<shamir_tx::CancelHandle>>,
+    ) -> Result<crate::tx::TxOutcome, crate::tx::CommitError> {
+        crate::tx::ack::commit_batch_tx(
+            tx,
+            self,
+            wait,
+            shamir_tx::visibility_metrics::PendingKind::ImplicitBatch,
+            cancel,
+        )
+        .await
+    }
+
+    async fn commit_explicit_batch(
+        &self,
+        tx: shamir_tx::TxContext,
+        wait: VisibilityWait,
+        cancel: Option<Arc<shamir_tx::CancelHandle>>,
+    ) -> Result<crate::tx::TxOutcome, crate::tx::CommitError> {
+        crate::tx::ack::commit_batch_tx(
+            tx,
+            self,
+            wait,
+            shamir_tx::visibility_metrics::PendingKind::ExplicitTx,
+            cancel,
+        )
+        .await
+    }
+
+    async fn begin_interactive_batch(
+        &self,
+        isolation: shamir_tx::IsolationLevel,
+    ) -> DbResult<(shamir_tx::TxContext, shamir_tx::SnapshotGuard)> {
+        self.begin_batch_tx(isolation).await
+    }
+
+    async fn commit_interactive_batch(
+        &self,
+        tx: shamir_tx::TxContext,
+    ) -> Result<crate::tx::TxOutcome, crate::tx::CommitError> {
+        self.commit_batch_tx(
+            tx,
+            self.batch_commit_visibility_wait(),
+            shamir_tx::visibility_metrics::PendingKind::ExplicitTx,
+            None,
+        )
+        .await
+    }
+
+    async fn release_batch_locks(&self, tx: &shamir_tx::TxContext) {
+        self.release_batch_tx_locks(tx).await
+    }
+
+    async fn release_interactive_batch_locks(&self, tx: &shamir_tx::TxContext) {
+        self.release_batch_tx_locks(tx).await
+    }
+
+    async fn synced_flush(&self) -> DbResult<()> {
+        self.batch_synced_flush().await
+    }
+
+    async fn sync_wal(&self) -> DbResult<()> {
+        self.batch_sync_wal().await
+    }
+
+    fn default_visibility_wait(&self) -> VisibilityWait {
+        self.batch_commit_visibility_wait()
+    }
+}
+
+#[async_trait::async_trait]
+impl BatchTxPort for RepoInstance {
+    async fn commit_implicit_batch(
+        &self,
+        tx: shamir_tx::TxContext,
+        wait: VisibilityWait,
+        cancel: Option<Arc<shamir_tx::CancelHandle>>,
+    ) -> Result<crate::tx::TxOutcome, crate::tx::CommitError> {
+        self.core
+            .commit_batch_tx(
+                tx,
+                wait,
+                shamir_tx::visibility_metrics::PendingKind::ImplicitBatch,
+                cancel,
+            )
+            .await
+    }
+
+    async fn commit_explicit_batch(
+        &self,
+        tx: shamir_tx::TxContext,
+        wait: VisibilityWait,
+        cancel: Option<Arc<shamir_tx::CancelHandle>>,
+    ) -> Result<crate::tx::TxOutcome, crate::tx::CommitError> {
+        self.core
+            .commit_batch_tx(
+                tx,
+                wait,
+                shamir_tx::visibility_metrics::PendingKind::ExplicitTx,
+                cancel,
+            )
+            .await
+    }
+
+    async fn begin_interactive_batch(
+        &self,
+        isolation: shamir_tx::IsolationLevel,
+    ) -> DbResult<(shamir_tx::TxContext, shamir_tx::SnapshotGuard)> {
+        self.begin_tx(isolation).await
+    }
+
+    async fn commit_interactive_batch(
+        &self,
+        tx: shamir_tx::TxContext,
+    ) -> Result<crate::tx::TxOutcome, crate::tx::CommitError> {
+        self.commit_tx_with_options(tx, self.commit_visibility_wait())
+            .await
+    }
+
+    async fn release_batch_locks(&self, tx: &shamir_tx::TxContext) {
+        self.core.release_batch_tx_locks(tx).await
+    }
+
+    async fn release_interactive_batch_locks(&self, tx: &shamir_tx::TxContext) {
+        self.core.release_batch_tx_locks(tx).await
+    }
+
+    async fn synced_flush(&self) -> DbResult<()> {
+        self.core.batch_synced_flush().await
+    }
+
+    async fn sync_wal(&self) -> DbResult<()> {
+        self.core.batch_sync_wal().await
+    }
+
+    fn default_visibility_wait(&self) -> VisibilityWait {
+        self.commit_visibility_wait()
+    }
+}
+
 impl RepoInstance {
-    /// Per-repo transaction gate; the body lives on `RepoCore::tx_gate`.
     pub async fn tx_gate(&self) -> DbResult<Arc<shamir_tx::RepoTxGate>> {
         self.core.tx_gate().await
     }
@@ -117,7 +261,7 @@ impl RepoInstance {
     /// unchanged even though they share the same gate and storage.
     /// Value-only implicit commits remain Strict until VIS-4 provides receipts.
     pub fn with_commit_visibility_wait(mut self, wait: VisibilityWait) -> Self {
-        self.core.horizon.set_commit_visibility_wait(wait);
+        self.core.set_commit_visibility_wait(wait);
         self
     }
 
@@ -131,7 +275,15 @@ impl RepoInstance {
         wait: VisibilityWait,
     ) -> Result<crate::tx::TxOutcome, crate::tx::CommitError> {
         let started = Instant::now();
-        let result = crate::tx::commit::commit_tx_with_options(tx, &self.core, wait).await;
+        let result = self
+            .core
+            .commit_batch_tx(
+                tx,
+                wait,
+                shamir_tx::visibility_metrics::PendingKind::ExplicitTx,
+                None,
+            )
+            .await;
         self.metrics.record_duration(
             QueryOp::Tx,
             started.elapsed().as_nanos().min(u64::MAX as u128) as u64,

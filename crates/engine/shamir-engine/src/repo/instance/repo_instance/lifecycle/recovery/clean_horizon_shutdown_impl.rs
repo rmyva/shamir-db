@@ -30,7 +30,7 @@ impl RepoInstance {
         // cold opens unrefused and undrained. Fresh opens are refused with a
         // typed error before their first side effect; opens already
         // registered (inline or handed off) are drained below on EVERY path.
-        self.core.cold_opens.close();
+        self.core.cold_opens().close();
 
         // Lifecycle drain first. Its failure is remembered as the ORIGINAL
         // failure; the cold-open drain below still runs, because the handoff
@@ -63,7 +63,7 @@ impl RepoInstance {
         let cold_open_drained = Box::pin(timed_stage(
             &self.name,
             "cold_open_drain",
-            self.core.cold_opens.drain(deadline),
+            self.core.cold_opens().drain(deadline),
         ))
         .await;
         if !cold_open_drained && original_failure.is_none() {
@@ -155,7 +155,7 @@ impl RepoInstance {
         &self,
     ) -> Option<&Arc<RepoWorkerLifecycle<ReceiptApplyJob, DbResult<ApplyOutcome>>>> {
         self.core
-            .worker_lifecycle
+            .worker_lifecycle()
             .as_ref()
             .map(|foreground| foreground.lifecycle())
     }

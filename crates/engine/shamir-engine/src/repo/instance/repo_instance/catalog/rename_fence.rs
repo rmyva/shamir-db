@@ -7,11 +7,11 @@ use std::sync::atomic::Ordering;
 impl RepoInstance {
     /// Reject access to a name in an unresolved rename pair.
     pub fn check_table_rename_fence(&self, name: &str) -> DbResult<()> {
-        self.core.rename_fence.check_table_rename_fence(name)
+        self.core.rename_fence().check_table_rename_fence(name)
     }
 
     pub fn check_rename_pair(&self, from: &str, to: &str) -> DbResult<()> {
-        self.core.rename_fence.check_rename_pair(from, to)
+        self.core.rename_fence().check_rename_pair(from, to)
     }
 
     /// Whether this repository has an unresolved rename.
@@ -49,7 +49,7 @@ impl RepoInstance {
         let to = pair.to.clone();
         let mut pair = Some(pair);
         let updated = self
-            .rename_fence
+            .rename_fence()
             .update_sync(&from, |_, entry| match entry {
                 RenameFenceEntry::InFlight {
                     from: old_from,
