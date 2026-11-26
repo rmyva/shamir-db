@@ -7,15 +7,23 @@
 //! snapshot `docs/guide-docs/client-server-protocol-spec/wire-dictionary.json`:
 //!
 //! - CHECK 1 (order pin): every derived snapshot type for this crate must
-//!   still exist with the same field/variant names and the same critical
-//!   serde flags at the same positions. Anything else (reorder, rename,
-//!   removal, flag change) fails with "protocol version change required".
-//!   Source entries AFTER the snapshot's last entry are allowed (the
-//!   append-only rule) and do not fail.
-//! - CHECK 2 (completeness): every type name appearing in a snapshot
-//!   field/variant `type` string must be a snapshot key, a primitive, or a
-//!   documented exclusion. A new wire DTO reachable from the snapshot but
-//!   missing from it fails, so a future new wire type cannot pass silently.
+//!   still exist with the same struct/enum kind (classified by SYNTAX:
+//!   named-field struct / newtype / tuple / unit), the same field/variant
+//!   names, the same EFFECTIVE WIRE NAMES (rename / rename_all applied), the
+//!   same member types as written in source, and the same full set of
+//!   wire-shape-affecting serde attributes at the same positions. Anything
+//!   else (reorder, rename, retag, adapter swap, removal) fails with
+//!   "protocol version change required". Source entries AFTER the snapshot's
+//!   last entry are allowed (the append-only rule) and do not fail; a
+//!   snapshot LONGER than the source is a truncation and fails.
+//! - CHECK 2 (completeness): real reachability, computed in the SOURCE.
+//!   Starting from the snapshot roots ("DbRequest", "DbResponse") the scan
+//!   map is closed over member types (tuples and arrays resolve each
+//!   element, crate type aliases expand) and every reached crate-defined
+//!   type must be a snapshot key or a documented exclusion. The closure
+//!   deliberately does NOT recurse into `QueryValue`: its hand-written impl
+//!   is self-describing (externally tagged, no field keys), so its members
+//!   emit no wire keys and end the traversal there.
 //! - CHECK 3 (hand-written impls): snapshot entries with `impl ==
 //!   "hand_written"` are skipped by CHECK 1's positional comparison — their
 //!   fields come from a manual serde impl, not from a derive, so the
@@ -32,207 +40,10 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use serde::Deserialize;
-use syn::Item;
 
-// ---------------------------------------------------------------------------
-// Normalized serde attribute model (no raw strings cross the comparisons)
-// ---------------------------------------------------------------------------
-
-/// Normalized serde flags that matter for the wire dictionary.
-#[derive(Default, Debug, Clone)]
-struct SerdeFlags {
-    default: bool,
-    flatten: bool,
-    skip_serializing: bool,
-    skip_deserializing: bool,
-    deny_unknown_fields: bool,
-    untagged: bool,
-    transparent: bool,
-    /// container `tag = "..."` value
-    tag: Option<String>,
-    /// container `content = "..."` value
-    content: Option<String>,
-    /// every `rename = "..."` / `alias = "..."` value (rename-aware matching)
-    renames: Vec<String>,
-}
-
-impl SerdeFlags {
-    fn has_rename(&self, name: &str) -> bool {
-        self.renames.iter().any(|rename| rename == name)
-    }
-
-    fn from_attrs(attrs: &[syn::Attribute]) -> SerdeFlags {
-        let mut flags = SerdeFlags::default();
-        for attr in attrs {
-            if !attr.path().is_ident("serde") {
-                continue;
-            }
-            let _ = attr.parse_nested_meta(|meta| {
-                let name = meta
-                    .path
-                    .get_ident()
-                    .map(|i| i.to_string())
-                    .unwrap_or_default();
-                match name.as_str() {
-                    "default" => {
-                        // `default` with or without `= path`
-                        if meta.input.peek(syn::Token![=]) {
-                            let _: syn::Expr = meta.value()?.parse()?;
-                        }
-                        flags.default = true;
-                    }
-                    "flatten" => flags.flatten = true,
-                    "skip_serializing" => flags.skip_serializing = true,
-                    "skip_deserializing" => flags.skip_deserializing = true,
-                    "deny_unknown_fields" => flags.deny_unknown_fields = true,
-                    "untagged" => flags.untagged = true,
-                    "transparent" => flags.transparent = true,
-                    "tag" => {
-                        let lit: syn::LitStr = meta.value()?.parse()?;
-                        flags.tag = Some(lit.value());
-                    }
-                    "content" => {
-                        let lit: syn::LitStr = meta.value()?.parse()?;
-                        flags.content = Some(lit.value());
-                    }
-                    "rename" | "alias" => {
-                        let lit: syn::LitStr = meta.value()?.parse()?;
-                        flags.renames.push(lit.value());
-                    }
-                    // rename_all / with / deserialize_with / serialize_with /
-                    // skip_serializing_if / serde(with = ..) / from / try_from /
-                    // into / bounded explicit paths: normalized away — they are
-                    // index-safe and not pinned by this test.
-                    _ => {
-                        if meta.input.peek(syn::Token![=]) {
-                            let _: syn::Expr = meta.value()?.parse()?;
-                        }
-                    }
-                }
-                Ok(())
-            });
-        }
-        flags
-    }
-}
-
-/// One struct field (or one unnamed field, name = its index as string).
-#[derive(Debug, Clone)]
-struct Member {
-    name: String,
-    flags: SerdeFlags,
-}
-
-/// One enum variant, with its shape and (for struct/tuple shapes) fields.
-#[derive(Debug, Clone)]
-struct VariantRec {
-    name: String,
-    shape: &'static str, // "unit" | "newtype" | "tuple" | "struct"
-    flags: SerdeFlags,
-    fields: Vec<Member>,
-}
-
-/// One scanned struct or enum, keyed by its base type name (before `<`).
-#[derive(Debug, Clone)]
-struct ScanEntry {
-    kind: &'static str, // "struct" | "enum"
-    container: SerdeFlags,
-    fields: Vec<Member>,
-    variants: Vec<VariantRec>,
-}
-
-fn fields_to_members(fields: &syn::Fields) -> Vec<Member> {
-    match fields {
-        syn::Fields::Named(named) => named
-            .named
-            .iter()
-            .map(|f| Member {
-                name: f.ident.as_ref().unwrap().to_string(),
-                flags: SerdeFlags::from_attrs(&f.attrs),
-            })
-            .collect(),
-        syn::Fields::Unnamed(unnamed) => unnamed
-            .unnamed
-            .iter()
-            .enumerate()
-            .map(|(i, f)| Member {
-                name: i.to_string(),
-                flags: SerdeFlags::from_attrs(&f.attrs),
-            })
-            .collect(),
-        syn::Fields::Unit => Vec::new(),
-    }
-}
-
-fn variant_shape(fields: &syn::Fields) -> &'static str {
-    match fields {
-        syn::Fields::Unit => "unit",
-        syn::Fields::Unnamed(u) if u.unnamed.len() == 1 => "newtype",
-        syn::Fields::Unnamed(_) => "tuple",
-        syn::Fields::Named(_) => "struct",
-    }
-}
-
-fn collect_items(items: &[Item], out: &mut BTreeMap<String, ScanEntry>) {
-    for item in items {
-        match item {
-            Item::Struct(s) => {
-                let members = fields_to_members(&s.fields);
-                out.entry(s.ident.to_string()).or_insert(ScanEntry {
-                    kind: "struct",
-                    container: SerdeFlags::from_attrs(&s.attrs),
-                    fields: members,
-                    variants: Vec::new(),
-                });
-            }
-            Item::Enum(e) => {
-                let variants = e
-                    .variants
-                    .iter()
-                    .map(|v| VariantRec {
-                        name: v.ident.to_string(),
-                        shape: variant_shape(&v.fields),
-                        flags: SerdeFlags::from_attrs(&v.attrs),
-                        fields: fields_to_members(&v.fields),
-                    })
-                    .collect();
-                out.entry(e.ident.to_string()).or_insert(ScanEntry {
-                    kind: "enum",
-                    container: SerdeFlags::from_attrs(&e.attrs),
-                    fields: Vec::new(),
-                    variants,
-                });
-            }
-            // Inline modules: recurse so no type definition is missed.
-            Item::Mod(m) => {
-                if let Some((_, inner)) = &m.content {
-                    collect_items(inner, out);
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Recursively collect every `*.rs` file under `root`, skipping any
-/// directory named `tests` (test modules do not define wire types).
-fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            if path.file_name().and_then(|n| n.to_str()) == Some("tests") {
-                continue;
-            }
-            collect_rs_files(&path, out);
-        } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
-            out.push(path);
-        }
-    }
-}
+use super::wire_dictionary_scan_source::{
+    collect_items, collect_rs_files, Member, ScanEntry, SerdeFlags,
+};
 
 // ---------------------------------------------------------------------------
 // Typed snapshot model (schema_version 1)
@@ -242,7 +53,6 @@ fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
 struct Snapshot {
     #[allow(dead_code)]
     schema_version: u32,
-    #[allow(dead_code)]
     roots: Vec<String>,
     types: BTreeMap<String, SnapshotType>,
 }
@@ -272,8 +82,10 @@ struct SnapshotType {
 #[derive(Deserialize, Debug)]
 struct SnapField {
     name: String,
+    /// effective wire name pinned by the scanner's rename/rename_all rules
+    #[serde(default)]
+    wire: String,
     #[serde(rename = "type", default)]
-    #[allow(dead_code)]
     ty: String,
     #[serde(default)]
     serde: Vec<String>,
@@ -282,6 +94,8 @@ struct SnapField {
 #[derive(Deserialize, Debug)]
 struct SnapVariant {
     name: String,
+    #[serde(default)]
+    wire: String,
     shape: String,
     #[serde(default)]
     serde: Vec<String>,
@@ -289,50 +103,83 @@ struct SnapVariant {
     fields: Vec<SnapField>,
 }
 
-impl SnapshotType {
-    /// The container `tag = "..."` value recorded in the snapshot, if any.
-    fn tag(&self) -> Option<String> {
-        self.serde.iter().find_map(|s| {
-            s.strip_prefix("tag = ")
-                .map(|v| v.trim_matches('"').to_string())
-        })
-    }
+/// Attribute keys the scanner pins. Everything else appearing in a snapshot
+/// `serde` array (e.g. `from = "FieldRuleWire"`, hand-written prose notes) is
+/// not wire-shape-affecting and is normalized away on BOTH sides.
+const PINNED_VALUE_ATTRS_IN_ORDER: &[&str] = &[
+    // longest prefixes first: `rename_all` before `rename`
+    "rename_all",
+    "rename",
+    "alias",
+    "default",
+    "tag",
+    "content",
+    "skip_serializing_if",
+    "with",
+    "serialize_with",
+    "deserialize_with",
+];
 
-    fn has_untagged(&self) -> bool {
-        self.serde.iter().any(|s| s == "untagged")
+const PINNED_FLAG_ATTRS: &[&str] = &[
+    "flatten",
+    "skip_serializing",
+    "skip_deserializing",
+    "deny_unknown_fields",
+    "untagged",
+    "transparent",
+    // bare `default` (no `= path`) is a flag-style entry in the snapshot
+    "default",
+];
+
+/// Normalize one snapshot `serde` array entry into its canonical form.
+/// Returns `None` for attributes the scanner does not pin.
+fn normalize_snap_attr(raw: &str) -> Option<String> {
+    let s = raw.trim();
+    for key in PINNED_VALUE_ATTRS_IN_ORDER {
+        if let Some(rest) = s.strip_prefix(key) {
+            let rest = rest.trim_start();
+            if let Some(v) = rest.strip_prefix('=') {
+                let value = v.trim().trim_matches('"');
+                return Some(format!("{key} = \"{value}\""));
+            }
+        }
     }
+    for key in PINNED_FLAG_ATTRS {
+        if s == *key {
+            return Some(key.to_string());
+        }
+    }
+    None
 }
 
-impl SnapField {
-    /// Critical, index-affecting flags recorded for this field.
-    /// (`default`, `skip_serializing_if`, `rename`, `with`,
-    /// `deserialize_with` are deliberately NOT pinned: they do not shift
-    /// the u64 field index mapping.)
-    fn critical_flags(&self) -> (bool, bool, bool) {
-        (
-            self.serde.iter().any(|s| s == "flatten"),
-            self.serde.iter().any(|s| s == "skip_serializing"),
-            self.serde.iter().any(|s| s == "skip_deserializing"),
-        )
-    }
+fn normalized_snap_set(serde: &[String]) -> BTreeSet<String> {
+    serde
+        .iter()
+        .filter_map(|s| normalize_snap_attr(s))
+        .collect()
 }
 
-impl SnapVariant {
-    fn critical_flags(&self) -> (bool, bool, bool) {
-        (
-            self.serde.iter().any(|s| s == "flatten"),
-            self.serde.iter().any(|s| s == "skip_serializing"),
-            self.serde.iter().any(|s| s == "skip_deserializing"),
-        )
+fn sets_diff(expected: &BTreeSet<String>, actual: &BTreeSet<String>) -> String {
+    let missing: Vec<&String> = expected.difference(actual).collect();
+    let extra: Vec<&String> = actual.difference(expected).collect();
+    let mut out = String::new();
+    if !missing.is_empty() {
+        out.push_str(&format!(" snapshot missing {missing:?};"));
     }
+    if !extra.is_empty() {
+        out.push_str(&format!(" snapshot has extra {extra:?};"));
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
-// Shared corpus (parsed once, shared by the three checks)
+// Shared corpus (parsed once, shared by the checks)
 // ---------------------------------------------------------------------------
 
 struct Corpus {
     scan: BTreeMap<String, ScanEntry>,
+    /// crate type alias name → target type string (`Item::Type`)
+    aliases: BTreeMap<String, String>,
     snapshot: Snapshot,
 }
 
@@ -357,23 +204,64 @@ fn corpus() -> &'static Corpus {
             src_root.display()
         );
         let mut scan = BTreeMap::new();
+        let mut aliases = BTreeMap::new();
         for file in files {
             let text = fs::read_to_string(&file)
                 .unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display()));
             let ast = syn::parse_file(&text)
                 .unwrap_or_else(|e| panic!("cannot parse {}: {e}", file.display()));
-            collect_items(&ast.items, &mut scan);
+            collect_items(&ast.items, &mut scan, &mut aliases);
         }
+        assert!(
+            scan.len() > 100,
+            "scanner found only {} type definitions under {} — walk is broken",
+            scan.len(),
+            src_root.display()
+        );
         let text = fs::read_to_string(snapshot_path()).expect("snapshot JSON is readable");
         let snapshot: Snapshot = serde_json::from_str(&text).expect("snapshot JSON parses");
-        Corpus { scan, snapshot }
+        Corpus {
+            scan,
+            aliases,
+            snapshot,
+        }
     })
+}
+
+fn check_snapshot_sanity(c: &Corpus) {
+    for root in ["DbRequest", "DbResponse"] {
+        assert!(
+            c.snapshot.types.contains_key(root),
+            "snapshot is missing the required wire root `{root}` — \
+             wire-dictionary.json is truncated or corrupted — \
+             protocol version change required"
+        );
+    }
+    // Truncation guard. NOTE: we deliberately do NOT assert
+    // `snapshot.types.len() >= scan.len()`: the scanner sees EVERY type
+    // defined in the crate, including non-wire helpers and cfg(test)
+    // fixture types that the snapshot intentionally omits, so the raw
+    // inequality would false-positive. The real truncation guard is the
+    // reverse direction, enforced by CHECK 1 + CHECK 3: every snapshot
+    // type must still exist in the scan, so deleting a snapshot entry
+    // (or shrinking the snapshot) always fails.
+    for (name, snap) in &c.snapshot.types {
+        if snap.crate_name != "shamir-query-types" {
+            continue;
+        }
+        assert!(
+            c.scan.contains_key(name) || c.aliases.contains_key(name),
+            "snapshot type {name} is neither scanned nor a known crate alias — \
+             snapshot and scanner disagree on what this crate defines — \
+             protocol version change required"
+        );
+    }
 }
 
 /// Strip `Option<>` / `Vec<>` / `Box<>` / `HashMap<K, V>` / `TMap<K, V>` /
 /// generic parameters / whitespace / crate paths; take the last path
-/// segment. Returns `None` for fixed arrays `[u8; 16]` (self-describing,
-/// keyless) and tuples `(A, B)` (also keyless).
+/// segment. Returns `None` for fixed arrays `[u8; 16]` and tuples `(A, B)`
+/// (the reachability closure resolves their ELEMENTS instead).
 fn base_type_name(ty: &str) -> Option<String> {
     let mut t = ty.trim();
     if t.starts_with('[') || t.starts_with('(') {
@@ -412,6 +300,42 @@ fn base_type_name(ty: &str) -> Option<String> {
     }
 }
 
+/// Split a member type string into the type strings whose base names
+/// should be resolved: tuples `(A, B)` yield each element, arrays
+/// `[T; N]` yield `T`, anything else yields itself.
+fn ty_elements(ty: &str) -> Vec<String> {
+    let t = ty.trim();
+    if t.starts_with('(') && t.ends_with(')') {
+        return split_top_level(&t[1..t.len() - 1]);
+    }
+    if t.starts_with('[') {
+        if let Some(semi) = t.find(';') {
+            return vec![t[1..semi].trim().to_string()];
+        }
+    }
+    vec![t.to_string()]
+}
+
+/// Split on commas at bracket depth 0 only.
+fn split_top_level(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (i, b) in s.as_bytes().iter().enumerate() {
+        match b {
+            b'<' | b'(' | b'[' => depth += 1,
+            b'>' | b')' | b']' => depth = depth.saturating_sub(1),
+            b',' if depth == 0 => {
+                out.push(s[start..i].trim().to_string());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(s[start..].trim().to_string());
+    out
+}
+
 const PRIMITIVES: &[&str] = &[
     "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128", "bool", "String", "char",
     "f32", "f64", "usize", "isize",
@@ -424,16 +348,90 @@ const EXCLUDED_TYPE_NAMES: &[&str] = &[
     // self-describing integer on the wire, no keys.
     "NonZeroU64",
     // `pub type FieldPath = Vec<String>` (read/core/field_path.rs): a plain
-    // array on the wire, no keys.
+    // array on the wire, no keys. (The closure expands the alias, but the
+    // alias name itself is reached and stays excluded here.)
     "FieldPath",
     // shamir-types internals behind the hand-written QueryValue impl; both
-    // travel as strings on the wire ("serialized as string" notes).
+    // travel as strings on the wire ("serialized as string" notes). Not
+    // reached while the closure stops at QueryValue, kept excluded in case
+    // a future wire DTO references them directly.
     "Decimal",
     "BigInt",
     // Generic parameter of `Value<Key>` inside the QueryValue snapshot
     // entry — a type parameter, not a wire type.
     "Key",
 ];
+
+/// Pure reachability closure over `defs` (type name → member type strings;
+/// crate type aliases map to a single-element target list). Returns every
+/// name transitively reachable from `roots`, including the roots.
+///
+/// Termination: a `visited` set guards the worklist.
+///
+/// `QueryValue` is a TERMINAL node: its hand-written serde impl is
+/// externally-tagged and self-describing (no field keys on the wire), so
+/// its members are deliberately kept out of the closure.
+fn reachable(roots: &[&str], defs: &BTreeMap<String, Vec<String>>) -> BTreeSet<String> {
+    let mut visited: BTreeSet<String> = BTreeSet::new();
+    let mut worklist: Vec<String> = roots.iter().map(|r| r.to_string()).collect();
+    while let Some(name) = worklist.pop() {
+        if !visited.insert(name.clone()) {
+            continue;
+        }
+        // QueryValue's impl is self-describing — stop there (see doc comment).
+        if name == "QueryValue" {
+            continue;
+        }
+        if let Some(members) = defs.get(&name) {
+            for member in members {
+                for element in ty_elements(member) {
+                    if let Some(base) = base_type_name(&element) {
+                        if !visited.contains(&base) {
+                            worklist.push(base);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    visited
+}
+
+/// CHECK 2 — real completeness from the roots, computed in the SOURCE:
+/// every crate-defined type reachable from DbRequest/DbResponse must be a
+/// snapshot key or a documented exclusion. A name that a scan of this
+/// crate finds as a struct/enum but that has no snapshot entry is a NEW
+/// wire type and fails loudly.
+fn check_completeness(c: &Corpus) {
+    let mut defs: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (name, entry) in &c.scan {
+        defs.insert(name.clone(), entry.member_types());
+    }
+    // crate type aliases expand to their target's members
+    for (alias, target) in &c.aliases {
+        defs.insert(alias.clone(), vec![target.clone()]);
+    }
+    let roots: Vec<&str> = c.snapshot.roots.iter().map(|r| r.as_str()).collect();
+    let reached = reachable(&roots, &defs);
+    for name in reached {
+        if c.snapshot.types.contains_key(&name)
+            || PRIMITIVES.contains(&name.as_str())
+            || EXCLUDED_TYPE_NAMES.contains(&name.as_str())
+        {
+            continue;
+        }
+        panic!(
+            "new wire type {name} reachable from the snapshot roots {:?} but missing from \
+             wire-dictionary.json — add it or exclude it deliberately{}",
+            c.snapshot.roots,
+            if c.scan.contains_key(&name) {
+                " (found in this crate by the source scanner)"
+            } else {
+                " (external crate type)"
+            }
+        );
+    }
+}
 
 /// CHECK 1 name comparison is rename-aware: a snapshot field name matches
 /// either the Rust identifier or any of its `rename`/`alias` values.
@@ -458,202 +456,144 @@ fn check_one_type(name: &str, snap: &SnapshotType, rec: &ScanEntry) {
             &format!("kind {}", rec.kind),
         );
     }
-    // critical container flags: tag / untagged
-    if rec.container.tag != snap.tag() {
+    // container-level serde attributes: normalized set equality
+    let expected = rec.container.canonical();
+    let actual = normalized_snap_set(&snap.serde);
+    if expected != actual {
         fail(
             name,
-            "container tag",
-            &format!("tag = {:?}", snap.tag()),
-            &format!("tag = {:?}", rec.container.tag),
+            "container serde attributes",
+            &format!("exactly {expected:?}"),
+            &format!("exactly {actual:?} ({})", sets_diff(&expected, &actual)),
         );
     }
-    if rec.container.untagged != snap.has_untagged() {
-        fail(
-            name,
-            "container untagged",
-            &format!("untagged = {}", snap.has_untagged()),
-            &format!("untagged = {}", rec.container.untagged),
-        );
-    }
-    match rec.kind {
-        "struct" => {
-            let snapshot_len = snap.fields.len();
-            if snapshot_len > rec.fields.len() {
-                fail(
-                    name,
-                    "field list length",
-                    &format!("at least {snapshot_len} fields"),
-                    &format!("only {} fields", rec.fields.len()),
-                );
-            }
-            for (i, snap_field) in snap.fields.iter().enumerate() {
-                let src = &rec.fields[i];
-                if !name_matches(&src.name, &snap_field.name, &src.flags) {
-                    fail(
-                        name,
-                        &format!("field #{i}"),
-                        &format!("field named `{}`", snap_field.name),
-                        &format!("field named `{}`", src.name),
-                    );
-                }
-                let (s_flat, s_skip_ser, s_skip_de) = snap_field.critical_flags();
-                if (s_flat, s_skip_ser, s_skip_de)
-                    != (
-                        src.flags.flatten,
-                        src.flags.skip_serializing,
-                        src.flags.skip_deserializing,
-                    )
-                {
-                    fail(
-                        name,
-                        &format!("field #{i} (`{}`) critical serde flags", snap_field.name),
-                        &format!(
-                            "(flatten={s_flat}, skip_serializing={s_skip_ser}, skip_deserializing={s_skip_de})"
-                        ),
-                        &format!(
-                            "(flatten={}, skip_serializing={}, skip_deserializing={})",
-                            src.flags.flatten, src.flags.skip_serializing, src.flags.skip_deserializing
-                        ),
-                    );
-                }
-            }
-            // source entries after the snapshot's last field: append-only, allowed
-        }
-        "enum" => {
-            let snapshot_len = snap.variants.len();
-            if snapshot_len > rec.variants.len() {
-                fail(
-                    name,
-                    "variant list length",
-                    &format!("at least {snapshot_len} variants"),
-                    &format!("only {} variants", rec.variants.len()),
-                );
-            }
-            for (i, snap_variant) in snap.variants.iter().enumerate() {
-                let src = &rec.variants[i];
-                if !name_matches(&src.name, &snap_variant.name, &src.flags) {
-                    fail(
-                        name,
-                        &format!("variant #{i}"),
-                        &format!("variant named `{}`", snap_variant.name),
-                        &format!("variant named `{}`", src.name),
-                    );
-                }
-                if src.shape != snap_variant.shape {
-                    fail(
-                        name,
-                        &format!("variant #{} (`{}`) shape", i, snap_variant.name),
-                        &format!("shape {}", snap_variant.shape),
-                        &format!("shape {}", src.shape),
-                    );
-                }
-                let (s_flat, s_skip_ser, s_skip_de) = snap_variant.critical_flags();
-                if (s_flat, s_skip_ser, s_skip_de)
-                    != (
-                        src.flags.flatten,
-                        src.flags.skip_serializing,
-                        src.flags.skip_deserializing,
-                    )
-                {
-                    fail(
-                        name,
-                        &format!("variant #{} (`{}`) critical serde flags", i, snap_variant.name),
-                        &format!(
-                            "(flatten={s_flat}, skip_serializing={s_skip_ser}, skip_deserializing={s_skip_de})"
-                        ),
-                        &format!(
-                            "(flatten={}, skip_serializing={}, skip_deserializing={})",
-                            src.flags.flatten, src.flags.skip_serializing, src.flags.skip_deserializing
-                        ),
-                    );
-                }
-                // variant payload fields, same positional + rename-aware rules
-                let fields_len = snap_variant.fields.len();
-                if fields_len > src.fields.len() {
-                    fail(
-                        name,
-                        &format!("variant #{} (`{}`) field list length", i, snap_variant.name),
-                        &format!("at least {fields_len} fields"),
-                        &format!("only {} fields", src.fields.len()),
-                    );
-                }
-                for (j, snap_field) in snap_variant.fields.iter().enumerate() {
-                    let src_field = &src.fields[j];
-                    if !name_matches(&src_field.name, &snap_field.name, &src_field.flags) {
-                        fail(
-                            name,
-                            &format!("variant #{} (`{}`) field #{j}", i, snap_variant.name),
-                            &format!("field named `{}`", snap_field.name),
-                            &format!("field named `{}`", src_field.name),
-                        );
-                    }
-                    let (f_flat, f_skip_ser, f_skip_de) = snap_field.critical_flags();
-                    if (f_flat, f_skip_ser, f_skip_de)
-                        != (
-                            src_field.flags.flatten,
-                            src_field.flags.skip_serializing,
-                            src_field.flags.skip_deserializing,
-                        )
-                    {
-                        fail(
-                            name,
-                            &format!(
-                                "variant #{} (`{}`) field #{j} (`{}`) critical serde flags",
-                                i, snap_variant.name, snap_field.name
-                            ),
-                            &format!(
-                                "(flatten={f_flat}, skip_serializing={f_skip_ser}, skip_deserializing={f_skip_de})"
-                            ),
-                            &format!(
-                                "(flatten={}, skip_serializing={}, skip_deserializing={})",
-                                src_field.flags.flatten,
-                                src_field.flags.skip_serializing,
-                                src_field.flags.skip_deserializing
-                            ),
-                        );
-                    }
-                }
-            }
-        }
-        other => panic!("snapshot kind `{other}` for {name} is not struct/enum"),
+    if snap.kind == "enum" {
+        check_variants(name, snap, rec);
+    } else {
+        // struct / newtype / tuple / unit — all compare their field lists
+        check_fields(name, "field list", &snap.fields, &rec.fields);
     }
 }
 
-/// CHECK 2 — every type name reachable from the snapshot must be pinned
-/// (a snapshot key), primitive, or deliberately excluded. A name that a
-/// scan of this crate finds as a struct/enum but that has no snapshot
-/// entry is a NEW wire type and fails loudly.
-fn check_completeness(c: &Corpus) {
-    let mut reachable = BTreeSet::new();
-    for snap in c.snapshot.types.values() {
-        for field in &snap.fields {
-            if let Some(n) = base_type_name(&field.ty) {
-                reachable.insert(n);
-            }
+fn check_fields(type_name: &str, position: &str, snap_fields: &[SnapField], src_fields: &[Member]) {
+    let snapshot_len = snap_fields.len();
+    if snapshot_len > src_fields.len() {
+        fail(
+            type_name,
+            &format!("{position} field list length"),
+            &format!(
+                "at least {snapshot_len} fields (if fields were APPENDED in source, the \
+                 snapshot must be regenerated into the snapshot deliberately)"
+            ),
+            &format!("only {} fields", src_fields.len()),
+        );
+    }
+    for (i, snap_field) in snap_fields.iter().enumerate() {
+        let src = &src_fields[i];
+        let position = &format!("{position} field #{i}");
+        if !name_matches(&src.name, &snap_field.name, &src.flags) {
+            fail(
+                type_name,
+                position,
+                &format!("field named `{}`", snap_field.name),
+                &format!("field named `{}`", src.name),
+            );
         }
-        for variant in &snap.variants {
-            for field in &variant.fields {
-                if let Some(n) = base_type_name(&field.ty) {
-                    reachable.insert(n);
-                }
-            }
+        // effective wire name: scanner-computed vs pinned
+        if src.wire != snap_field.wire {
+            fail(
+                type_name,
+                position,
+                &format!("wire name `{}`", snap_field.wire),
+                &format!(
+                    "wire name `{}` (rename/rename_all computed from source)",
+                    src.wire
+                ),
+            );
+        }
+        // member type as written in source
+        if src.ty != snap_field.ty {
+            fail(
+                type_name,
+                position,
+                &format!("type `{}`", snap_field.ty),
+                &format!("type `{}`", src.ty),
+            );
+        }
+        // full wire-shape attribute set: normalized set equality
+        let expected = src.flags.canonical();
+        let actual = normalized_snap_set(&snap_field.serde);
+        if expected != actual {
+            fail(
+                type_name,
+                &format!("{position} (`{}`) serde attributes", snap_field.name),
+                &format!("exactly {expected:?}"),
+                &format!("exactly {actual:?} ({})", sets_diff(&expected, &actual)),
+            );
         }
     }
-    for name in reachable {
-        if c.snapshot.types.contains_key(&name)
-            || PRIMITIVES.contains(&name.as_str())
-            || EXCLUDED_TYPE_NAMES.contains(&name.as_str())
-        {
-            continue;
+    // source entries after the snapshot's last field: append-only, allowed
+}
+
+fn check_variants(type_name: &str, snap: &SnapshotType, rec: &ScanEntry) {
+    let snapshot_len = snap.variants.len();
+    if snapshot_len > rec.variants.len() {
+        fail(
+            type_name,
+            "variant list length",
+            &format!(
+                "at least {snapshot_len} variants (if variants were APPENDED in source, the \
+                 snapshot must be regenerated into the snapshot deliberately)"
+            ),
+            &format!("only {} variants", rec.variants.len()),
+        );
+    }
+    for (i, snap_variant) in snap.variants.iter().enumerate() {
+        let src = &rec.variants[i];
+        let position = &format!("variant #{i}");
+        if !name_matches(&src.name, &snap_variant.name, &src.flags) {
+            fail(
+                type_name,
+                position,
+                &format!("variant named `{}`", snap_variant.name),
+                &format!("variant named `{}`", src.name),
+            );
         }
-        panic!(
-            "new wire type {name} reachable from the snapshot but missing from \
-             wire-dictionary.json — add it or exclude it deliberately{}",
-            if c.scan.contains_key(&name) {
-                " (found in this crate by the source scanner)"
-            } else {
-                " (external crate type)"
-            }
+        if src.wire != snap_variant.wire {
+            fail(
+                type_name,
+                &format!("{position} (`{}`) wire name", snap_variant.name),
+                &format!("wire name `{}`", snap_variant.wire),
+                &format!(
+                    "wire name `{}` (rename/rename_all computed from source)",
+                    src.wire
+                ),
+            );
+        }
+        if src.shape != snap_variant.shape {
+            fail(
+                type_name,
+                &format!("{position} (`{}`) shape", snap_variant.name),
+                &format!("shape {}", snap_variant.shape),
+                &format!("shape {}", src.shape),
+            );
+        }
+        let expected = src.flags.canonical();
+        let actual = normalized_snap_set(&snap_variant.serde);
+        if expected != actual {
+            fail(
+                type_name,
+                &format!("{position} (`{}`) serde attributes", snap_variant.name),
+                &format!("exactly {expected:?}"),
+                &format!("exactly {actual:?} ({})", sets_diff(&expected, &actual)),
+            );
+        }
+        // variant payload fields, same positional + wire-name + attr rules
+        check_fields(
+            type_name,
+            &format!("variant #{} (`{}`)", i, snap_variant.name),
+            &snap_variant.fields,
+            &src.fields,
         );
     }
 }
@@ -677,6 +617,7 @@ fn check_hand_written_exist(c: &Corpus) {
 #[test]
 fn snapshot_order_pins_declaration_order_of_every_derived_wire_type() {
     let c = corpus();
+    check_snapshot_sanity(c);
     for (name, snap) in &c.snapshot.types {
         if snap.crate_name != "shamir-query-types" {
             continue;
@@ -697,11 +638,56 @@ fn snapshot_order_pins_declaration_order_of_every_derived_wire_type() {
 #[test]
 fn snapshot_is_complete_no_silent_new_wire_type() {
     let c = corpus();
+    check_snapshot_sanity(c);
     check_completeness(c);
 }
 
 #[test]
 fn snapshot_hand_written_types_still_exist_in_the_crate() {
     let c = corpus();
+    check_snapshot_sanity(c);
     check_hand_written_exist(c);
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests for the completeness traversal itself
+// ---------------------------------------------------------------------------
+
+#[test]
+fn completeness_traversal_fails_on_a_missing_type() {
+    // A → B → Missing: the closure MUST surface "Missing", so the
+    // production completeness check would fail on this graph.
+    let mut defs = BTreeMap::new();
+    defs.insert("A".to_string(), vec!["B".to_string()]);
+    defs.insert("B".to_string(), vec!["Missing".to_string()]);
+    let reached = reachable(&["A"], &defs);
+    assert!(
+        reached.contains("Missing"),
+        "traversal must surface the undefined type `Missing`, got {reached:?}"
+    );
+    // the traversal itself is non-vacuous: it visits the intermediate edge
+    assert!(
+        reached.contains("B") && reached.contains("A"),
+        "traversal must visit the roots and their members, got {reached:?}"
+    );
+}
+
+#[test]
+fn completeness_traversal_on_a_fully_covered_graph_yields_only_defined_names() {
+    // A → [B, Vec<B>], B → () — every reached name is defined; the closure
+    // must terminate on a self-referential graph too.
+    let mut defs = BTreeMap::new();
+    defs.insert("A".to_string(), vec!["Vec<B>".to_string(), "B".to_string()]);
+    defs.insert("B".to_string(), vec!["(A, u32)".to_string()]);
+    let reached = reachable(&["A"], &defs);
+    for name in &reached {
+        assert!(
+            defs.contains_key(name) || PRIMITIVES.contains(&name.as_str()),
+            "fully-covered graph must not reach undefined type `{name}`, got {reached:?}"
+        );
+    }
+    assert!(
+        reached.contains("B"),
+        "traversal must resolve Vec<B> to B, got {reached:?}"
+    );
 }

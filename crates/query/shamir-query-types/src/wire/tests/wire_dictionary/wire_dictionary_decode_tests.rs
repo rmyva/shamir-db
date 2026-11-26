@@ -6,8 +6,10 @@
 //! recorded in `docs/guide-docs/client-server-protocol-spec/wire-dictionary.json`.
 //! These tests hand-build integer-keyed MessagePack frames with the raw
 //! `rmp` writer (never byte literals) and decode them into the REAL DTOs,
-//! always with an equality oracle: the same value decoded from the named
-//! form (`to_vec_named`) must be Debug-equal to the indexed decode.
+//! always with an equality oracle: the decoded value must equal the named
+//! decode (`to_vec_named`) of the same logical value — typed `PartialEq`
+//! where the DTO derives it, Debug-text equality for `DbRequest` (which
+//! derives no `PartialEq`; see `assert_indexed_matches_named_debug`).
 //!
 //! NOT proven here (buffered string matching by construction, design §3.5):
 //! internally tagged enums with an integer TAG key (the tag must stay a
@@ -29,6 +31,7 @@ use crate::read::{Pagination, ReadQuery, Select, Temporal};
 use crate::validator::WriteOp;
 use crate::wire::db_message::DbRequest;
 use crate::wire::token_admin::ApiTokenMode;
+use crate::write::{InsertOp, InsertSelect, UpdateOp};
 use crate::TableRef;
 
 // ---------------------------------------------------------------------------
@@ -40,11 +43,36 @@ fn named_bytes<T: serde::Serialize>(value: &T) -> Vec<u8> {
     rmp_serde::to_vec_named(value).expect("named msgpack encoding succeeds")
 }
 
-/// Decode both forms of the same value and require equality with `expected`.
-/// This is the anti-vacuous oracle: a decode that succeeds on the indexed
-/// bytes but produces a different value than the named decode of the same
-/// logical value is a failure.
+/// Decode both forms of the same value and require TYPED equality with
+/// `expected`. Used when the DTO derives `PartialEq` (`BatchRequest`,
+/// `QueryEntry`, `CreateTableOp`, `CreateIndexOp`, `InsertOp`, `UpdateOp` —
+/// all derive it). This is the anti-vacuous oracle: a decode that succeeds
+/// on the indexed bytes but produces a different value than the named
+/// decode of the same logical value is a failure.
 fn assert_indexed_matches_named<T>(indexed: &[u8], expected: &T)
+where
+    T: serde::Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
+{
+    let from_indexed: T = rmp_serde::from_slice(indexed)
+        .unwrap_or_else(|e| panic!("integer-keyed decode failed: {e}"));
+    let from_named: T =
+        rmp_serde::from_slice(&named_bytes(expected)).expect("named decode succeeds");
+    assert_eq!(
+        from_indexed, from_named,
+        "indexed decode diverges from the named decode of the same value"
+    );
+    assert_eq!(
+        &from_indexed, expected,
+        "decoded value differs from expected; decoded = {from_indexed:?}"
+    );
+}
+
+/// Same oracle for DTOs that do NOT derive `PartialEq`. `DbRequest` derives
+/// only `Debug, Clone, Serialize, Deserialize` (crates/query/shamir-query-types/
+/// src/wire/db_message.rs container attrs) and the production file is
+/// untouchable in this task, so typed equality is unavailable and equality is
+/// asserted through Debug text.
+fn assert_indexed_matches_named_debug<T>(indexed: &[u8], expected: &T)
 where
     T: serde::Serialize + serde::de::DeserializeOwned + std::fmt::Debug,
 {
@@ -99,7 +127,8 @@ fn batch_request_decodes_integer_keyed_map_matching_named_decode() {
     write_uint(&mut buf, 1).unwrap(); // IsolationLevel index 1 = Serializable
     write_uint(&mut buf, 7).unwrap(); // 7: queries
                                       // queries map uses STRING alias keys (user data, not dictionary keys).
-    write_map_len(&mut buf, 1).unwrap();
+                                      // Three ops: a read, an insert, an update — a real multi-op batch.
+    write_map_len(&mut buf, 3).unwrap();
     write_str(&mut buf, "r").unwrap();
     // QueryEntry flattens BatchOp: its wire body is the ReadQuery's named
     // fields plus QueryEntry's own named options (Filter is internally
@@ -117,6 +146,48 @@ fn batch_request_decodes_integer_keyed_map_matching_named_decode() {
     write_str(&mut buf, "status").unwrap();
     write_str(&mut buf, "value").unwrap();
     write_str(&mut buf, "active").unwrap(); // FilterValue::String
+                                            // Alias "i1": InsertOp entry, NAMED payload. NOTE: the op payload keys
+                                            // CANNOT be integers through `BatchOp`: its Deserialize buffers the
+                                            // whole op map with STRING keys (`next_entry::<String, QueryValue>()`,
+                                            // ops/batch/ops/batch_op.rs:398-424) before dispatching the payload
+                                            // DTO — an integer key is a typed decode error there (negative test 4b).
+                                            // The round-1 finding that motivates converting BatchOp in WIRE-DICT-2.
+                                            // The DTO field indices ARE exercised directly (integer-keyed) in
+                                            // `write_ops_decode_integer_keyed_directly` below.
+                                            // InsertOp field indices (ops/write/types.rs:84-109):
+                                            //   0 insert_into, 1 values, 2 records_idmsgpack (default, skip-if-empty),
+                                            //   3 select (default, skip-if-none).
+    write_str(&mut buf, "i1").unwrap();
+    write_map_len(&mut buf, 2).unwrap(); // op payload fields at TOP level (QueryEntry flattens BatchOp — no wrapper)
+    write_str(&mut buf, "insert_into").unwrap(); // InsertOp 0
+    write_str(&mut buf, "users").unwrap(); // TableRef named = bare table string
+    write_str(&mut buf, "values").unwrap(); // InsertOp 1
+    write_array_len(&mut buf, 1).unwrap();
+    write_str(&mut buf, "alice").unwrap(); // QueryValue::Str
+                                           // Alias "u1": UpdateOp entry, NAMED payload (same BatchOp constraint as "i1").
+                                           // UpdateOp field indices (ops/write/types.rs:114-143):
+                                           //   0 update, 1 where (rename="where", default, skip-if-none),
+                                           //   2 set, 3 select (default, skip-if-none), 4 expected_version (default, skip-if-none).
+    write_str(&mut buf, "u1").unwrap();
+    write_map_len(&mut buf, 3).unwrap();
+    write_str(&mut buf, "update").unwrap(); // UpdateOp 0
+    write_str(&mut buf, "users").unwrap();
+    write_str(&mut buf, "where").unwrap(); // UpdateOp 1
+                                           // Nested Filter::Eq — internally tagged (tag="op"): the tag VALUE
+                                           // stays a STRING; enum VALUES never index through the buffered
+                                           // String-keyed map, only field/variant identifiers do.
+    write_map_len(&mut buf, 3).unwrap();
+    write_str(&mut buf, "op").unwrap();
+    write_str(&mut buf, "eq").unwrap();
+    write_str(&mut buf, "field").unwrap();
+    write_array_len(&mut buf, 1).unwrap(); // FieldPath = Vec<String>
+    write_str(&mut buf, "status").unwrap();
+    write_str(&mut buf, "value").unwrap();
+    write_str(&mut buf, "active").unwrap(); // FilterValue::String (untagged)
+    write_str(&mut buf, "set").unwrap(); // UpdateOp 2
+    write_map_len(&mut buf, 1).unwrap(); // QueryValue::Map({"name": "bob"})
+    write_str(&mut buf, "name").unwrap();
+    write_str(&mut buf, "bob").unwrap();
     write_uint(&mut buf, 8).unwrap(); // 8: return_all (prove a non-default value)
     write_bool(&mut buf, false).unwrap();
 
@@ -145,6 +216,42 @@ fn batch_request_decodes_integer_keyed_map_matching_named_decode() {
             abort_on_skip: false,
         },
     );
+    queries.insert(
+        "i1".to_string(),
+        QueryEntry {
+            op: BatchOp::Insert(InsertOp {
+                insert_into: TableRef::new("users"),
+                values: vec![QueryValue::Str("alice".to_string())],
+                records_idmsgpack: Vec::new(), // key 2 absent → default
+                select: None,                  // key 3 absent → default
+            }),
+            return_result: true, // default_return() = true, omitted on the wire
+            after: Vec::new(),
+            when: None,
+            abort_on_skip: false,
+        },
+    );
+    let mut set = TMap::default();
+    set.insert("name".to_string(), QueryValue::Str("bob".to_string()));
+    queries.insert(
+        "u1".to_string(),
+        QueryEntry {
+            op: BatchOp::Update(UpdateOp {
+                update: TableRef::new("users"),
+                where_clause: Some(Filter::Eq {
+                    field: vec!["status".to_string()],
+                    value: FilterValue::String("active".to_string()),
+                }),
+                set: QueryValue::Map(set),
+                select: None,           // key 3 absent → default
+                expected_version: None, // key 4 absent → default
+            }),
+            return_result: true, // default_return() = true, omitted on the wire
+            after: Vec::new(),
+            when: None,
+            abort_on_skip: false,
+        },
+    );
     let expected = BatchRequest {
         id: QueryValue::Str("batch-1".to_string()),
         name: None, // key 1 absent → default None
@@ -159,6 +266,80 @@ fn batch_request_decodes_integer_keyed_map_matching_named_decode() {
         limits: BatchLimits::default(), // key 10 absent → default
         interner_epochs: TMap::default(),
         result_encoding: ResultEncoding::Name, // key 12 absent → default
+    };
+    assert_indexed_matches_named(&buf, &expected);
+}
+
+/// Direct typed decode of the WRITE op DTOs with INTEGER field keys — the
+/// indices listed in the batch test's comment. This is the decode side
+/// WIRE-DICT-2's IndexedKeys adapter will emit once BatchOp can carry
+/// integer-keyed payloads (today it cannot — see 4b / the batch test note).
+///
+/// The nested `where` Filter VALUE is written in its NAMED internally-tagged
+/// form (`"op": "eq"` + named fields): an enum VALUE's tag must be the
+/// string; integer variant indices apply only to field/variant IDENTIFIERS
+/// (and, in buffered contexts, to the single-entry-map form proven in the
+/// TxBegin test), never to an internally-tagged tag value.
+#[test]
+fn write_ops_decode_integer_keyed_directly() {
+    // InsertOp: keys 0 (insert_into), 1 (values), 3 (select); key 2
+    // (records_idmsgpack) absent → default empty (skip_serializing_if is
+    // index-safe on both sides).
+    let mut buf = Vec::new();
+    write_map_len(&mut buf, 3).unwrap();
+    write_uint(&mut buf, 0).unwrap(); // 0: insert_into
+    write_str(&mut buf, "users").unwrap(); // TableRef named = bare string
+    write_uint(&mut buf, 1).unwrap(); // 1: values
+    write_array_len(&mut buf, 1).unwrap();
+    write_str(&mut buf, "alice").unwrap(); // QueryValue::Str
+    write_uint(&mut buf, 3).unwrap(); // 3: select
+    write_map_len(&mut buf, 1).unwrap();
+    write_str(&mut buf, "fields").unwrap();
+    write_array_len(&mut buf, 1).unwrap();
+    write_str(&mut buf, "id").unwrap();
+    let expected = InsertOp {
+        insert_into: TableRef::new("users"),
+        values: vec![QueryValue::Str("alice".to_string())],
+        records_idmsgpack: Vec::new(), // key 2 absent → default
+        select: Some(InsertSelect {
+            fields: Some(vec!["id".to_string()]),
+        }),
+    };
+    assert_indexed_matches_named(&buf, &expected);
+
+    // UpdateOp: keys 0 (update), 1 (where), 2 (set), 4 (expected_version);
+    // key 3 (select) absent → default None.
+    let mut buf = Vec::new();
+    write_map_len(&mut buf, 4).unwrap();
+    write_uint(&mut buf, 0).unwrap(); // 0: update
+    write_str(&mut buf, "users").unwrap();
+    write_uint(&mut buf, 1).unwrap(); // 1: where
+                                      // Nested Filter::Eq — NAMED internally-tagged value (see doc comment).
+    write_map_len(&mut buf, 3).unwrap();
+    write_str(&mut buf, "op").unwrap();
+    write_str(&mut buf, "eq").unwrap();
+    write_str(&mut buf, "field").unwrap();
+    write_array_len(&mut buf, 1).unwrap();
+    write_str(&mut buf, "status").unwrap();
+    write_str(&mut buf, "value").unwrap();
+    write_str(&mut buf, "active").unwrap(); // FilterValue::String (untagged)
+    write_uint(&mut buf, 2).unwrap(); // 2: set
+    write_map_len(&mut buf, 1).unwrap(); // QueryValue::Map({"name": "bob"})
+    write_str(&mut buf, "name").unwrap();
+    write_str(&mut buf, "bob").unwrap();
+    write_uint(&mut buf, 4).unwrap(); // 4: expected_version
+    write_uint(&mut buf, 7).unwrap(); // Some(7)
+    let mut set = TMap::default();
+    set.insert("name".to_string(), QueryValue::Str("bob".to_string()));
+    let expected = UpdateOp {
+        update: TableRef::new("users"),
+        where_clause: Some(Filter::Eq {
+            field: vec!["status".to_string()],
+            value: FilterValue::String("active".to_string()),
+        }),
+        set: QueryValue::Map(set),
+        select: None, // key 3 absent → default
+        expected_version: Some(7),
     };
     assert_indexed_matches_named(&buf, &expected);
 }
@@ -234,12 +415,19 @@ fn ddl_create_table_and_create_index_decode_integer_keyed_directly() {
 /// BatchRequest indices: 0 id, 7 queries.
 ///
 /// The end-to-end DDL request with the STRING tag `"op": "execute"` and
-/// integer payload keys. NOTE: the BatchOp dispatch goes through the
-/// QueryValue bridge (`Value<String>` buffering, design §3.5 audit), whose
-/// String-keyed map can only carry STRING op-payload keys today — so the
-/// op payloads here stay in their current named form; the fully
-/// integer-keyed DDL payloads are proven by the direct typed decodes in
+/// integer BatchRequest keys. The op payloads are written in their NAMED
+/// form at the TOP level of each QueryEntry map (QueryEntry flattens
+/// BatchOp, and BatchOp forwards the payload DTO verbatim — there is NO
+/// `{create_table: {...}}` discriminator wrapper). Integer-keyed op
+/// payloads CANNOT pass through BatchOp today: its Deserialize buffers the
+/// whole op map with String keys (`next_entry::<String, QueryValue>()`,
+/// ops/batch/ops/batch_op.rs:398-424) before dispatching the payload DTO,
+/// so an integer payload key is a typed decode error — the round-1 finding
+/// that motivates converting BatchOp in WIRE-DICT-2. The integer-keyed
+/// DIRECT decodes of the DDL DTOs are proven by the standalone test
 /// `ddl_create_table_and_create_index_decode_integer_keyed_directly`.
+/// Equality is asserted through Debug text (see
+/// `assert_indexed_matches_named_debug` — DbRequest has no PartialEq).
 #[test]
 fn db_request_execute_with_create_table_and_index_roundtrips() {
     let mut buf = Vec::new();
@@ -259,18 +447,17 @@ fn db_request_execute_with_create_table_and_index_roundtrips() {
     write_uint(&mut buf, 7).unwrap(); // 7: queries
     write_map_len(&mut buf, 2).unwrap(); // two aliases (STRING alias keys)
     write_str(&mut buf, "t").unwrap();
-    // QueryEntry "t": flattened CreateTableOp op, NAMED payload (see note).
-    write_map_len(&mut buf, 1).unwrap();
-    write_str(&mut buf, "create_table").unwrap();
+    // QueryEntry "t": flattened CreateTableOp — the DTO fields sit at the
+    // TOP level of the entry map (no discriminator wrapper), NAMED form.
+    // CreateTableOp indices: 0 create_table, 1 repo (default "main"),
+    // 2 if_not_exists (default + skip_serializing_if = is_false).
     write_map_len(&mut buf, 2).unwrap();
     write_str(&mut buf, "create_table").unwrap();
     write_str(&mut buf, "events").unwrap();
     write_str(&mut buf, "if_not_exists").unwrap();
     write_bool(&mut buf, true).unwrap();
     write_str(&mut buf, "i").unwrap();
-    // QueryEntry "i": flattened CreateIndexOp op, NAMED payload (see note).
-    write_map_len(&mut buf, 1).unwrap();
-    write_str(&mut buf, "create_index").unwrap();
+    // QueryEntry "i": flattened CreateIndexOp — top-level NAMED fields.
     write_map_len(&mut buf, 4).unwrap();
     write_str(&mut buf, "create_index").unwrap();
     write_str(&mut buf, "idx_events_status").unwrap();
@@ -346,7 +533,7 @@ fn db_request_execute_with_create_table_and_index_roundtrips() {
             result_encoding: ResultEncoding::Name,
         },
     };
-    assert_indexed_matches_named(&buf, &expected);
+    assert_indexed_matches_named_debug(&buf, &expected);
 }
 
 // ---------------------------------------------------------------------------
@@ -358,10 +545,42 @@ fn db_request_execute_with_create_table_and_index_roundtrips() {
 /// DbRequest::TxBegin indices: 0 query_version (default = 0 when absent,
 /// `rename_all = "snake_case"` on the container renames only the TAG
 /// string, never the index), 1 db, 2 repo, 3 isolation (`default` +
-/// `skip_serializing_if` + `deserialize_with`).
+/// `skip_serializing_if` + `deserialize_with` =
+/// `deserialize_optional_field`, ops/batch/req/options/deserialization.rs:4-15,
+/// which is a transparent `Option::<T>::deserialize`).
+///
+/// (a) NEGATIVE: a bare integer as the `isolation` VALUE cannot decode.
+/// DbRequest is internally tagged, so the payload is buffered as serde
+/// `Content` and the enum reaches `ContentDeserializer::deserialize_enum`
+/// (serde-1.0.229/src/private/de.rs:1429-1459), which accepts a STRING or a
+/// single-entry MAP only — a bare `Content::U64(2)` is an `invalid type`
+/// error ("invalid type: integer `2`, expected string or map").
+#[test]
+fn tx_begin_bare_integer_isolation_value_is_invalid_type_error() {
+    let mut buf = Vec::new();
+    write_map_len(&mut buf, 4).unwrap();
+    write_str(&mut buf, "op").unwrap(); // tag stays a STRING
+    write_str(&mut buf, "tx_begin").unwrap();
+    write_uint(&mut buf, 1).unwrap(); // 1: db
+    write_str(&mut buf, "app").unwrap();
+    write_uint(&mut buf, 2).unwrap(); // 2: repo
+    write_str(&mut buf, "main").unwrap();
+    write_uint(&mut buf, 3).unwrap(); // 3: isolation
+    write_uint(&mut buf, 2).unwrap(); // bare integer — NOT a legal enum value here
+    let err = rmp_serde::from_slice::<DbRequest>(&buf)
+        .expect_err("a bare integer isolation value must not decode through the buffered enum");
+    let message = err.to_string();
+    assert!(
+        message.contains("invalid type"),
+        "expected an invalid-type error for the bare integer enum value, got: {message}"
+    );
+}
+
+/// (b) NIL: `write_nil` for isolation → `Option::None`. Fine — nil is the
+/// Option's own form, the enum is never reached.
 #[test]
 fn tx_begin_integer_keyed_fields_fill_defaults_and_match_named_decode() {
-    // (a) key 0 ABSENT: default_query_version() = 0 fills query_version.
+    // key 0 ABSENT: default_query_version() = 0 fills query_version.
     let mut buf = Vec::new();
     write_map_len(&mut buf, 4).unwrap();
     write_str(&mut buf, "op").unwrap(); // tag stays a STRING
@@ -371,16 +590,16 @@ fn tx_begin_integer_keyed_fields_fill_defaults_and_match_named_decode() {
     write_uint(&mut buf, 2).unwrap(); // 2: repo
     write_str(&mut buf, "main").unwrap();
     write_uint(&mut buf, 3).unwrap(); // 3: isolation
-    write_uint(&mut buf, 2).unwrap(); // IsolationLevel index 2 = Pessimistic
+    write_nil(&mut buf).unwrap(); // isolation: None (skip_serializing_if form)
     let expected = DbRequest::TxBegin {
         query_version: 0,
         db: "app".to_string(),
         repo: "main".to_string(),
-        isolation: Some(IsolationLevel::Pessimistic),
+        isolation: None,
     };
-    assert_indexed_matches_named(&buf, &expected);
+    assert_indexed_matches_named_debug(&buf, &expected);
 
-    // (b) key 0 PRESENT as an integer: decoded value wins over the default.
+    // key 0 PRESENT as an integer: decoded value wins over the default.
     let mut buf = Vec::new();
     write_map_len(&mut buf, 5).unwrap();
     write_str(&mut buf, "op").unwrap();
@@ -392,19 +611,56 @@ fn tx_begin_integer_keyed_fields_fill_defaults_and_match_named_decode() {
     write_uint(&mut buf, 2).unwrap();
     write_str(&mut buf, "main").unwrap();
     write_uint(&mut buf, 3).unwrap();
-    write_nil(&mut buf).unwrap(); // isolation: None (skip_serializing_if form)
+    write_nil(&mut buf).unwrap(); // isolation: None
     let expected = DbRequest::TxBegin {
         query_version: 7,
         db: "app".to_string(),
         repo: "main".to_string(),
         isolation: None,
     };
-    assert_indexed_matches_named(&buf, &expected);
+    assert_indexed_matches_named_debug(&buf, &expected);
+}
+
+/// (c) POSITIVE control for (a): the enum-via-single-entry-map form DOES
+/// decode in the buffered context. serde-1.0.229/src/private/de.rs:1429-1459:
+/// `ContentDeserializer::deserialize_enum` takes a single-entry
+/// `Content::Map` and hands its first pair to `EnumDeserializer` — the key
+/// `Content::U64(2)` becomes the variant identifier (`visit_u64` → variant
+/// index 2 = Pessimistic, snake_case rename_all only affects tag NAMES),
+/// the value `Content::Nil` is the unit-variant payload. rmp-serde hands
+/// the whole field value to serde as one buffered map entry, so this form
+/// survives the internally-tagged buffering that kills the bare integer.
+#[test]
+fn tx_begin_isolation_variant_index_via_map_form_decodes() {
+    let mut buf = Vec::new();
+    write_map_len(&mut buf, 4).unwrap();
+    write_str(&mut buf, "op").unwrap();
+    write_str(&mut buf, "tx_begin").unwrap();
+    write_uint(&mut buf, 1).unwrap(); // 1: db
+    write_str(&mut buf, "app").unwrap();
+    write_uint(&mut buf, 2).unwrap(); // 2: repo
+    write_str(&mut buf, "main").unwrap();
+    write_uint(&mut buf, 3).unwrap(); // 3: isolation
+    write_map_len(&mut buf, 1).unwrap(); // externally-tagged form: {index: payload}
+    write_uint(&mut buf, 2).unwrap(); // IsolationLevel variant index 2 = Pessimistic
+    write_nil(&mut buf).unwrap(); // unit-variant payload
+    let expected = DbRequest::TxBegin {
+        query_version: 0,
+        db: "app".to_string(),
+        repo: "main".to_string(),
+        isolation: Some(IsolationLevel::Pessimistic),
+    };
+    assert_indexed_matches_named_debug(&buf, &expected);
 }
 
 // ---------------------------------------------------------------------------
 // 4. Negative cases — exact error class assertions
 // ---------------------------------------------------------------------------
+
+/// BatchRequest's field count at the pinned snapshot. Kept in sync by the
+/// scan test (CHECK 1 pins the snapshot's field list); verified against
+/// ops/batch/req/batch_request.rs:51-175 (13 declared fields, 0..=12).
+const BATCH_REQUEST_FIELD_COUNT: usize = 13;
 
 /// 4a. Integer key 13 is out of range for BatchRequest's 13 fields
 /// (indices 0..=12). deny_unknown_fields structs reject the out-of-range
@@ -414,10 +670,10 @@ fn tx_begin_integer_keyed_fields_fill_defaults_and_match_named_decode() {
 fn batch_request_rejects_out_of_range_integer_key() {
     let mut buf = Vec::new();
     write_map_len(&mut buf, 1).unwrap();
-    write_uint(&mut buf, 13).unwrap(); // out of range: valid indices are 0..=12
+    write_uint(&mut buf, BATCH_REQUEST_FIELD_COUNT as u64).unwrap(); // out of range: valid indices are 0..=12
     write_nil(&mut buf).unwrap();
     let err = rmp_serde::from_slice::<BatchRequest>(&buf)
-        .expect_err("integer key 13 must not decode into a 13-field struct");
+        .expect_err("the first out-of-range integer key must not decode into a 13-field struct");
     let message = err.to_string();
     assert!(
         message.contains("invalid value") && message.contains("13"),
@@ -427,6 +683,35 @@ fn batch_request_rejects_out_of_range_integer_key() {
         message.contains("field index"),
         "expected the field-index expectation in the error, got: {message}"
     );
+}
+
+/// 4a positive control: the same shape with a VALID key (0 = `id`, a
+/// QueryValue) decodes fine — proving 4a isolates the out-of-range index,
+/// not the integer-keyed form itself.
+#[test]
+fn batch_request_accepts_in_range_single_integer_key() {
+    let mut buf = Vec::new();
+    write_map_len(&mut buf, 2).unwrap(); // keys 0 and 7
+    write_uint(&mut buf, 0).unwrap(); // 0: id
+    write_str(&mut buf, "batch-ctl").unwrap(); // QueryValue::Str
+    write_uint(&mut buf, 7).unwrap(); // 7: queries (REQUIRED — no #[serde(default)])
+    write_map_len(&mut buf, 0).unwrap(); // empty queries map
+    let expected = BatchRequest {
+        id: QueryValue::Str("batch-ctl".to_string()),
+        name: None,                            // key 1 absent → default
+        transactional: false,                  // key 2 absent → default
+        isolation: None,                       // key 3 absent → default
+        durability: None,                      // key 4 absent → default
+        index_visibility: None,                // key 5 absent → default
+        visibility_wait: None,                 // key 6 absent → default
+        queries: TMap::default(), // key 7 PRESENT as empty map (required field, no default)
+        return_all: true,         // key 8 absent → default_return_all()
+        return_only: None,        // key 9 absent → default
+        limits: BatchLimits::default(), // key 10 absent → default
+        interner_epochs: TMap::default(), // key 11 absent → default
+        result_encoding: ResultEncoding::Name, // key 12 absent → default
+    };
+    assert_indexed_matches_named(&buf, &expected);
 }
 
 /// 4b. QueryEntry flattens BatchOp: integer keys are buffered and NEVER
@@ -450,6 +735,34 @@ fn query_entry_integer_key_is_an_error_not_a_silent_skip() {
     );
 }
 
+/// 4b positive control: the same single-entry shape with the STRING key
+/// decodes into a real QueryEntry (BatchOp::Insert payload named, at the
+/// TOP level of the entry map — QueryEntry flattens BatchOp). InsertOp
+/// indices (ops/write/types.rs:84-109): 0 insert_into, 1 values,
+/// 2 records_idmsgpack (default), 3 select (default).
+#[test]
+fn query_entry_named_key_decodes_insert_payload() {
+    let mut buf = Vec::new();
+    write_map_len(&mut buf, 2).unwrap();
+    write_str(&mut buf, "insert_into").unwrap(); // InsertOp 0
+    write_str(&mut buf, "users").unwrap(); // TableRef named = bare string
+    write_str(&mut buf, "values").unwrap(); // InsertOp 1
+    write_array_len(&mut buf, 0).unwrap(); // empty records list
+    let expected = QueryEntry {
+        op: BatchOp::Insert(InsertOp {
+            insert_into: TableRef::new("users"),
+            values: Vec::new(),
+            records_idmsgpack: Vec::new(), // key 2 absent → default
+            select: None,                  // key 3 absent → default
+        }),
+        return_result: true, // default_return() = true, omitted on the wire
+        after: Vec::new(),
+        when: None,
+        abort_on_skip: false,
+    };
+    assert_indexed_matches_named(&buf, &expected);
+}
+
 /// 4c. DbRequest is internally tagged (tag = "op"): the TAG must be the
 /// STRING "op". An integer tag key (0) is buffered, never matches, and
 /// surfaces as a missing-field error for `op`.
@@ -465,6 +778,22 @@ fn db_request_integer_tag_key_is_missing_field_error() {
     assert!(
         message.contains("missing field") && message.contains("op"),
         "expected a missing-field `op` error, got: {message}"
+    );
+}
+
+/// 4c positive control: the STRING tag decodes — minimal Ping case
+/// (DbRequest::Ping is a unit variant, wire/db_message.rs:62-64; internally
+/// tagged tag = "op", value "ping" via rename_all = "snake_case").
+#[test]
+fn db_request_string_tag_ping_decodes() {
+    let mut buf = Vec::new();
+    write_map_len(&mut buf, 1).unwrap();
+    write_str(&mut buf, "op").unwrap();
+    write_str(&mut buf, "ping").unwrap();
+    let decoded: DbRequest = rmp_serde::from_slice(&buf).expect("string tag decodes");
+    assert!(
+        matches!(decoded, DbRequest::Ping),
+        "expected DbRequest::Ping, got {decoded:?}"
     );
 }
 
