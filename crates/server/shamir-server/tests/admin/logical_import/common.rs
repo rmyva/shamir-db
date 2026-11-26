@@ -126,6 +126,15 @@ pub fn import_args(input: &Path, target: &Path) -> LogicalImportArgs {
     }
 }
 
+pub fn import_args_as_db(input: &Path, target: &Path, name: &str) -> LogicalImportArgs {
+    LogicalImportArgs {
+        input: input.into(),
+        target: target.into(),
+        schema_only: false,
+        as_db: Some(name.into()),
+    }
+}
+
 /// Drive the offline export driver synchronously; the fixture database must
 /// already be closed.
 pub fn export_now(

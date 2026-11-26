@@ -13,6 +13,7 @@ use crate::logical_import::common::export_now;
 use crate::logical_import::common::handcrafted_bytes;
 use crate::logical_import::common::handcrafted_bytes_for_database;
 use crate::logical_import::common::import_args;
+use crate::logical_import::common::import_args_as_db;
 use crate::logical_import::common::import_now;
 use crate::logical_import::common::runtime;
 use crate::logical_import::common::write_bytes;
@@ -38,6 +39,81 @@ fn reserved_artifact_database_is_refused_before_stage_and_keeps_typed_error() {
     assert!(error.to_string().contains("reserved"));
     assert!(error.to_string().contains("users"));
     assert_no_leftovers(&root, &target);
+}
+
+#[test]
+fn reserved_as_db_is_refused_before_lock_creation() {
+    // Checking --as-db after lock creation leaves a stale lock file.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let artifact = write_bytes(
+        &root.join("app.mpack"),
+        &handcrafted_bytes_for_database("app", None, None),
+    );
+    let target = root.join("target");
+    let error = import_now(
+        &import_args_as_db(&artifact, &target, "users"),
+        CancellationToken::new(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        &error,
+        LogicalImportError::Engine(shamir_db::DbError::Validation(_))
+    ));
+    assert!(error
+        .to_string()
+        .contains("database name 'users' is reserved by the server"));
+    assert_no_leftovers(&root, &target);
+}
+
+#[test]
+fn reserved_retry_name_does_not_mutate_existing_target() {
+    // Reading the retry receipt before checking the effective name masks the typed refusal.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let artifact = write_bytes(
+        &root.join("app.mpack"),
+        &handcrafted_bytes_for_database("app", None, None),
+    );
+    let target = root.join("target");
+    import_now(&import_args(&artifact, &target), CancellationToken::new()).unwrap();
+    let receipt = std::fs::read(target.join(".logical-import-receipt.json")).unwrap();
+    let error = import_now(
+        &import_args_as_db(&artifact, &target, "users"),
+        CancellationToken::new(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        &error,
+        LogicalImportError::Engine(shamir_db::DbError::Validation(_))
+    ));
+    assert!(error
+        .to_string()
+        .contains("database name 'users' is reserved by the server"));
+    assert_eq!(
+        std::fs::read(target.join(".logical-import-receipt.json")).unwrap(),
+        receipt
+    );
+    assert_target_untouched(&root, &target);
+}
+
+#[test]
+fn reserved_source_name_with_safe_override_imports() {
+    // Checking the source name despite a safe --as-db rejects a valid routed import.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let artifact = write_bytes(
+        &root.join("users.mpack"),
+        &handcrafted_bytes_for_database("users", None, None),
+    );
+    let target = root.join("target");
+    let report = import_now(
+        &import_args_as_db(&artifact, &target, "app2"),
+        CancellationToken::new(),
+    )
+    .unwrap();
+    assert_eq!(report.database, "app2");
+    assert!(target.is_dir());
 }
 
 #[test]

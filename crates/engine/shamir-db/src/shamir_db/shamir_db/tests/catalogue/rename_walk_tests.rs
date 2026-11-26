@@ -160,6 +160,7 @@ async fn parent_update_and_delete_succeed_while_child_rename_in_doubt() {
 }
 #[test]
 fn reserved_database_names_apply_only_documented_normalization() {
+    // Catches a regression in ASCII case folding or trailing ASCII dot/space stripping.
     for name in [
         "users",
         "Users",
@@ -175,6 +176,13 @@ fn reserved_database_names_apply_only_documented_normalization() {
         "cache",
         "counters",
         "audit",
+        "audit_checkpoint",
+        "api_tokens",
+        "audit.log",
+        "shamir_db_default_main.redb",
+        "bootstrap_token.txt",
+        "format.stamp",
+        ".logical-import-receipt.json",
     ] {
         assert!(is_reserved_db_name(name), "{name:?} should be reserved");
     }
@@ -203,8 +211,9 @@ fn catalogue_validation_fails_closed_except_for_system_database() {
     };
     for name in ["users", "users ", "Users"] {
         let error = validate_catalogue_db_names(&[record(name)]).unwrap_err();
+        // Catches validation changing from the typed fail-closed error or losing the offending database name.
+        assert!(matches!(error, crate::DbError::Validation(_)));
         assert!(error.to_string().contains(name));
-        assert!(error.to_string().contains("previous release"));
     }
     assert!(validate_catalogue_db_names(&[record("__system__")]).is_ok());
     assert!(validate_catalogue_db_names(&[record("users2")]).is_ok());
@@ -249,6 +258,7 @@ async fn create_accepts_non_reserved_names() {
 
 #[tokio::test]
 async fn rename_from_reserved_name_still_works() {
+    // The live `users` row below is injected with save_database + map inserts, not a repository created by an earlier build; this pins only the from-side guard, not on-disk recovery.
     let db = ShamirDb::init_memory().await.unwrap();
     let identity = DatabaseIdentity::new();
     let mut fields = new_map();

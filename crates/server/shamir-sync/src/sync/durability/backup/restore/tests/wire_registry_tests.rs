@@ -11,10 +11,60 @@ use std::time::Duration;
 
 use super::super::wire_registry::validate_staged_wire_tables;
 use crate::sync::durability::backup::restore::RestoreError;
+use shamir_types::types::value::QueryValue;
 use tempfile::TempDir;
+
+const REAL_DATA_ROOT_ENTRIES: [&str; 14] = [
+    "__system__",
+    "shamir_db_meta.redb",
+    "users",
+    "server_meta",
+    "cache",
+    "counters",
+    "audit",
+    "audit_checkpoint",
+    "api_tokens",
+    "audit.log",
+    "shamir_db_default_main.redb",
+    "bootstrap_token.txt",
+    "format.stamp",
+    ".logical-import-receipt.json",
+];
+
+#[test]
+fn pinned_real_data_root_entries_are_refused_and_match_production() {
+    // Removing a production name or adding a system store without pinning it would break this regression.
+    assert_eq!(
+        REAL_DATA_ROOT_ENTRIES.len(),
+        shamir_db::RESERVED_DB_NAMES.len()
+    );
+    assert_eq!(
+        REAL_DATA_ROOT_ENTRIES.as_slice(),
+        &shamir_db::RESERVED_DB_NAMES,
+        "removing a production name or adding a system store without updating the pin must fail",
+    );
+    for name in REAL_DATA_ROOT_ENTRIES {
+        let repo = super::super::catalogue::CapturedRepo {
+            db: "ordinary_db".into(),
+            repo: "repo".into(),
+            store_dir: format!("{name}/repo"),
+            wal: (format!("{name}/wal"), 0),
+            v_star: 0,
+        };
+        assert!(
+            super::super::catalogue::reject_reserved_store_route(&repo).is_err(),
+            "{name}"
+        );
+        assert!(
+            super::super::catalogue::reject_reserved_wal_dir(Some(name), &repo).is_err(),
+            "{name}"
+        );
+    }
+}
 
 #[test]
 fn reserved_store_components_match_shared_names_exactly() {
+    // Removing a reserved store-route refusal while the independent pin still exists must fail this predicate test.
     for name in shamir_db::RESERVED_DB_NAMES {
         let repo = super::super::catalogue::CapturedRepo {
             db: "ordinary_db".into(),
@@ -31,7 +81,27 @@ fn reserved_store_components_match_shared_names_exactly() {
 }
 
 #[test]
+fn store_route_accepts_ordinary_and_case_variant_components() {
+    // An always-refuse implementation or case-folded literal route check must fail these positive controls.
+    let repo = super::super::catalogue::CapturedRepo {
+        db: "ordinary_db".into(),
+        repo: "repo".into(),
+        store_dir: "ordinary/repo".into(),
+        wal: ("ordinary/wal".into(), 0),
+        v_star: 0,
+    };
+    assert!(super::super::catalogue::reject_reserved_store_route(&repo).is_ok());
+    let case_variant = super::super::catalogue::CapturedRepo {
+        store_dir: "Users/repo".into(),
+        ..repo
+    };
+    // Catches an always-refuse helper and verifies exact, case-sensitive route matching.
+    assert!(super::super::catalogue::reject_reserved_store_route(&case_variant).is_ok());
+}
+
+#[test]
 fn wal_route_reserved_components_are_literal_and_case_sensitive() {
+    // Removing literal reserved-route refusal fails below; the shortened reason assertion survives message edits.
     let repo = super::super::catalogue::CapturedRepo {
         db: "ordinary_db".into(),
         repo: "repo".into(),
@@ -50,11 +120,67 @@ fn wal_route_reserved_components_are_literal_and_case_sensitive() {
     }
     let error = super::super::catalogue::reject_reserved_wal_dir(Some("users"), &repo).unwrap_err();
     assert!(matches!(error, RestoreError::Consistency { .. }));
-    assert!(error
-        .to_string()
-        .contains("captured wal_dir claims reserved destination 'users'"));
+    // Pin the error kind and useful identifiers, not a sentence that may be edited.
+    if let RestoreError::Consistency { reason, .. } = error {
+        assert!(reason.contains("wal_dir"));
+        assert!(reason.contains("users"));
+    }
     assert!(super::super::catalogue::reject_reserved_wal_dir(Some("Users"), &repo).is_ok());
     assert!(super::super::catalogue::reject_reserved_wal_dir(None, &repo).is_ok());
+}
+
+#[tokio::test]
+async fn staged_catalogue_name_scan_refuses_reserved_database_rows() {
+    // Removing this refusal lets the reserved staged row publish and fail at next boot; this seam does not compare full target bytes.
+    let stage = TempDir::new().expect("temp dir");
+    let db = shamir_db::ShamirDb::init_seed(shamir_db::SystemStoreConfig::Fjall(
+        stage.path().join("shamir_db_meta.redb"),
+    ))
+    .await
+    .expect("initialize staged catalogue");
+    db.create_db("users").await.expect("create reserved row");
+    drop(db);
+    let error = super::super::catalogue::validate_staged_db_names(stage.path())
+        .await
+        .expect_err("reserved catalogue row must refuse");
+    assert!(matches!(
+        &error,
+        RestoreError::Catalogue(shamir_db::DbError::Validation(_))
+    ));
+    assert!(error
+        .to_string()
+        .contains("database name 'users' is reserved by the server"));
+}
+
+#[tokio::test]
+async fn staged_catalogue_name_scan_accepts_non_reserved_database() {
+    // Removing the __system__ exception or rejecting users2 makes this acceptance scan fail.
+    let stage = TempDir::new().expect("temp dir");
+    let db = shamir_db::ShamirDb::init_seed(shamir_db::SystemStoreConfig::Fjall(
+        stage.path().join("shamir_db_meta.redb"),
+    ))
+    .await
+    .expect("initialize staged catalogue");
+    db.create_db("users2").await.expect("create ordinary row");
+    let rows = db
+        .system_store()
+        .load_databases()
+        .await
+        .expect("load catalogue rows");
+    assert!(rows
+        .iter()
+        .any(|row| { row.get("name").and_then(QueryValue::as_str) == Some("__system__") }));
+    assert!(rows
+        .iter()
+        .any(|row| row.get("name").and_then(QueryValue::as_str) == Some("users2")));
+    drop(db);
+    // Catches either loss of the __system__ exception or overbroad refusal of users2.
+    assert!(super::super::catalogue::validate_catalogue_db_name_records(&rows).is_ok());
+    assert!(
+        super::super::catalogue::validate_staged_db_names(stage.path())
+            .await
+            .is_ok()
+    );
 }
 
 /// Bounded so a wedged `tokio::fs::read` cannot hang CI.

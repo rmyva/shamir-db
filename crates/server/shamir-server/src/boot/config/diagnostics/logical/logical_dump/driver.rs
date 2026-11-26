@@ -228,11 +228,11 @@ pub async fn export(
     if args.include_artifacts {
         bail!("--include-artifacts is unsupported: guest functions/modules are not implemented");
     }
-    if args.db == "__system__" {
-        bail!("logical-export cannot export the internal system database");
-    }
     if shamir_db::is_reserved_db_name(&args.db) {
-        bail!("database name '{}' is reserved by the server", args.db);
+        return Err(anyhow::Error::from(DbError::Validation(format!(
+            "database name '{}' is reserved by the server",
+            args.db
+        ))));
     }
     checkpoint(&cancel).await?;
     // Keep ownership through verification and publication. Opening/recovery is

@@ -629,6 +629,32 @@ where
         Vec::new()
     };
 
+    // Offline staged-catalogue boot gate before ticket mutation/swap; preserve typed Validation.
+    if !online_classified {
+        let stage = temp_dir.clone();
+        let thread = std::thread::Builder::new()
+            .name("restore-offline-catalogue-names".into())
+            .spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| RestoreError::Io(std::io::Error::other(e)))?;
+                let result = runtime.block_on(catalogue::validate_staged_db_names(&stage));
+                drop(runtime);
+                result
+            })
+            .map_err(RestoreError::Io)?;
+        let result = thread.join().map_err(|_| {
+            RestoreError::Io(std::io::Error::other(
+                "catalogue validation thread panicked",
+            ))
+        })?;
+        if let Err(error) = result {
+            cleanup_staged_temp_dir(&temp_dir);
+            return Err(error);
+        }
+    }
+
     // ---- Step 4: invalidate sessions IN THE STAGED COPY, before the swap.
     // A failure here (e.g. a corrupt/unopenable `users` store in the
     // snapshot) leaves `data_dir` completely untouched, since the swap

@@ -1,5 +1,6 @@
 use crate::access::{Actor, ResourceMeta};
 use crate::engine::repo::{BoxRepoFactory, RepoConfig};
+use crate::shamir_db::shamir_db::{is_reserved_db_name, RESERVED_DB_NAMES};
 use crate::shamir_db::{ShamirDb, SystemStoreConfig};
 use crate::types::value::InnerValue;
 use futures::StreamExt;
@@ -17,15 +18,16 @@ const BOOT_TEST_FLUSH_BUDGET: std::time::Duration = std::time::Duration::from_se
 
 /// Re-open the system store expecting a boot rejection, retrying while the
 /// dropped instance still holds the fjall file lock (released lazily after
-/// the drop). Returns the rejection's message.
-async fn boot_rejection(path: std::path::PathBuf) -> String {
+/// the drop). Returns the typed rejection.
+async fn boot_rejection(path: std::path::PathBuf) -> crate::DbError {
     for _ in 0..100 {
         match ShamirDb::init(SystemStoreConfig::Fjall(path.clone())).await {
             Ok(_) => panic!("boot must be rejected"),
-            Err(e) => {
-                let message = e.to_string();
-                if !message.contains("Locked") {
-                    return message;
+            Err(error) => {
+                let message = error.to_string();
+                let lower = message.to_ascii_lowercase();
+                if !lower.contains("lock") && !lower.contains("another process") {
+                    return error;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             }
@@ -54,7 +56,7 @@ fn assert_exact_rows(actual: &[(RecordId, InnerValue)], expected: &[(RecordId, I
 
 #[tokio::test]
 async fn rv_db_reserved_name_persisted_catalogue_is_rejected_on_boot() {
-    // Removing `validate_catalogue_db_names(&db_records)?` from core.rs makes this test pass on the broken build.
+    // Removing `validate_catalogue_db_names(&db_records)?` from core.rs lets boot succeed and boot_rejection panic; returning any variant other than Validation fails even if its display text is unchanged.
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("system.redb");
     let db = ShamirDb::init(SystemStoreConfig::Fjall(path.clone()))
@@ -77,8 +79,12 @@ async fn rv_db_reserved_name_persisted_catalogue_is_rejected_on_boot() {
         .unwrap();
     drop(db);
     let error = boot_rejection(path).await;
-    assert!(error.contains("users"), "unexpected boot error: {error}");
-    assert!(error.contains("reserved"), "unexpected boot error: {error}");
+    // Catches the boot guard returning a non-Validation refusal with similar wording, and catches dropping the offending name from the diagnostic.
+    assert!(matches!(error, crate::DbError::Validation(_)));
+    assert!(
+        error.to_string().contains("users"),
+        "unexpected boot error: {error}"
+    );
 }
 
 #[test]
@@ -224,4 +230,36 @@ fn in_doubt_rename_reopens_as_exactly_one_catalogued_incarnation() {
         .unwrap()
     });
     drop(runtime);
+}
+
+#[test]
+fn production_reserved_names_cover_real_data_root_entries() {
+    // Catches removing a real system-store name from production or adding a store without updating this pin.
+    const REAL_DATA_ROOT_ENTRIES: [&str; 14] = [
+        "__system__",
+        "shamir_db_meta.redb",
+        "shamir_db_default_main.redb",
+        "users",
+        "server_meta",
+        "cache",
+        "counters",
+        "audit",
+        "audit_checkpoint",
+        "api_tokens",
+        "audit.log",
+        "bootstrap_token.txt",
+        "format.stamp",
+        ".logical-import-receipt.json",
+    ];
+
+    for name in REAL_DATA_ROOT_ENTRIES {
+        assert!(is_reserved_db_name(name), "{name:?} must be reserved");
+        assert!(
+            RESERVED_DB_NAMES.contains(&name),
+            "{name:?} missing from production list"
+        );
+    }
+    for name in ["users2", "my_users", "audit_log", "cache_x"] {
+        assert!(!is_reserved_db_name(name), "{name:?} is a near-miss");
+    }
 }

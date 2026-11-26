@@ -61,27 +61,27 @@ pub async fn import(
     args: LogicalImportArgs,
     cancel: CancellationToken,
 ) -> Result<ImportReport, LogicalImportError> {
-    // Exclusive ownership BEFORE the target is inspected.
-    let lock = ImportLock::acquire(&args.target)?;
-    progress("lock acquired");
+    // Reject the override before acquiring the sibling lock; the broken ordering leaves a stale lock.
     if let Some(name) = args.as_db.as_deref() {
         reject_reserved_name(name)?;
     }
+    // Exclusive ownership BEFORE the target is inspected.
+    let lock = ImportLock::acquire(&args.target)?;
+    progress("lock acquired");
     if let Some(report) = retry_existing(&args, &cancel).await? {
         drop(lock);
         return Ok(report);
     }
-    prepare_target_name(&args.target)?;
     let preflight = Preflight::run(&args.input, &args, &cancel)?;
-    if args.as_db.is_none() {
-        reject_reserved_name(&preflight.database.name)?;
-    }
+    let db_name = args.as_db.as_deref().unwrap_or(&preflight.database.name);
+    reject_reserved_name(db_name)?;
     progress(&format!(
         "preflight verified: {} identities, {} repositories, {} tables",
         preflight.identities.len(),
         preflight.repos.len(),
         preflight.tables.len()
     ));
+    prepare_target_name(&args.target)?;
     let stage = ImportStage::prepare(&args.target)?;
     let outcome = import_into_stage(&stage, &args, &preflight, &cancel).await;
     match outcome {
@@ -241,7 +241,21 @@ async fn retry_existing(
             args.target.display()
         )));
     }
+    let entries = std::fs::read_dir(&args.target).map_err(|e| {
+        LogicalImportError::Target(format!(
+            "cannot inspect existing target {}: {e}",
+            args.target.display()
+        ))
+    })?;
+    if entries.count() == 0 {
+        return Ok(None);
+    }
     let preflight = Preflight::run(&args.input, args, cancel)?;
+    let db_name = args
+        .as_db
+        .clone()
+        .unwrap_or_else(|| preflight.database.name.clone());
+    reject_reserved_name(&db_name)?;
     let receipt = match Receipt::read(&args.target)? {
         Some(receipt) => receipt,
         None => {
@@ -251,11 +265,6 @@ async fn retry_existing(
             )))
         }
     };
-    let db_name = args
-        .as_db
-        .clone()
-        .unwrap_or_else(|| preflight.database.name.clone());
-    reject_reserved_name(&db_name)?;
     if !receipt.matches(
         &artifact_sha256(&args.input, cancel)?,
         &preflight.database.name,

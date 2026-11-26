@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
 
 use shamir_db::engine::db_instance::replay_to::ReplayScope;
 use shamir_db::shamir_db::system_store::{load_replay_scopes, SystemStore, SystemStoreConfig};
-use shamir_db::{ShamirDb, RESERVED_DB_NAMES};
+use shamir_db::{is_reserved_db_name, ShamirDb, RESERVED_DB_NAMES};
 use shamir_types::types::value::QueryValue;
 
 use super::fjall_locks::require_fjall_store;
@@ -116,6 +116,38 @@ pub(super) struct PreparedStagedCatalogue {
     pub orphan_dirs: Vec<PathBuf>,
     /// Non-captured repositories (`db/repo`), removed and reported.
     pub excluded: BTreeSet<String>,
+}
+
+pub(super) async fn validate_staged_db_names(stage: &Path) -> Result<(), RestoreError> {
+    // Opening the staged catalogue only (never user repositories) makes the check safe pre-publication.
+    let meta_path = stage.join("shamir_db_meta.redb");
+    require_fjall_store(&meta_path, "(staged system catalogue)")?;
+    let store = Box::pin(SystemStore::init(SystemStoreConfig::Fjall(meta_path)))
+        .await
+        .map_err(RestoreError::Catalogue)?;
+    let rows = Box::pin(store.load_databases())
+        .await
+        .map_err(RestoreError::Catalogue)?;
+    validate_catalogue_db_name_records(&rows)
+}
+
+pub(super) fn validate_catalogue_db_name_records(rows: &[QueryValue]) -> Result<(), RestoreError> {
+    // This mirrors shamir-db's crate-private validate_catalogue_db_names on
+    // the shared predicate; the predicate remains the single source of truth.
+    for row in rows {
+        let Some(name) = row.get("name").and_then(QueryValue::as_str) else {
+            continue;
+        };
+        if name == "__system__" {
+            continue;
+        }
+        if is_reserved_db_name(name) {
+            return Err(RestoreError::Catalogue(shamir_db::DbError::Validation(
+                format!("database name '{name}' is reserved by the server; a catalogue rename alone does not restore the physical repository path. Export with the previous release's offline logical-export and import with this release under a non-reserved name into an absent target (see the operations guide); if export refuses unsupported content, stay on the previous release"),
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Phase A. The staged [`SystemStore`] handle drops at the end; the phase's

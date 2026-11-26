@@ -41,7 +41,7 @@ fn receipt() -> SeedReceipt {
 
 #[tokio::test]
 async fn reserved_destination_database_is_refused() {
-    // Reverting the seed guard to an exact `__system__` comparison lets this through.
+    // Without the guard, the reserved destination/receipt source reaches the name-mismatch check and is refused as DbError::Storage before catalogue reads, not Validation.
     let home = ShamirDb::init_memory().await.unwrap();
     let root = tempfile::tempdir().unwrap();
     let error = home
@@ -54,7 +54,7 @@ async fn reserved_destination_database_is_refused() {
 
 #[tokio::test]
 async fn reserved_receipt_source_database_is_refused() {
-    // Reverting the seed guard to an exact `__system__` comparison lets this through.
+    // Without the guard, the reserved destination/receipt source reaches the name-mismatch check and is refused as DbError::Storage before catalogue reads, not Validation.
     let home = ShamirDb::init_memory().await.unwrap();
     let root = tempfile::tempdir().unwrap();
     let mut seed_receipt = receipt();

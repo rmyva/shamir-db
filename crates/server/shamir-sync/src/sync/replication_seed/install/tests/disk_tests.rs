@@ -19,6 +19,38 @@ use crate::replication_seed::install::installer::install_with;
 use crate::replication_seed::install::staging::{destination, open_image};
 use crate::replication_seed::{verify, Manifest};
 
+#[test]
+fn reserved_requested_seed_name_refuses_before_destination_probe() {
+    // Without an entry guard, staging probes an existing seed target and artifact verification/exact __system__ rejection can mask the reserved-name refusal.
+    let dir = tempfile::tempdir().unwrap();
+    let artifact = dir.path().join("missing-artifact");
+    let data = dir.path().join("data");
+    fs::create_dir_all(&data).unwrap();
+    for name in ["users", "Users"] {
+        let target = destination(&data, name, "main");
+        // Existing and absent paths both must refuse before find_complete probes either one.
+        for exists in [false, true] {
+            if exists {
+                fs::create_dir_all(&target).unwrap();
+            }
+            let error = runtime()
+                .block_on(install(&data, name, "main", &artifact, "not-a-digest"))
+                .expect_err("reserved requested database name must refuse first");
+            assert!(matches!(
+                &error,
+                crate::replication_seed::SeedError::Invalid(_)
+            ));
+            assert!(error
+                .to_string()
+                .contains(&format!("database name '{name}' is reserved by the server")));
+            if !exists {
+                assert!(!target.exists());
+            }
+            let _ = fs::remove_dir_all(&target);
+        }
+    }
+}
+
 fn runtime() -> Runtime {
     Builder::new_current_thread().enable_all().build().unwrap()
 }
