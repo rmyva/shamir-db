@@ -4,6 +4,8 @@
 //! through `DbTableResolver::resolve_unfenced`, so the fence must not break
 //! ordinary writes on the parent.
 
+use crate::access::Actor;
+use crate::shamir_db::shamir_db::{is_reserved_db_name, validate_catalogue_db_names};
 use crate::shamir_db::ShamirDb;
 use shamir_query_builder::batch::Batch;
 use shamir_query_builder::ddl;
@@ -151,4 +153,88 @@ async fn parent_update_and_delete_succeed_while_child_rename_in_doubt() {
     })
     .await
     .expect("fk walk test exceeded 30 seconds");
+}
+
+
+use crate::shamir_db::shamir_db::{is_reserved_db_name, validate_catalogue_db_names};
+use crate::shamir_db::ShamirDb;
+use shamir_types::types::common::new_map;
+use shamir_types::types::value::QueryValue;
+
+#[test]
+fn reserved_database_names_apply_only_documented_normalization() {
+    for name in [
+        "users",
+        "Users",
+        "USERS",
+        "users.",
+        "users ",
+        "USERS.",
+        "shamir_db_meta.redb",
+        "__SYSTEM__",
+        "__system__",
+        "Users.",
+        "server_meta",
+        "cache",
+        "counters",
+        "audit",
+    ] {
+        assert!(is_reserved_db_name(name), "{name:?} should be reserved");
+    }
+    for name in [
+        "users2",
+        "my_users",
+        "audit_log",
+        "users_dir",
+        "cache_server",
+        "server_meta2",
+        "USERS~1",
+        "user",
+        "",
+        "users .x",
+    ] {
+        assert!(!is_reserved_db_name(name), "{name:?} should be accepted");
+    }
+}
+
+#[test]
+fn catalogue_validation_fails_closed_except_for_system_database() {
+    let record = |name: &str| {
+        let mut fields = new_map();
+        fields.insert("name".into(), QueryValue::Str(name.into()));
+        QueryValue::Map(fields)
+    };
+    for name in ["users", "users ", "Users"] {
+        let error = validate_catalogue_db_names(&[record(name)]).unwrap_err();
+        assert!(error.to_string().contains(name));
+        assert!(error.to_string().contains("previous release"));
+    }
+    assert!(validate_catalogue_db_names(&[record("__system__")]).is_ok());
+    assert!(validate_catalogue_db_names(&[record("users2")]).is_ok());
+    assert!(validate_catalogue_db_names(&[]).is_ok());
+}
+
+#[tokio::test]
+async fn rename_refuses_reserved_destination() {
+    let db = ShamirDb::init_memory().await.unwrap();
+    db.create_db("ordinary").await.unwrap();
+    let error = db
+        .rename_db("ordinary", "users")
+        .await
+        .expect_err("reserved destination must be refused");
+    assert!(matches!(error, crate::DbError::Validation(_)));
+    assert!(error.to_string().contains("reserved"));
+}
+#[tokio::test]
+async fn create_refuses_reserved_names_with_validation_error() {
+    let db = ShamirDb::init_memory().await.unwrap();
+    for name in ["users", "Users", "USERS", "users."] {
+        let result = db.create_db_as_checked(name, Actor::System).await;
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("reserved name {name:?} must be refused"),
+        };
+        assert!(matches!(error, crate::DbError::Validation(_)));
+        assert!(error.to_string().contains("reserved"));
+    }
 }

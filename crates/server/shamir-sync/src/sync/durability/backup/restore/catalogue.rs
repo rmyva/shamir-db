@@ -42,22 +42,11 @@ use std::path::{Path, PathBuf};
 
 use shamir_db::engine::db_instance::replay_to::ReplayScope;
 use shamir_db::shamir_db::system_store::{load_replay_scopes, SystemStore, SystemStoreConfig};
-use shamir_db::ShamirDb;
+use shamir_db::{ShamirDb, RESERVED_DB_NAMES};
 use shamir_types::types::value::QueryValue;
 
 use super::fjall_locks::require_fjall_store;
 use super::RestoreError;
-
-/// Top-level names no repository row may claim (system catalogue, user
-/// directory, server metadata, private cache, counters, audit).
-const RESERVED_TOP_LEVEL: [&str; 6] = [
-    "shamir_db_meta.redb",
-    "users",
-    "server_meta",
-    "cache",
-    "counters",
-    "audit",
-];
 
 /// One captured repository: manifest key split EXACTLY once into
 /// `db/repo`, plus its consistency data (WAL route REQUIRED).
@@ -178,7 +167,9 @@ pub(super) async fn prepare_staged_catalogue(
         }
         let wal_path = join_manifest_rel(stage, &repo.wal.0);
         if let Some(first) = first_top_level(&wal_path, stage) {
-            if RESERVED_TOP_LEVEL.contains(&first.as_str()) {
+            // Restore matches literal server-produced components exactly,
+            // unlike normalized creation-side user-name validation.
+            if RESERVED_DB_NAMES.contains(&first.as_str()) {
                 return Err(RestoreError::Consistency {
                     repo: repo.label(),
                     reason: format!("captured wal_dir claims reserved destination '{first}'"),
@@ -470,7 +461,7 @@ fn first_top_level(path: &Path, stage: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
-fn reject_reserved_store_dir(repo: &CapturedRepo) -> Result<(), RestoreError> {
+pub(super) fn reject_reserved_store_dir(repo: &CapturedRepo) -> Result<(), RestoreError> {
     match repo
         .store_dir
         .split('/')
@@ -480,7 +471,7 @@ fn reject_reserved_store_dir(repo: &CapturedRepo) -> Result<(), RestoreError> {
             repo: repo.label(),
             reason: "captured store_dir is empty".into(),
         }),
-        Some(c) if RESERVED_TOP_LEVEL.contains(&c) => Err(RestoreError::Consistency {
+        Some(c) if RESERVED_DB_NAMES.contains(&c) => Err(RestoreError::Consistency {
             repo: repo.label(),
             reason: format!("captured store_dir claims reserved destination '{c}'"),
         }),

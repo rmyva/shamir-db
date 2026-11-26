@@ -9,12 +9,27 @@
 
 use std::time::Duration;
 
-use tempfile::TempDir;
-
 use super::super::wire_registry::validate_staged_wire_tables;
 use crate::sync::durability::backup::restore::RestoreError;
+use tempfile::TempDir;
 
-/// Bounded so a wedged `tokio::fs::read` cannot hang CI.
+#[test]
+fn reserved_store_components_match_shared_names_exactly() {
+    for name in shamir_db::RESERVED_DB_NAMES {
+        let repo = super::super::catalogue::CapturedRepo {
+            db: "ordinary_db".into(),
+            repo: "repo".into(),
+            store_dir: format!("{name}/repo"),
+            wal: (format!("{name}/wal"), 0),
+            v_star: 0,
+        };
+        assert!(super::super::catalogue::reject_reserved_store_dir(&repo)
+            .unwrap_err()
+            .to_string()
+            .contains(name));
+    }
+}
+
 const CALL_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Encode `map` as MessagePack bytes the way the boot decoder would

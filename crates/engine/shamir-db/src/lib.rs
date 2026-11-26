@@ -39,6 +39,8 @@ pub use crate::shamir_db::{
 };
 pub use crate::shamir_db::{ShamirDb, SystemStoreConfig};
 
+pub use crate::shamir_db::shamir_db::{is_reserved_db_name, RESERVED_DB_NAMES};
+
 pub use crate::shamir_db::shamir_db::ShutdownReport;
 
 // S5c-X PR8b-2: durable subscription binding (shamir-server stage W2 needs
