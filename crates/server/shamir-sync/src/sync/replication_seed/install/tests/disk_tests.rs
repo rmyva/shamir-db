@@ -34,7 +34,13 @@ fn reserved_requested_seed_name_refuses_before_destination_probe() {
                 fs::create_dir_all(&target).unwrap();
             }
             let error = runtime()
-                .block_on(install(&data, name, "main", &missing_artifact, "not-a-digest"))
+                .block_on(install(
+                    &data,
+                    name,
+                    "main",
+                    &missing_artifact,
+                    "not-a-digest",
+                ))
                 .expect_err("reserved requested database name must refuse first");
             assert!(matches!(
                 &error,
