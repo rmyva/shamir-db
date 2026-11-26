@@ -159,6 +159,13 @@ slow-timeout = { period = "60s", terminate-after = 4 }  # ~90 s legit, kill at 2
 filter = "package(shamir-connect) and test(/.*scram.*/)"
 slow-timeout = { period = "10s", terminate-after = 6 }   # Argon2-bound; kill at 60 s.
 
+# The 1 GiB logical-dump budget test runs only under SHAMIR_LOGICAL_DUMP_LARGE=1
+# (manual and scheduled CI runs): export, import and verify each carry a 600 s
+# budget inside the test, so the runner's kill must sit above their sum (30 min).
+[[profile.default.overrides]]
+filter = "package(shamir-server) and test(streaming_1gib_variant_meets_budgets_when_enabled)"
+slow-timeout = { period = "600s", terminate-after = 4 }  # kill at 40 min.
+
 # Whole functions binary (tests/functions/lifecycle) compiles WASM (cranelift, CPU-bound) in
 # nearly every test — throttle its parallelism via the wasm-heavy group
 # instead of masking CPU starvation with a bigger global slow-timeout.
