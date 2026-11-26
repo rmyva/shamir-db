@@ -1,6 +1,6 @@
 # Wire keyword dictionary: numeric keys for OQL and DDL on the binary wire
 
-Status: design, 2026-11-26. Owner request: "the keywords of OQL and DDL travel as numbers, from a hard-coded dictionary of their own, separate from the data interner". Go/no-go gate: the measurement of task #2026 (`docs/dev-artifacts/prompts/perf/167-wire-decode-measure.md`).
+Status: design, 2026-11-26. Owner request: "the keywords of OQL and DDL travel as numbers, from a hard-coded dictionary of their own, separate from the data interner". The measurement of task #2026 (`docs/dev-artifacts/prompts/perf/167-wire-decode-measure.md`) supplies the numbers of section 4; the owner decided on 2026-11-26 that the dictionary is built regardless.
 
 ## 1. Problem
 
@@ -71,11 +71,30 @@ Requests: no negotiation needed (3.4). Replies: the server encodes a reply index
 
 `@msgpack/msgpack` encodes plain objects with string keys. The TS codec needs the dictionary AND the type graph (which DTO sits at which position) to replace keys by indices and to map indexed replies back to named objects. Both come from the snapshot: it records, per field, the wire type of its value. A generated TS module carries the table; parity tests encode a shared corpus of requests in Rust and in TS and require identical bytes.
 
-## 4. Expected effect (to be confirmed by #2026)
+## 4. Effect: expected, and measured by #2026
 
-- Bytes: each key shrinks from 1 + its length to 1 byte. Keyword-heavy requests (filters, DDL, large batches) shrink most; data-heavy requests barely change.
-- Decode: one integer jump per key instead of a string match; nothing changes for values and data.
-- The upper bound measured by #2026 (`decode_compact` against `decode_named`, and the decode share of `end_to_end`) decides whether the work proceeds and in which order (requests first if batches dominate).
+Expected: each key shrinks from 1 + its length to 1 byte; decode becomes one integer jump per key instead of a string match; nothing changes for values and data.
+
+Measured (task #2026, bench `crates/server/shamir-server/benches/wire_decode_measure.rs`): five builder-made requests, named encoding (`rmp_serde::to_vec_named`, the production form) against the positional "compact" form (`rmp_serde::to_vec`), which is a LOWER BOUND for the decode work of numeric keys (a numeric-keyed map still carries one key per field). Every scenario is executed once through the real handler on an in-memory database and its reply is checked BEFORE timing (`WIRE_DECODE_E2E_CHECK ok=true` for all five, in both runs). Two runs under `wnice -p idle -c 10 -t 8 -m 50` while other executors compiled on the same machine: the same cell differs by up to 2.9x between the runs, so read these as orders of magnitude. Times in microseconds, run 1 / run 2.
+
+| Scenario | Request bytes named / compact | `decode_named` | `end_to_end` | Decode share of `end_to_end` |
+|---|---|---|---|---|
+| point read | 447 / 148 (3.0x) | 83 / 79 | 483 / 472 | 17% / 17% |
+| single insert | 386 / 137 (2.8x) | 29 / 49 | 906 / 485 | 3% / 10% |
+| batch of 1000 inserts | 73825 / 73576 (1.003x) | 48692 / 35386 | 1 iteration only: 30067 ms / 629 ms | not usable / 6% |
+| nested filter and projection | 621 / 242 (2.6x) | 177 / 99 | 1875 / 1206 | 9% / 8% |
+| DDL (create table, 3 indexes) | 756 / 507 (1.5x) | 91 / 165 | 701 / 776 | 13% / 21% |
+
+Compact against named decode of the whole `queries` map (the largest part that round-trips in compact form): point read 78 -> 58 / 74 -> 28; nested filter 128 -> 109 / 185 -> 106; single insert, 1000-insert batch and DDL show no consistent gain (the differences are inside the noise, in both directions).
+
+What the numbers support:
+
+1. Bytes are the clear win: keyword overhead is 2.6-3.0x of the request for small reads, inserts and filtered reads, 1.5x for DDL, and nothing for data-heavy batches (1.003x).
+2. CPU is a small win: decoding the whole request is 3-21% of the server-side time of a request (the handler, authorization and reply encoding are the other 79-97%), and the lower bound saves none to about half of that decode. A realistic ceiling for numeric keys is a few percent of request time (about 5% at best), before TLS and network time are added, which only dilute it further.
+3. The full-request compact form does not even round-trip (`invalid type: boolean false, expected a string`: `BatchRequest.name` is `Option<String>` with `skip_serializing_if`, so every later position shifts). Positional encoding is therefore not an alternative; numeric-keyed maps (this design) are.
+4. The 1000-insert end-to-end cell ran one iteration and varied by a factor of 48; its share is not a result. Run it with more iterations in step WIRE-DICT-5, on a quiet machine.
+
+Owner decision of 2026-11-26: the dictionary is built in any case; the measurement supplies these numbers, it does not gate the work. Order of value: the encoder and the Rust client first (bytes), the TypeScript codec last (the most work, the same byte gain, no extra CPU benefit).
 
 ## 5. Risks
 
@@ -86,7 +105,7 @@ Requests: no negotiation needed (3.4). Replies: the server encodes a reply index
 
 ## 6. Work breakdown (tasks)
 
-1. **#2026 WIRE-DECODE-MEASURE** (running): numbers; go/no-go.
+1. **#2026 WIRE-DECODE-MEASURE** (done): the numbers of section 4.
 2. **WIRE-DICT-1 snapshot and audit**: the dictionary snapshot generated from the code, the append-only test, round-trip tests per wire type, the `indexed`/`named` audit of 3.5. No wire change yet.
 3. **WIRE-DICT-2 indexed encoding**: the `IndexedKeys` adapter in the wire codec, the hand-written impls converted (`BatchOp` first), dual-form decoding proven by tests on every transport.
 4. **WIRE-DICT-3 negotiation and clients**: `query_version` bump, indexed replies for the new version, the Rust client and the shell send indexed requests, protocol spec `WIRE_DICTIONARY.md`.

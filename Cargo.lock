@@ -3909,6 +3909,7 @@ dependencies = [
  "hmac",
  "indexmap",
  "num-bigint",
+ "rmp",
  "rmp-serde",
  "serde",
  "serde_bytes",
@@ -3916,6 +3917,7 @@ dependencies = [
  "sha2 0.11.1",
  "shamir-collections",
  "shamir-types",
+ "syn 2.0.114",
 ]
 
 [[package]]

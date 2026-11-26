@@ -44,6 +44,13 @@ server  = []
 [dev-dependencies]
 bench-scale-tool = { workspace = true }
 serde_json = "1"
+# Snapshot scanner (wire_dictionary_scan_tests): parses crate sources with
+# syn to rebuild the wire-dictionary table and pin declaration order.
+syn = { version = "2.0.114", features = ["derive", "parsing", "full"] }
+# Integer-keyed MessagePack construction in the decode proof tests
+# (wire_dictionary_decode_tests): hand-built indexed wire frames for the
+# real DTOs, under exact byte-level test control.
+rmp = "0.8.15"
 
 [[bench]]
 name = "batch_planner"
