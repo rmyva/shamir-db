@@ -1,0 +1,34 @@
+# Brief: WIRE-DICT-1 (task #2027), round 3 of at most 3 (LAST executor round) - make the scanner and the snapshot agree, close the completeness holes, make the tests mutation-sensitive
+
+You continue session `wd-1` in the same worktree (`<worktree>`, branch `wire-dict-1`). Rounds 1 and 2 are COMMITTED (the last is `246b7e5cb`); the design document and brief 173 were committed after it and are NOT yours. The tree you start from is clean; your edits stay uncommitted. Brief 169 (`docs/dev-artifacts/prompts/perf/169-wire-dict-1-snapshot-audit.md`) is still the contract, including its Compile / build / test policy, the machine wrapper rules and the no-git-mutation rule, unchanged. The independent code review (read-only, it re-read the code and the snapshot) confirmed that rounds 1 findings 1, 4, 6, 7 and 8 are fixed; below is what is left. After this round the orchestrator fixes what remains by hand, so close each point completely. You cannot run tests: after every scanner change re-walk the snapshot entries it touches by hand.
+
+## Acceptance (three groups; the numbers below are the reviewer's findings)
+
+### A. The scanner and the committed snapshot must agree (the test fails on the supplied snapshot today)
+1. Raw identifiers: `ReadQuery.r#where` and `FieldRuleDto.r#type` are scanned as `r#where` / `r#type` while the snapshot pins `where` / `type`. Unraw every identifier before comparing (`syn::ext::IdentExt::unraw`).
+2. `IsolationLevel::Snapshot` and `DeliverMode::Records` carry the Rust `#[default]`, not `#[serde(default)]`; the snapshot lists a serde `default` on them. The snapshot is generated from the source: correct the file, and make sure the scanner reads only the real `#[serde(...)]` attributes.
+3. Conversion edges: `FieldRuleDto` decodes through `FieldRuleWire` (`from`), but the scanner ignores `from`/`try_from`/`into`/`remote` and never follows that edge. Pin those attributes and the conversion target type, and traverse the target. Also pin enum `rename_all_fields` (Serde uses it, not the enum-container `rename_all`, as the fallback for variant FIELD names; separate field and variant rules), the directional form `rename(serialize = "...", deserialize = "...")` (today the parser expects `=` and silently drops the error), and `skip`, `other` where present.
+4. Descriptions: `BatchOp` reasons say the DTOs sit "under the externally-tagged op-name key"; there is no such wrapper (the payload map is forwarded whole and the operation is picked by its discriminator fields such as `from`, `insert_into`, `update`; `op_kind.rs:17-32`, `batch_op.rs:398-448`): fix the text and record the real discriminator fields. `QueryValue` is labeled "externally tagged" but serializes raw scalars, sequences and maps: describe it as a terminal for dictionary KEYS, not as a tagged enum.
+
+### B. The completeness check must not be vacuous
+5. Traversal drops edges: `Vec<(NewDto, u32)>` and `TMap<NewDto, String>` appended to `DbRequest` would pass (one edge discarded, the other keeps only the last generic argument). Traverse every type argument and tuple element recursively, aliases included; an unsupported type marker must fail the check, not be skipped.
+6. `roots: []` passes the root-key sanity and makes completeness vacuous: assert the two roots by name, non-empty, from the snapshot AND traverse from the fixed roots `DbRequest` and `DbResponse` in the source, not from the snapshot's own list.
+7. Removed types: a deleted snapshot entry whose type is still reachable must fail (today the existence loop only visits entries that remain). External types (outside the crate): the check states which it does not verify, in the failure and in the snapshot notes.
+8. Corpus read and parse errors: propagate with the path in the message instead of discarding `parse_nested_meta` and directory-walk errors.
+
+### C. The tests must be able to fail for the right reason
+9. The "missing type" test only walks a hand-built graph; it cannot catch a disabled check. Replace it by a test that parses a minimal source fixture and asserts that the REAL checker rejects a missing entry and accepts the same fixture once the entry is added, including a `Vec<B>` edge and a tuple edge.
+10. The out-of-range probe hard-codes `13`: compute it from the snapshot (member count plus a margin). Its negative omits required fields and the flatten control changes both the map contents and the key type: change exactly ONE key in an otherwise valid control, so the negative isolates the index.
+11. Four negative assertions rely on Display text (`invalid type`, `invalid value`/`field index`/`13`, `missing field`/`op`). Assert the error KIND (`Error::Syntax`) plus the matched positive control, and keep a text check only where it distinguishes two mechanisms, with a comment on what it distinguishes.
+12. Mutation table: say in the report, per mutation (rename a field, insert a variant in the middle of a derived and of a hand-written enum, reorder two fields, change a type, add each pinned attribute, add a reachable type through a generic, remove a type), whether the guard now fails and where; a mutation that still passes silently is listed as such with the reason.
+
+## Gates after the LAST edit (one cargo command at a time)
+`cargo fmt -p shamir-query-types` (a WRITE run, first), then in separate invocations `cargo check -p shamir-query-types --all-targets` and `cargo clippy -p shamir-query-types --all-targets -- -D warnings`, then `python -I scripts/ci/check_layout.py` and your hand count (at most 7 entries per folder, at most 1000 lines per file; the scanner files are near 700 and 550 lines). Each exit printed as `name_exit=$?` right after its command; nothing but these gates after the last edit.
+
+## Not yours
+Production sources, the DTO definitions, the design document, brief files, the wire codec, `crates/server/**`, `crates/engine/**`, the clients, CI workflows. Do not create files under `docs/dev-artifacts/prompts/`.
+
+⛔ NEVER run `git reset` / `checkout` / `clean` / `stash` / `restore` / `rm` / `add` / `commit`, or any git command that mutates the working tree or index. Only edit files; the orchestrator stages and commits. Read-only git (`status`, `diff`, `log`, `show`) is allowed. Never write a private machine path into any file; leave no scratch files.
+
+## Report
+ONE complete standalone message, written as your own top-level reply, in ENGLISH: per item 1-12 what changed (file and line) or why not; the mutation table of item 12; every gate with its real exit code and which edit it follows; what is not provable by reading. Never write "all done" while an item is open.
