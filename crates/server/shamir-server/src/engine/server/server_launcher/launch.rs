@@ -55,7 +55,7 @@ use super::load_metrics::bind_load_source;
 #[path = "support/rollback_cleanup.rs"]
 mod rollback_cleanup;
 
-use rollback_cleanup::{join_meta_snapshot, log_rollback_cleanup};
+use rollback_cleanup::{join_meta_snapshot, log_rollback_cleanup, stop_release_sources};
 
 // `log_rollback_cleanup` is `pub(super)` inside the private `rollback_cleanup`
 // module, so only a child of THIS module can call it: the shutdown-folder test
@@ -498,6 +498,7 @@ impl ServerLauncher {
         let cancel_refusal_audit = handler_concrete.cancel_refusal_audit();
         let handler_owned_tracker = handler_concrete.owned_mutation_tasks();
         let tx_registry_for_reaper = handler_concrete.tx_registry();
+        let tx_registry_for_rollback = Arc::clone(&tx_registry_for_reaper); // for the rollback arms
         let cursor_registry_for_reaper = handler_concrete.cursor_registry();
         let handler: Arc<dyn RequestHandler> = handler_concrete.clone();
 
@@ -540,7 +541,7 @@ impl ServerLauncher {
         // outlive their idle TTL or absolute deadline. Shares the root
         // shutdown token: `ServerHandle::shutdown` cancels it once and this
         // task observes the cancel on its next `select!` poll.
-        let interactive_tx_reaper = Some(crate::tx_registry::spawn_reaper_task(
+        let mut interactive_tx_reaper = Some(crate::tx_registry::spawn_reaper_task(
             tx_registry_for_reaper,
             crate::tx_registry::DEFAULT_INTERACTIVE_TX_IDLE_TTL,
             crate::tx_registry::DEFAULT_REAPER_INTERVAL,
@@ -652,13 +653,7 @@ impl ServerLauncher {
                     &mut cleanup,
                 )
                 .await;
-                // The boot error wins: cleanup failures are logged, never
-                // returned in its place.
-                // Bounded drain of the detached workers the failed boot already
-                // owns: the handler's mutation workers and the online-export
-                // service (its `start` refuses after the cancel above). The
-                // boot error still wins: drain failures are logged, never
-                // returned in its place.
+                // Bounded drain of the detached workers the failed boot owns; failures logged.
                 handler_owned_tracker.close();
                 if tokio::time::timeout(ROLLBACK_WORKER_DRAIN, handler_owned_tracker.wait())
                     .await
@@ -680,9 +675,13 @@ impl ServerLauncher {
                 }
                 log_rollback_cleanup("listener bind", &cleanup);
                 join_meta_snapshot("listener bind", meta_snapshot_task).await;
-                if let Some(reaper) = interactive_tx_reaper {
-                    let _ = reaper.handle.await;
-                }
+                stop_release_sources(
+                    "listener bind",
+                    &mut interactive_tx_reaper,
+                    &tx_registry_for_rollback,
+                    &mut cleanup,
+                )
+                .await;
                 if let Some(reaper) = cursor_reaper {
                     let _ = reaper.handle.await;
                 }
@@ -823,11 +822,7 @@ impl ServerLauncher {
                     &mut cleanup,
                 )
                 .await;
-                // Bounded drain of the detached workers the failed boot already
-                // owns: the handler's mutation workers and the online-export
-                // service (its `start` refuses after the cancel above). The
-                // boot error still wins: drain failures are logged, never
-                // returned in its place.
+                // Bounded drain of the detached workers the failed boot owns; failures logged.
                 handler_owned_tracker.close();
                 if tokio::time::timeout(ROLLBACK_WORKER_DRAIN, handler_owned_tracker.wait())
                     .await
@@ -849,9 +844,13 @@ impl ServerLauncher {
                 }
                 log_rollback_cleanup("observability bind", &cleanup);
                 join_meta_snapshot("observability bind", meta_snapshot_task).await;
-                if let Some(reaper) = interactive_tx_reaper {
-                    let _ = reaper.handle.await;
-                }
+                stop_release_sources(
+                    "observability bind",
+                    &mut interactive_tx_reaper,
+                    &tx_registry_for_rollback,
+                    &mut cleanup,
+                )
+                .await;
                 if let Some(reaper) = cursor_reaper {
                     let _ = reaper.handle.await;
                 }

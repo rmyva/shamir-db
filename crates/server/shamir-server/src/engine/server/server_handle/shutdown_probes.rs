@@ -121,6 +121,53 @@ pub(in crate::engine::server) fn fire_repo_flush_probe() {
     }
 }
 
+/// One-shot probe fired in
+/// [`release_source_stop::stop_release_sources_and_drain_tails`] immediately
+/// AFTER the release sources are stopped and the registry cleared, BEFORE the
+/// tail admission closes and (on the graceful path) BEFORE the repository
+/// flush stage. A shutdown test compares its order with
+/// [`arm_repo_flush_probe`]: the sources must stop before the flush, so this
+/// marker must fire first (mutant: the helper moved after the flush).
+#[cfg(test)]
+static RELEASE_SOURCES_STOPPED_PROBE: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
+
+/// Clears an unfired [`arm_release_sources_stopped_probe`]; a probe that
+/// fires removes itself from the slot.
+#[cfg(test)]
+pub(crate) struct ReleaseSourcesStoppedProbeGuard;
+
+#[cfg(test)]
+impl Drop for ReleaseSourcesStoppedProbeGuard {
+    fn drop(&mut self) {
+        *RELEASE_SOURCES_STOPPED_PROBE
+            .lock()
+            .expect("release sources stopped probe") = None;
+    }
+}
+
+/// Arm ONE release-sources-stopped probe.
+#[cfg(test)]
+pub(crate) fn arm_release_sources_stopped_probe(
+    probe: impl FnOnce() + Send + 'static,
+) -> ReleaseSourcesStoppedProbeGuard {
+    *RELEASE_SOURCES_STOPPED_PROBE
+        .lock()
+        .expect("release sources stopped probe") = Some(Box::new(probe));
+    ReleaseSourcesStoppedProbeGuard
+}
+
+/// Fire and consume the release-sources-stopped probe, if any.
+#[cfg(test)]
+pub(in crate::engine::server) fn fire_release_sources_stopped_probe() {
+    let probe = RELEASE_SOURCES_STOPPED_PROBE
+        .lock()
+        .expect("release sources stopped probe")
+        .take();
+    if let Some(probe) = probe {
+        probe();
+    }
+}
+
 /// One-shot probe fired at the ENTRY of the store-release stage's zero-budget
 /// branch (`server_handle/core.rs`, `release_budget.is_zero()`). Test-only: a
 /// deadline test that exhausts every stage deadline at once must be able to

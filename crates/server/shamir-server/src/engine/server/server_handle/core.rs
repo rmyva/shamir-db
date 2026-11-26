@@ -16,7 +16,7 @@ use super::shutdown_probes::{
     fire_release_zero_budget_probe, fire_repo_flush_probe, fire_scheduled_join_probe,
 };
 
-use super::release_tail_drain::drain_release_tails;
+use super::release_source_stop::{stop_release_sources_and_drain_tails, ReleaseStopBounds};
 use super::shutdown_owner::{
     early_stage_bound, stage_bound, ShutdownOwner, CONN_DRAIN_TIMEOUT, REPO_FLUSH_BUDGET,
 };
@@ -190,7 +190,7 @@ pub struct ServerHandle {
     pub(in crate::engine::server) cursor_reaper: Option<crate::cursor_registry::CursorReaperTask>,
     /// R3-2b — the online logical-export job service, when a root is
     /// configured. Held until shutdown: the export root's exclusive lock
-    /// must outlive every job, and `shutdown_with_report` waits (bounded)
+    /// must outlive every job, and the shutdown waits (bounded)
     /// for a draining worker BEFORE the store flush (a freeze holds the
     /// gate). `None` without a configured root. Dropped BEFORE the
     /// store-release probe: the service owns `Arc<ShamirDb>` and the durable
@@ -198,13 +198,16 @@ pub struct ServerHandle {
     /// report every store `StillLocked` on an idle export-enabled server.
     pub(in crate::engine::server) online_export: Option<Arc<OnlineExport>>,
     /// The interactive-tx registry (release-tail producer host): shutdown
-    /// empties it after the reaper join and before the release-tail close,
-    /// so every lingering transaction's `Drop` release is REGISTERED while
-    /// admission is still open.
+    /// stops it (reaper join), empties it and closes the tail admission —
+    /// the ONE ordered stop in `release_source_stop` — all BEFORE the
+    /// repository flush, so every lingering transaction's `Drop` release is
+    /// REGISTERED while admission is still open and no release can run after
+    /// the flush.
     pub(in crate::engine::server) tx_registry: Arc<crate::tx_registry::TxRegistry>,
     pub(in crate::engine::server) owned_mutation_tasks: Option<Arc<MutationTasks>>,
-    /// Owner of the interactive-tx record-lock release tails, drained before
-    /// the repository flush and after the reaper teardown.
+    /// Owner of the interactive-tx record-lock release tails, stopped,
+    /// cleared and drained BEFORE the repository flush via
+    /// `release_source_stop`.
     pub(in crate::engine::server) tx_release_tails: Option<Arc<ReleaseTails>>,
     /// Follower-replication supervisor (386-c). Held here so its follower
     /// loops survive past boot (dropping it would kill every loop). On
@@ -305,12 +308,24 @@ impl ServerHandle {
         self.format_stamp
     }
 
-    /// Stop accepting connections, then drain the scheduler and audit log.
-    /// Returns repository checkpoint failures; ignored reports preserve caller behaviour.
-    pub async fn shutdown(mut self) -> ShutdownReport {
-        let mut report = self.pending_shutdown_report();
-        let mut owner = self.take_shutdown_owner();
-        self.shutdown_with_report(&mut report, &mut owner).await;
+    /// Stop accepting connections, then drain EVERYTHING the binary's own
+    /// path drains: a THIN wrapper over
+    /// [`crate::boot::runtime::drain_server`] (the same owner extraction,
+    /// bounded teardown and post-deadline owner drain `serve` uses).
+    ///
+    /// CONTRACT: this future must NOT be dropped half way. The shutdown
+    /// owner — the scheduled-backup worker and the data-directory instance
+    /// lock — lives inside it; dropping the future mid-teardown cancels the
+    /// worker's task and releases the instance lock over a possibly live
+    /// backup run. Await it to completion: the worker is joined (with the
+    /// generous fallback bound), the release sources are stopped before the
+    /// flush, and the lock is released only after the owner drain — never
+    /// over a live job. If an owner wait expires, the report names the stage
+    /// and the lock is kept until the process exits (exit code 70, the
+    /// abnormal-report semantics).
+    pub async fn shutdown(self) -> ShutdownReport {
+        let report =
+            crate::boot::runtime::drain_server(self, crate::boot::runtime::SHUTDOWN_DEADLINE).await;
         crate::observability::record_shutdown(&report);
         report
     }
@@ -324,7 +339,7 @@ impl ServerHandle {
     /// `runtime::serve` extracts this BEFORE wrapping shutdown in its deadline,
     /// so expiry cannot drop a running native backup thread or release the data directory.
     /// Callers retaining the handle until consumption (`shutdown`,
-    /// `shutdown_with_report`) are unaffected: they still join the worker and
+    /// `shutdown`) are unaffected: they still join the worker and
     /// drop the lock themselves.
     pub(crate) fn take_shutdown_owner(&mut self) -> ShutdownOwner {
         ShutdownOwner {
@@ -342,28 +357,6 @@ impl ServerHandle {
         }
     }
 
-    /// cancel-safe: NO — joins and flushes may be incomplete; caller retains
-    /// repository outcomes and marks deadline expiry as unclean. `owner` is
-    /// borrowed, not taken: dropping this future must never drop the
-    /// scheduled worker or the instance lock.
-    ///
-    /// The outer-deadline-less entry: the token GC and replication joins
-    /// ([`CONN_DRAIN_TIMEOUT`]), the meta-snapshot join
-    /// ([`META_SNAPSHOT_JOIN_TIMEOUT`]) and the store-release probe
-    /// ([`STORE_RELEASE_TIMEOUT`]) spend their own constants. The scheduled
-    /// worker join stays unbounded here by design (cleanup and lock ordering;
-    /// tracked as SHUTDOWN-ORACLES), so a starved pool can still stall it.
-    /// Callers that wrap this future in a deadline
-    /// use [`Self::shutdown_with_budget`] instead, so the late stages can
-    /// report what they could not settle BEFORE that deadline erases them.
-    pub(crate) async fn shutdown_with_report(
-        self,
-        report: &mut ShutdownReport,
-        owner: &mut ShutdownOwner,
-    ) {
-        self.shutdown_with_budget(report, owner, None).await;
-    }
-
     /// The teardown and the instant the caller's outer deadline expires.
     ///
     /// `deadline_at` is the instant bounding the caller's timeout, computed
@@ -371,7 +364,10 @@ impl ServerHandle {
     /// LATE_RESERVE`; early waits share it, while late stages reserve metadata,
     /// release-probe, and report time.
     ///
-    /// cancel-safe: NO — same as [`Self::shutdown_with_report`].
+    /// cancel-safe: NO — joins and flushes may be incomplete; caller retains
+    /// repository outcomes and marks deadline expiry as unclean. `owner` is
+    /// borrowed, not taken: dropping this future must never drop the
+    /// scheduled worker or the instance lock.
     pub(crate) async fn shutdown_with_budget(
         mut self,
         report: &mut ShutdownReport,
@@ -554,15 +550,12 @@ impl ServerHandle {
                 early_stage_bound(early_cutoff, REPO_FLUSH_BUDGET);
             #[cfg(test)]
             fire_scheduled_join_probe();
-            if tokio::time::timeout_at(schedule_deadline, owner.join_schedule(report))
+            if !owner
+                .join_schedule(Some((schedule_deadline, schedule_budget)), report)
                 .await
-                .is_err()
             {
-                report.add_error(format!(
-                    "backup schedule join exceeded shutdown budget {schedule_budget:?}"
-                ));
-                // The repository flush must remain after the scheduled run. Keep the
-                // owner intact for the post-deadline join and do not flush ahead of it.
+                // The run is NOT interrupted: keep the owner intact for the
+                // post-deadline join and do not flush ahead of it.
                 quiesced = false;
             }
         } else {
@@ -570,7 +563,7 @@ impl ServerHandle {
             // tests call ServerHandle::shutdown(), which has no outer deadline.
             #[cfg(test)]
             fire_scheduled_join_probe();
-            owner.join_schedule(report).await;
+            owner.join_schedule(None, report).await;
         }
         tracing::debug!(stage = "mutation_worker_join", "shutdown stage");
         if let Some(tracker) = &self.owned_mutation_tasks {
@@ -611,16 +604,39 @@ impl ServerHandle {
         // directory — must not survive into the store-release probe, or an
         // idle export-enabled server would report `StillLocked` / exit 70.
         drop(self.online_export.take());
-        // 3c. Same reasoning for the interactive-tx record-lock release
-        //     tails: they write into MVCC stores, so an unsettled tail skips
-        //     the flush like every other quiescence failure.
+        // 3c. Stop every interactive-tx release SOURCE before the flush (ONE
+        //     ordered stop, `release_source_stop`, shared with the launch
+        //     rollback arms): join the reaper through the owner (a deadline
+        //     expiry leaves it there for the owner drain), empty the registry
+        //     so every lingering transaction's `Drop` release is REGISTERED
+        //     while tail admission is still open, THEN close + drain the
+        //     tails. The flush below can no longer overlap a release: a
+        //     release run by an unstopped source after the flush was the
+        //     reviewed weakness (the collector stopped at stage 7 while the
+        //     repositories flushed at stage 4). An unsettled reaper or tail
+        //     marks the shutdown unclean like every other quiescence failure.
         {
-            let (tail_deadline, tail_budget) = early_stage_bound(early_cutoff, RELEASE_TAIL_DRAIN);
-            quiesced &= drain_release_tails(
-                self.tx_release_tails.as_deref(),
-                false,
-                tail_deadline,
-                tail_budget,
+            let reaper_bound = if deadline_at.is_some() {
+                Some(early_stage_bound(early_cutoff, CONN_DRAIN_TIMEOUT))
+            } else {
+                None
+            };
+            // A REAL report reserve: without it the drain can run right up to
+            // the outer deadline, the outer expiry fires first, and the
+            // drain's own expiry verdict is never recorded (only the generic
+            // deadline message survives). 250 ms lets the drain record its
+            // entry before the outer timeout.
+            let (tail_deadline, tail_budget) =
+                stage_bound(deadline_at, RELEASE_TAIL_DRAIN, Duration::from_millis(250));
+            quiesced &= stop_release_sources_and_drain_tails(
+                &mut owner.tx_reaper,
+                Some(&self.tx_registry),
+                self.tx_release_tails.as_ref(),
+                ReleaseStopBounds {
+                    reaper: reaper_bound,
+                    tail_deadline,
+                    tail_budget,
+                },
                 "before the repository flush",
                 report,
             )
@@ -731,19 +747,9 @@ impl ServerHandle {
                 ));
             }
         }
-        // 7. Join the interactive-tx reaper (a release-tail producer) through
-        //     the owner, so the post-deadline fallback drain joins it too
-        //     before its own tail drain. Dropping it aborts lingering txs.
-        tracing::debug!(stage = "reapers", "shutdown stage");
-        if deadline_at.is_some() {
-            let (reaper_deadline, reaper_budget) =
-                early_stage_bound(early_cutoff, CONN_DRAIN_TIMEOUT);
-            owner
-                .join_tx_reaper(Some((reaper_deadline, reaper_budget)), report)
-                .await;
-        } else {
-            owner.join_tx_reaper(None, report).await;
-        }
+        // 7. (moved to stage 3c) the interactive-tx reaper is a release-tail
+        //     producer: it is joined, the registry emptied and the tails
+        //     drained BEFORE the flush, via `release_source_stop`.
         // 8. Join cursor reaper so its Arc drops and pinned snapshots unpin.
         if let Some(reaper) = self.cursor_reaper {
             if deadline_at.is_some() {
@@ -758,38 +764,9 @@ impl ServerHandle {
                 let _ = reaper.handle.await;
             }
         }
-        // 8b. The reaper join above drops lingering transactions whose `Drop`
-        //     releases can start after the flush. The tail producers are
-        //     now stopped (reaper joined in stage 7): EXPLICITLY empty the
-        //     registry so every lingering transaction — one a timed-out
-        //     reaper join left behind, or one a caller still holds — has its
-        //     `Drop` release REGISTERED while tail admission is still open,
-        //     THEN close + drain the tails. Closing first would refuse (and
-        //     without the lossless handoff, drop) those releases.
-        drop(self.tx_registry.remove_all());
-        {
-            // A REAL report reserve: without it the drain can run right up to
-            // the outer deadline, the outer expiry fires first, and the
-            // drain's own expiry verdict is never recorded (only the generic
-            // deadline message survives). 250 ms lets the drain record its
-            // entry before the outer timeout.
-            let (tail_deadline, tail_budget) =
-                stage_bound(deadline_at, RELEASE_TAIL_DRAIN, Duration::from_millis(250));
-            if !drain_release_tails(
-                self.tx_release_tails.as_deref(),
-                true,
-                tail_deadline,
-                tail_budget,
-                "after the reaper teardown",
-                report,
-            )
-            .await
-            {
-                tracing::error!(
-                    "shutdown: release tails started by reaper teardown did not settle"
-                );
-            }
-        }
+        // 8b. (moved to stage 3c) the registry clear and the closing tail
+        //     drain are part of the ONE ordered release-source stop, run
+        //     before the flush.
         // 9. Drop this handle's store references, then probe directory-lock release.
         let data_dir = self.data_dir;
         // The test seam holds `Arc<ShamirDbHandler>` (and the handler holds the

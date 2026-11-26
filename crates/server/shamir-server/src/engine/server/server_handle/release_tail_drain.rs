@@ -1,7 +1,9 @@
 //! Bounded drain of the interactive-tx record-lock release tails (the
-//! operator-cancel release and the registry `Drop` release): shutdown must
-//! not flush or release the stores while one is still writing into a table's
-//! `MvccStore`.
+//! operator-cancel release and the registry `Drop` release): these releases
+//! are IN-MEMORY registrations and detached release tasks, not store writes
+//! at drain time — the drain waits for the release TAILS (the detached
+//! `spawn_abort_release` tasks writing into a table's `MvccStore`) so the
+//! repository flush cannot overlap one.
 
 use shamir_db::ShutdownReport;
 use shamir_sync::durability::tx::ReleaseTails;
@@ -13,9 +15,11 @@ use shamir_sync::durability::tx::ReleaseTails;
 ///
 /// With `close_admission` (the LAST drain on the path), the owner
 /// also stops admitting new tails so the wait can settle; earlier drains keep
-/// admission open — the reaper teardown still spawns tails after the flush,
-/// and they are drained once the reapers have joined. `context` names the
-/// drain's shutdown stage in the report entry on expiry.
+/// admission open — on the graceful path there is exactly ONE drain, called
+/// from `release_source_stop` AFTER every release source (reaper, registry)
+/// is stopped, so closing admission there cannot refuse a registered
+/// release. `context` names the drain's shutdown stage in the report entry
+/// on expiry.
 pub(in crate::engine::server) async fn drain_release_tails(
     tails: Option<&ReleaseTails>,
     close_admission: bool,

@@ -50,13 +50,15 @@ use crate::config::{
 };
 use crate::db_handler::NodeMode;
 use crate::server::server_handle::{
-    arm_fallback_drain_join_probe, arm_repo_flush_probe, arm_scheduled_join_probe,
+    arm_fallback_drain_join_probe, arm_release_sources_stopped_probe, arm_repo_flush_probe,
+    arm_scheduled_join_probe,
 };
 use crate::server::server_launcher::audit_teardown::arm_teardown_probe;
 use crate::server::{release_stores, BootstrapMode, ReleaseOutcome, ServerLauncher};
 
 mod late_budget;
 mod owned_mutation_join;
+mod owner_lock;
 mod zero_budget_release;
 
 const TEST_NAME: &str = "shutdown_deadline_does_not_abandon_the_scheduled_worker";
@@ -597,9 +599,17 @@ fn listener_bind_rollback_keeps_the_boot_error_and_releases_the_lock() {
     // Nextest gives this test its own process, so the one-shot teardown probe
     // cannot be consumed by another test's launch.
     let teardown_ran = Arc::new(AtomicBool::new(false));
+    let sources_stopped = Arc::new(AtomicBool::new(false));
     let _teardown_probe = {
         let flag = Arc::clone(&teardown_ran);
         arm_teardown_probe(move || flag.store(true, Ordering::SeqCst))
+    };
+    // The rollback arm must run the ONE ordered release-source stop: fire the
+    // probe the helper fires after the sources stopped and the registry was
+    // cleared (mutant: the arm skips `stop_release_sources`).
+    let _sources_probe = {
+        let flag = Arc::clone(&sources_stopped);
+        arm_release_sources_stopped_probe(move || flag.store(true, Ordering::SeqCst))
     };
 
     let error = run_blocking(move || match block_on_launch(config) {
@@ -627,6 +637,11 @@ fn listener_bind_rollback_keeps_the_boot_error_and_releases_the_lock() {
         "the launch rollback must run the shared audit teardown (mutant: the `teardown_audit` \
          call removed from the listener-bind branch)"
     );
+    assert!(
+        sources_stopped.load(Ordering::SeqCst),
+        "the listener-bind rollback must stop the release sources and clear the registry \
+         (mutant: `stop_release_sources` removed from the arm)"
+    );
     // The rollback ran to completion: nothing of this launch holds the instance
     // lock any more, so a retry after freeing the port is possible.
     let lock = crate::maintenance_lock::acquire_server(&data_dir);
@@ -645,9 +660,14 @@ fn observability_bind_rollback_keeps_the_boot_error_and_releases_the_lock() {
     let occupied = held.local_addr().expect("held address").to_string();
     let config = bind_config(data_dir.clone(), "127.0.0.1:0".to_owned(), occupied.clone());
     let teardown_ran = Arc::new(AtomicBool::new(false));
+    let sources_stopped = Arc::new(AtomicBool::new(false));
     let _teardown_probe = {
         let flag = Arc::clone(&teardown_ran);
         arm_teardown_probe(move || flag.store(true, Ordering::SeqCst))
+    };
+    let _sources_probe = {
+        let flag = Arc::clone(&sources_stopped);
+        arm_release_sources_stopped_probe(move || flag.store(true, Ordering::SeqCst))
     };
 
     let error = run_blocking(move || match block_on_launch(config) {
@@ -671,6 +691,11 @@ fn observability_bind_rollback_keeps_the_boot_error_and_releases_the_lock() {
         teardown_ran.load(Ordering::SeqCst),
         "the launch rollback must run the shared audit teardown (mutant: the `teardown_audit` \
          call removed from the observability-bind branch)"
+    );
+    assert!(
+        sources_stopped.load(Ordering::SeqCst),
+        "the observability-bind rollback must stop the release sources and clear the registry \
+         (mutant: `stop_release_sources` removed from the arm)"
     );
     let lock = crate::maintenance_lock::acquire_server(&data_dir);
     assert!(

@@ -9,7 +9,7 @@ use shamir_sync::durability::tx::ReleaseTails;
 use tokio::task::JoinHandle;
 use tokio_util::sync::DropGuard;
 
-use super::release_tail_drain::drain_release_tails;
+use super::release_source_stop::{stop_release_sources_and_drain_tails, ReleaseStopBounds};
 use super::{EXPORT_DRAIN_TIMEOUT, RELEASE_TAIL_DRAIN};
 use crate::boot::config::diagnostics::logical::export_online::ExportDrainHandle;
 use crate::db_handler::MutationTasks;
@@ -20,6 +20,50 @@ pub(super) const CONN_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Shared budget for repository shutdown quiescing and checkpointing.
 pub(super) const REPO_FLUSH_BUDGET: Duration = Duration::from_secs(15);
+
+/// Generous bound for the post-deadline join of the scheduled backup worker
+/// in [`ShutdownOwner::drain`] (and for the owner-side wait generally).
+///
+/// Why 120 s: it is FOUR times the whole outer shutdown deadline
+/// (crate::boot::runtime::SHUTDOWN_DEADLINE, 30 s) and TWO times the longest
+/// other owner wait (the online-export drain, 60 s), so a healthy backup run
+/// that survived its last cooperative cancellation checkpoint — one that then
+/// only has the store flush left (a blocking-pool job) plus its manifest
+/// publication — finishes well inside it even on a starved blocking pool,
+/// while a genuinely wedged runner can no longer hold the process hostage:
+/// on expiry the wait stops, the report names the stage, and the
+/// data-directory lock is KEPT until the process exits (see
+/// [`report_expired_owner_wait`]).
+pub(super) const BACKUP_JOIN_FALLBACK_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Test-only seam for the drain-side backup join bound: a test cannot park a
+/// worker for 120 s, so it shrinks the bound instead. `None` (production)
+/// means [`BACKUP_JOIN_FALLBACK_TIMEOUT`].
+#[cfg(test)]
+static DRAIN_BACKUP_JOIN_BOUND_OVERRIDE: std::sync::Mutex<Option<Duration>> =
+    std::sync::Mutex::new(None);
+
+/// Set the drain-side backup join bound for ONE test; call
+/// `set_drain_backup_join_bound_for_test(None)` to restore.
+#[cfg(test)]
+pub(crate) fn set_drain_backup_join_bound_for_test(bound: Option<Duration>) {
+    *DRAIN_BACKUP_JOIN_BOUND_OVERRIDE
+        .lock()
+        .expect("drain backup join bound override") = bound;
+}
+
+#[cfg(test)]
+fn drain_backup_join_budget() -> Duration {
+    DRAIN_BACKUP_JOIN_BOUND_OVERRIDE
+        .lock()
+        .expect("drain backup join bound override")
+        .unwrap_or(BACKUP_JOIN_FALLBACK_TIMEOUT)
+}
+
+#[cfg(not(test))]
+fn drain_backup_join_budget() -> Duration {
+    BACKUP_JOIN_FALLBACK_TIMEOUT
+}
 
 /// Bounds WAITs by the earlier of stage start + cap and outer deadline minus reserve; synchronous work is not interrupted, and timed-out joins may continue. `early_stage_bound` uses min(stage start + cap, early cutoff).
 pub(super) fn stage_bound(
@@ -54,6 +98,52 @@ pub(super) fn early_stage_bound(
     }
 }
 
+/// The stage of the owner drain whose bounded wait expired. The expired stage
+/// is RECORDED TYPED (this enum names it) and as a report entry whose fixed
+/// prefix is part of the operator contract: the data-directory lock is kept
+/// until the process exits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OwnerWaitStage {
+    /// The scheduled backup worker's completion signal.
+    ScheduledBackup,
+    /// The owned mutation workers.
+    MutationWorkers,
+    /// The online-export drain handle.
+    OnlineExport,
+    /// The release-tail machinery (reaper join or tail drain) not settling.
+    ReleaseTails,
+}
+
+impl OwnerWaitStage {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::ScheduledBackup => "scheduled backup worker join",
+            Self::MutationWorkers => "owned mutation workers join",
+            Self::OnlineExport => "online export drain",
+            Self::ReleaseTails => "release tail drain",
+        }
+    }
+}
+
+/// Record an expired owner-drain wait. The fixed prefix `shutdown owner wait
+/// expired (` is the operator contract: on ANY of these expiries the
+/// data-directory instance lock is NOT released before the process exits
+/// (the `File` is leaked deliberately — the kernel releases the advisory
+/// lock when the process dies), and the report stays unclean, so the exit
+/// code is the abnormal-report code 70 as before. Nothing forces an exit.
+pub(crate) fn report_expired_owner_wait(
+    stage: OwnerWaitStage,
+    budget: Duration,
+    report: &mut ShutdownReport,
+) {
+    report.add_error(format!(
+        "shutdown owner wait expired ({}: waited {budget:?}): that stage is still running, \
+         so the data-directory instance lock is KEPT until the process exits — check for a \
+         running backup or export job, then restart the server",
+        stage.label()
+    ));
+}
+
 /// The shutdown state that must OUTLIVE the bounded shutdown wait.
 ///
 /// `runtime::serve` wraps the shutdown future in a deadline; on expiry that
@@ -65,7 +155,7 @@ pub(super) fn early_stage_bound(
 /// process would otherwise see I/O and a free data dir that outlive `serve`.
 ///
 /// The owner is therefore extracted BEFORE the deadline and BORROWED into the
-/// shutdown future (`ServerHandle::shutdown_with_report` takes `&mut Self`
+/// shutdown future (`shutdown_with_budget` takes `&mut Self`
 /// here), never moved into it: on a normal shutdown the worker is awaited in
 /// place at its original teardown position (before the repository flush), and
 /// on expiry the dropped future leaves the worker and the lock intact for
@@ -100,126 +190,72 @@ impl ShutdownOwner {
     /// keeps the original teardown position: the scheduled task and its
     /// in-flight run are awaited BEFORE the repository flush, not after it.
     ///
-    /// Deliberately unbounded: a run already past its last cooperative
-    /// cancellation checkpoint has to finish its own cleanup. The wait is a
-    /// COMPLETION signal (the runner's per-run channel), not a join of the
-    /// native runner thread.
-    pub(crate) async fn join_schedule(&mut self, report: &mut ShutdownReport) {
+    /// The wait is a COMPLETION signal (the runner's per-run channel), not a
+    /// join of the native runner thread. `bound` = `None` keeps the original
+    /// unbounded join (cleanup order and owner lock make it deliberate); a
+    /// `Some` bound stops WAITING on expiry — the run is not interrupted, the
+    /// expiry is reported, and `false` is returned so the caller can keep the
+    /// data-directory lock (see [`Self::drain`]).
+    pub(crate) async fn join_schedule(
+        &mut self,
+        bound: Option<(tokio::time::Instant, Duration)>,
+        report: &mut ShutdownReport,
+    ) -> bool {
         let Some((_, task)) = self.schedule_task.as_mut() else {
-            return;
+            return true;
         };
         // Awaited THROUGH `&mut`: while the wait is pending the handle and its
         // drop guard stay in the owner, so the deadline dropping this future
         // mid-wait leaves them for `drain` instead of detaching the worker.
-        let joined = task.await;
-        // Finished: forget the handle (the guard drops with it).
-        self.schedule_task = None;
-        if let Err(error) = joined {
-            report.add_error(format!("backup schedule task failed: {error}"));
-        }
-    }
-
-    /// Await the interactive-tx reaper through `&mut` (a release-tail
-    /// producer). Borrowed, so a deadline expiry leaves the reaper in the
-    /// owner for [`Self::drain`]. `None` bound = the original unbounded join.
-    ///
-    /// On a timed-out bounded join the reaper task is ABORTED and its
-    /// completion awaited: abort is cooperative — the task only awaits the
-    /// sweep interval and the shutdown token — so the post-abort join is
-    /// bounded by the sweep's current synchronous section (`reap_expired`),
-    /// not by a clock. Without the abort the reaper would survive the join
-    /// and keep reaping past [`Self::settle_tx_release_tails`]' admission
-    /// close: each such release would land on the DETACHED refusal arm of
-    /// `spawn_abort_release`, untracked and able to overlap the repository
-    /// flush. The timeout is recorded BEFORE the post-abort wait (an outer
-    /// deadline dropping this future mid-wait must not lose it), and a reaper
-    /// task that panicked is reported too; the shutdown is unclean either way.
-    pub(crate) async fn join_tx_reaper(
-        &mut self,
-        bound: Option<(tokio::time::Instant, Duration)>,
-        report: &mut ShutdownReport,
-    ) {
-        let Some(reaper) = self.tx_reaper.as_mut() else {
-            return;
-        };
         match bound {
-            Some((deadline, budget)) => {
-                match tokio::time::timeout_at(deadline, &mut reaper.handle).await {
-                    Ok(joined) => report_reaper_failure(joined, report),
-                    Err(_) => {
-                        // Recorded before the post-abort wait below.
-                        report.add_error(format!(
-                            "interactive transaction reaper join exceeded {budget:?}; the \
-                             reaper was aborted and its final sweep awaited before tail \
-                             admission closes"
-                        ));
-                        // Stop the producer before the tail admission closes
-                        // below. The abort lands at the reaper's next await;
-                        // the join after it only waits out one in-flight sweep.
-                        reaper.handle.abort();
-                        report_reaper_failure((&mut reaper.handle).await, report);
+            Some((deadline, budget)) => match tokio::time::timeout_at(deadline, task).await {
+                Ok(joined) => {
+                    self.schedule_task = None;
+                    if let Err(error) = joined {
+                        report.add_error(format!("backup schedule task failed: {error}"));
                     }
+                    true
                 }
-            }
+                Err(_) => {
+                    report.add_error(format!(
+                        "backup schedule join exceeded shutdown budget {budget:?}; the run \
+                             is NOT interrupted and its completion is awaited no further here"
+                    ));
+                    false
+                }
+            },
             None => {
-                // Awaited THROUGH `&mut` (same borrow discipline as the
-                // bounded branch above): the handle stays in the owner.
-                report_reaper_failure((&mut reaper.handle).await, report);
+                let joined = task.await;
+                self.schedule_task = None;
+                if let Err(error) = joined {
+                    report.add_error(format!("backup schedule task failed: {error}"));
+                }
+                true
             }
         }
-        // Joined (or aborted and joined): the handle is consumed, and polling a
-        // finished `JoinHandle` again panics. Forget it so the fallback drain
-        // after a clean inline shutdown does not re-await it. A deadline that
-        // drops this future mid-wait never reaches here and leaves the handle.
-        self.tx_reaper = None;
-    }
-
-    /// Stop the tail producers and empty the registry so every lingering
-    /// transaction's `Drop` release is REGISTERED before the tail admission
-    /// closes, then close + drain the tails.
-    ///
-    /// Interleaving still open after the abort in [`Self::join_tx_reaper`]
-    /// (stated exactly): an `Arc<InteractiveTx>` held OUTSIDE the registry —
-    /// an in-flight request's clone, a caller-held handle — can drop its LAST
-    /// reference after the drain below closes admission; `remove_all` drops
-    /// only the REGISTRY's references, and `InteractiveTx::drop` releases
-    /// only on the LAST one, so that release is refused by the closed owner
-    /// and runs DETACHED via `spawn_abort_release`'s refusal arm: untracked,
-    /// able to overlap the repository flush, and NOT lossless. Shutdown
-    /// cannot name it in the report — the surviving reference lives outside
-    /// shutdown's reach; the only signal is the `warn!` from that refusal
-    /// arm.
-    async fn settle_tx_release_tails(&mut self, report: &mut ShutdownReport) {
-        let (reaper_deadline, reaper_budget) =
-            stage_bound(None, CONN_DRAIN_TIMEOUT, Duration::ZERO);
-        self.join_tx_reaper(Some((reaper_deadline, reaper_budget)), report)
-            .await;
-        if let Some(registry) = &self.tx_registry {
-            // Dropping the returned `Arc`s is what triggers each RAII release
-            // (registered into the still-open tail admission).
-            drop(registry.remove_all());
-        }
-        let (deadline, budget) = stage_bound(None, RELEASE_TAIL_DRAIN, Duration::ZERO);
-        drain_release_tails(
-            self.tx_release_tails.as_deref(),
-            true,
-            deadline,
-            budget,
-            "fallback drain after the shutdown deadline",
-            report,
-        )
-        .await;
     }
 
     /// Await whatever the deadline left unawaited, then release the instance
-    /// lock by drop.
+    /// lock by drop — UNLESS one of the bounded owner waits expired.
     ///
     /// On a normal shutdown [`Self::join_schedule`] already ran inside the
-    /// deadline, so this only releases the lock. On expiry the shutdown future
-    /// was dropped mid-teardown and the worker is still awaited here — the lock
-    /// is released afterwards, never before.
+    /// deadline, so this only releases the lock. On expiry of the shutdown
+    /// future the worker is still awaited here — the lock is released
+    /// afterwards, never before. If any of the bounded waits below expires,
+    /// the stage that expired is recorded typed in the report
+    /// ([`report_expired_owner_wait`]) and the lock is deliberately NOT
+    /// released: the `File` is leaked, so the kernel holds the advisory
+    /// data-directory lock until the process exits and no other process can
+    /// open the directory over the still-running stage. The report stays
+    /// unclean, so the process exit code is the abnormal 70 as before.
     pub(crate) async fn drain(mut self, report: &mut ShutdownReport) {
-        self.join_schedule(report).await;
+        let mut expired: Option<OwnerWaitStage> = None;
+        let budget = drain_backup_join_budget();
+        let (deadline, _) = stage_bound(None, budget, Duration::ZERO);
+        if !self.join_schedule(Some((deadline, budget)), report).await {
+            expired = Some(OwnerWaitStage::ScheduledBackup);
+            report_expired_owner_wait(OwnerWaitStage::ScheduledBackup, budget, report);
+        }
         if let Some(tracker) = &self.owned_mutation_tasks {
             tracker.close();
             let (deadline, budget) = early_stage_bound(None, REPO_FLUSH_BUDGET);
@@ -230,6 +266,8 @@ impl ShutdownOwner {
                 report.add_error(format!(
                     "owned mutation workers still running after the shutdown bound; repository flush skipped ({budget:?})"
                 ));
+                expired = Some(OwnerWaitStage::MutationWorkers);
+                report_expired_owner_wait(OwnerWaitStage::MutationWorkers, budget, report);
             }
         }
         // The export drain HANDLE keeps its fallback ownership here (the
@@ -245,23 +283,46 @@ impl ShutdownOwner {
                 report.add_error(format!(
                     "online export worker still draining after the fallback bound ({budget:?})"
                 ));
+                expired = Some(OwnerWaitStage::OnlineExport);
+                report_expired_owner_wait(OwnerWaitStage::OnlineExport, budget, report);
             }
         }
-        self.settle_tx_release_tails(report).await;
-        // Released here, after the scheduled worker finished — never
-        // explicitly unlocked (drop is the release).
-        drop(self.data_dir_lock.take());
-    }
-}
-
-/// A reaper task that ended by panicking is a shutdown failure; the
-/// cancellation of our own `abort` is the expected end and is not.
-fn report_reaper_failure(joined: Result<(), tokio::task::JoinError>, report: &mut ShutdownReport) {
-    if let Err(error) = joined {
-        if !error.is_cancelled() {
-            report.add_error(format!(
-                "interactive transaction reaper task failed: {error}"
-            ));
+        // Stop the release sources, clear the registry, wait for the release
+        // tails (the ONE ordered stop, shared with the graceful shutdown and
+        // the launch rollbacks). A reaper or tail expiry here is also an
+        // in-memory producer that may still run past this function.
+        {
+            let (reaper_deadline, reaper_budget) =
+                stage_bound(None, CONN_DRAIN_TIMEOUT, Duration::ZERO);
+            let (tail_deadline, tail_budget) =
+                stage_bound(None, RELEASE_TAIL_DRAIN, Duration::ZERO);
+            let settled = stop_release_sources_and_drain_tails(
+                &mut self.tx_reaper,
+                self.tx_registry.as_ref(),
+                self.tx_release_tails.as_ref(),
+                ReleaseStopBounds {
+                    reaper: Some((reaper_deadline, reaper_budget)),
+                    tail_deadline,
+                    tail_budget,
+                },
+                "the post-deadline owner drain",
+                report,
+            )
+            .await;
+            if !settled {
+                expired = Some(OwnerWaitStage::ReleaseTails);
+                report_expired_owner_wait(OwnerWaitStage::ReleaseTails, RELEASE_TAIL_DRAIN, report);
+            }
+        }
+        match expired {
+            // Keep the advisory lock until the process exits: leaking the
+            // `File` means the kernel releases it only at process death —
+            // never explicitly unlocked, and never handed to another process
+            // over a stage that is still running.
+            Some(_) => std::mem::forget(self.data_dir_lock.take()),
+            // Released here, after the scheduled worker finished — never
+            // explicitly unlocked (drop is the release).
+            None => drop(self.data_dir_lock.take()),
         }
     }
 }

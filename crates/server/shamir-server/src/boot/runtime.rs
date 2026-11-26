@@ -26,7 +26,35 @@ use crate::server::{BootstrapMode, ServerHandle, ServerLauncher};
 /// The scheduled-backup worker and data-directory lock remain owned outside
 /// the bounded future and are awaited before `serve` returns. There is no forced
 /// exit and nothing calls `std::process::exit`.
-const SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+pub(crate) const SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Test-only seam for the embedding shutdown deadline: a test cannot spend
+/// 30 s, so it shrinks the deadline for `ServerHandle::shutdown()` (which
+/// passes no deadline of its own). `None` (production) = [`SHUTDOWN_DEADLINE`].
+#[cfg(test)]
+static DRAIN_DEADLINE_OVERRIDE: std::sync::Mutex<Option<std::time::Duration>> =
+    std::sync::Mutex::new(None);
+
+/// Override [`SHUTDOWN_DEADLINE`] for ONE test; pass `None` to restore.
+#[cfg(test)]
+pub(crate) fn set_drain_deadline_override(deadline: Option<std::time::Duration>) {
+    *DRAIN_DEADLINE_OVERRIDE
+        .lock()
+        .expect("drain deadline override") = deadline;
+}
+
+#[cfg(test)]
+fn drain_deadline() -> std::time::Duration {
+    DRAIN_DEADLINE_OVERRIDE
+        .lock()
+        .expect("drain deadline override")
+        .unwrap_or(SHUTDOWN_DEADLINE)
+}
+
+#[cfg(not(test))]
+fn drain_deadline() -> std::time::Duration {
+    SHUTDOWN_DEADLINE
+}
 
 /// Boot the server, wait for `shutdown`, then drain gracefully.
 ///
@@ -75,7 +103,7 @@ pub async fn serve(
     shutdown.await;
     tracing::info!("shutting down");
 
-    let report = drain_server(handle, SHUTDOWN_DEADLINE).await;
+    let report = drain_server(handle, drain_deadline()).await;
     crate::observability::record_shutdown(&report);
     Ok(report)
 }
@@ -95,7 +123,11 @@ pub async fn serve(
 /// earlier of stage start + cap and outer deadline minus reserve (metadata join:
 /// 5 s / 500 ms; store release: 10 s / 250 ms). These bound WAITs only;
 /// synchronous work is not interrupted, and the detached metadata join may
-/// continue after timeout.
+/// continue after timeout. If one of the OWNER's own bounded waits expires
+/// (see `shutdown_owner::report_expired_owner_wait`), the data-directory
+/// lock is deliberately NOT released here: the `File` is leaked, so the
+/// kernel holds the advisory lock until the process exits, and the report
+/// names the expired stage (exit code 70, the abnormal-report semantics).
 pub(crate) async fn drain_server(
     handle: ServerHandle,
     deadline: std::time::Duration,
@@ -140,7 +172,9 @@ fn deadline_error(deadline: std::time::Duration) -> String {
     format!(
         "graceful shutdown exceeded deadline {deadline:?}: the teardown stage still running \
          was abandoned; nothing forces an exit, and the scheduled backup worker and the \
-         data-directory lock are still awaited before this call returns"
+         data-directory lock are still awaited before this call returns — unless an owner \
+         wait itself expired (a `shutdown owner wait expired (` report entry), in which case \
+         the lock is KEPT until the process exits"
     )
 }
 
