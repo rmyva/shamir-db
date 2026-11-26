@@ -4,8 +4,10 @@
 //! through `DbTableResolver::resolve_unfenced`, so the fence must not break
 //! ordinary writes on the parent.
 
-use crate::access::Actor;
-use crate::shamir_db::shamir_db::{is_reserved_db_name, validate_catalogue_db_names};
+use crate::access::{Actor, ResourceMeta};
+use crate::shamir_db::shamir_db::catalog::validate_catalogue_db_names;
+use crate::shamir_db::shamir_db::is_reserved_db_name;
+use crate::shamir_db::system_store::DatabaseIdentity;
 use crate::shamir_db::ShamirDb;
 use shamir_query_builder::batch::Batch;
 use shamir_query_builder::ddl;
@@ -14,7 +16,9 @@ use shamir_query_builder::write;
 use shamir_query_builder::write::doc;
 use shamir_query_builder::write::UpdateReturnMode;
 use shamir_types::mpack;
+use shamir_types::types::common::new_map;
 use shamir_types::types::record_id::RecordId;
+use shamir_types::types::value::QueryValue;
 
 #[tokio::test]
 async fn parent_update_and_delete_succeed_while_child_rename_in_doubt() {
@@ -154,13 +158,6 @@ async fn parent_update_and_delete_succeed_while_child_rename_in_doubt() {
     .await
     .expect("fk walk test exceeded 30 seconds");
 }
-
-
-use crate::shamir_db::shamir_db::{is_reserved_db_name, validate_catalogue_db_names};
-use crate::shamir_db::ShamirDb;
-use shamir_types::types::common::new_map;
-use shamir_types::types::value::QueryValue;
-
 #[test]
 fn reserved_database_names_apply_only_documented_normalization() {
     for name in [
@@ -225,6 +222,34 @@ async fn rename_refuses_reserved_destination() {
     assert!(matches!(error, crate::DbError::Validation(_)));
     assert!(error.to_string().contains("reserved"));
 }
+#[tokio::test]
+async fn rename_from_reserved_name_still_works() {
+    let db = ShamirDb::init_memory().await.unwrap();
+    let identity = DatabaseIdentity::new();
+    let mut fields = new_map();
+    fields.insert("name".into(), QueryValue::Str("users".into()));
+    fields.insert("identity".into(), QueryValue::Str(identity.to_string()));
+    let record = QueryValue::Map(fields);
+    db.system_store()
+        .save_database(
+            "users",
+            &record,
+            &ResourceMeta::owned_enforced(Actor::System),
+        )
+        .await
+        .unwrap();
+    db.dbs.insert(
+        "users".to_string(),
+        crate::engine::db_instance::db_instance::DbInstance::new(),
+    );
+    db.database_identities.insert("users".to_string(), identity);
+
+    db.rename_db("users", "users_renamed").await.unwrap();
+
+    assert!(db.has_db("users_renamed"));
+    assert!(!db.has_db("users"));
+}
+
 #[tokio::test]
 async fn create_refuses_reserved_names_with_validation_error() {
     let db = ShamirDb::init_memory().await.unwrap();

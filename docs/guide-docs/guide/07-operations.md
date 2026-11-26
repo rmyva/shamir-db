@@ -36,6 +36,16 @@ SCM Stop (Windows), `systemctl stop` (systemd). Drain-логика одинак�
 прекратить приём → доработать in-flight (30 s deadline) → долить буферы
 → fsync → отпустить блокировки.
 
+### Foreground
+
+```bash
+PW='admin-pass'
+printf '%s\n' "$PW" | shamir-server --config /etc/shamir/server.ktav --bootstrap-password-stdin
+```
+
+Остановка: `Ctrl+C` (везде) или `SIGTERM` (unix). Процесс доливает все
+буферы и выходит.
+
 ## Имена баз данных и обновление
 
 На верхнем уровне `data_root` сервер резервирует имена `__system__`,
@@ -49,14 +59,6 @@ SCM Stop (Windows), `systemctl stop` (systemd). Drain-логика одинак�
 таким именем и укажет её имя. Запустите бинарник предыдущего выпуска, который
 ещё принимает это имя, переименуйте базу через `RENAME DATABASE` (или admin
 rename) в незарезервированное имя либо удалите её, затем обновитесь.
-
-
-PW='admin-pass'
-printf '%s\n' "$PW" | shamir-server --config /etc/shamir/server.ktav --bootstrap-password-stdin
-```
-
-Остановка: `Ctrl+C` (везде) или `SIGTERM` (unix). Процесс доливает все
-буферы и выходит.
 
 ### systemd (Linux)
 

@@ -13,6 +13,32 @@ use shamir_types::types::value::QueryValue;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
+#[tokio::test]
+async fn malformed_later_metadata_prevents_recovery_registration() {
+    let mut good = new_map();
+    good.insert("name".into(), QueryValue::Str("first".into()));
+    let mut bad = new_map();
+    bad.insert("name".into(), QueryValue::Str("second".into()));
+    bad.insert("security".into(), QueryValue::Int(1));
+    let records = [QueryValue::Map(good), QueryValue::Map(bad)];
+    let registry = shamir_engine::function::FunctionRegistry::new();
+    let result =
+        super::super::super::catalog::with_checked_function_metadata(&records, |metadata| async {
+            for (record, _) in records.iter().zip(metadata) {
+                registry
+                    .register(
+                        record["name"].as_str().unwrap(),
+                        std::sync::Arc::new(shamir_engine::function::Argon2idFunction),
+                    )
+                    .unwrap();
+            }
+        })
+        .await;
+    assert!(result.unwrap_err().to_string().contains("catalogue row 1"));
+    assert!(!registry.contains("first"));
+    assert!(!registry.contains("second"));
+}
+
 /// Not a latency assertion: these tests need the clean shutdown to finish.
 /// Windows CI runners stall every process's fsync for 10+ s at times, so any
 /// wall-clock budget here is a false failure; nextest's per-test timeout is
