@@ -22,7 +22,7 @@ static IGNORE_BOOKMARK_J: AtomicBool = AtomicBool::new(false);
 /// Negative-control seam: pretend the stored record has no known `J` so the
 /// pre-PR6c conservative whole-window GAP is reproduced.
 #[cfg(all(test, feature = "fjall"))]
-pub(crate) fn ignore_bookmark_j(ignore: bool) {
+pub fn ignore_bookmark_j(ignore: bool) {
     IGNORE_BOOKMARK_J.store(ignore, Ordering::SeqCst);
 }
 

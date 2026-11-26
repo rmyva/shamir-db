@@ -2,18 +2,28 @@
 //! and close-vs-acquire boundaries, via poll-based pending checks — no
 //! sleeps as correctness evidence.
 
+// Test-only module: compiled empty when the crate is built with `test-util` alone.
+#![cfg(test)]
+
 use std::future::Future;
 use std::pin::Pin;
+#[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(test)]
 use std::sync::Arc;
 
+#[cfg(test)]
 use super::close_helpers::close;
 use std::task::Poll;
+#[cfg(test)]
 use std::time::Duration;
 
+#[cfg(test)]
 use tokio::sync::Barrier;
 
+#[cfg(test)]
 use super::super::error::CommitAdmissionError;
+#[cfg(test)]
 use super::super::gate::CommitAdmissionGate;
 
 /// A generous cap for tests that PROVE the wait completes (the cap must not

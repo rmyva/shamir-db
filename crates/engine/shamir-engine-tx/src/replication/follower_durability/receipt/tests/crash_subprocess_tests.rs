@@ -26,13 +26,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::apply_replicated::apply_replicated_batch;
-use crate::apply_replicated::follower_durability::test_seam::{self, Phase};
 use crate::meta::repl::bookmark_v3::load_bookmark_v3;
 use crate::meta::repl::receipt::receipt_key;
 use crate::repo::{BoxRepoFactory, RepoInstance};
 use crate::table::TableConfig;
-use crate::{ApplyPolicy, ReplicatedEvent};
+use crate::tx::apply_replicated::apply_replicated_batch;
+use crate::tx::apply_replicated::follower_durability::test_seam::{self, Phase};
+use crate::tx::{ApplyPolicy, ReplicatedEvent};
 
 /// Full libtest path of the child scenario test in this binary.
 const CHILD_TEST: &str = "tx::replication::apply_replicated::follower_durability::receipt::tests::crash_subprocess_tests::receipt_crash_child_scenario";

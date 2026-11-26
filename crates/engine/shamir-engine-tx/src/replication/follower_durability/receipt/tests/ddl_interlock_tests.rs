@@ -23,12 +23,12 @@ use shamir_types::access::Actor;
 use shamir_types::types::record_id::RecordId;
 use shamir_types::types::value::InnerValue;
 
-use crate::apply_replicated::follower_durability::test_seam::{self, Phase};
-use crate::apply_replicated::{apply_replicated_batch, ApplyOutcome, ApplyPolicy};
 use crate::repo::RepoWriteError;
 use crate::repo::{BoxRepoFactory, RepoInstance};
 use crate::table::TableConfig;
-use crate::ReplicatedEvent;
+use crate::tx::apply_replicated::follower_durability::test_seam::{self, Phase};
+use crate::tx::apply_replicated::{apply_replicated_batch, ApplyOutcome, ApplyPolicy};
+use crate::tx::ReplicatedEvent;
 
 fn event(leader_version: u64, id: u8) -> ReplicatedEvent {
     ReplicatedEvent {

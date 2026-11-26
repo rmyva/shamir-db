@@ -26,8 +26,8 @@ const DEFAULT_MAX_TX_LIFETIME: std::time::Duration = std::time::Duration::from_s
 /// milliseconds) and use a short real `tokio::time::sleep` instead — fully
 /// deterministic regardless of host uptime. `nextest` runs each test in its
 /// own process, so this global cannot leak across test files.
-#[cfg(test)]
-pub(crate) static TEST_MAX_TX_LIFETIME_OVERRIDE: std::sync::OnceLock<std::time::Duration> =
+#[cfg(any(test, feature = "test-util"))]
+pub static TEST_MAX_TX_LIFETIME_OVERRIDE: std::sync::OnceLock<std::time::Duration> =
     std::sync::OnceLock::new();
 
 fn effective_max_tx_lifetime() -> std::time::Duration {
@@ -60,12 +60,12 @@ fn effective_max_tx_lifetime() -> std::time::Duration {
 /// through immediately, unpaused. A test that wants exactly ONE tx to pause
 /// here gets that for free without having to know in advance how many
 /// OTHER committers will transit the same seam before the test finishes.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 #[derive(Debug)]
-pub(crate) struct PostValidatePrePublishHook {
-    pub(crate) reached: std::sync::atomic::AtomicUsize,
-    pub(crate) resume: tokio::sync::Notify,
-    pub(crate) armed: std::sync::atomic::AtomicBool,
+pub struct PostValidatePrePublishHook {
+    pub reached: std::sync::atomic::AtomicUsize,
+    pub resume: tokio::sync::Notify,
+    pub armed: std::sync::atomic::AtomicBool,
 }
 
 /// Test-only pause seam: fires in `commit_tx_lockfree` immediately AFTER
@@ -101,8 +101,8 @@ pub(crate) struct PostValidatePrePublishHook {
 /// test files. Uninstalled (`None`, the default for every other test in the
 /// suite) this is a single `OnceLock::get()` read with no lock, no
 /// allocation, no await point taken.
-#[cfg(test)]
-pub(crate) static TEST_POST_VALIDATE_PRE_PUBLISH_HOOK: std::sync::OnceLock<
+#[cfg(any(test, feature = "test-util"))]
+pub static TEST_POST_VALIDATE_PRE_PUBLISH_HOOK: std::sync::OnceLock<
     std::sync::Arc<PostValidatePrePublishHook>,
 > = std::sync::OnceLock::new();
 
@@ -195,19 +195,18 @@ pub(super) async fn fire_cancel_test_hook(repo: &RepoCore, pre_wal: bool) {
 }
 
 /// Test-only one-shot pause for AsyncIndex's independently spawned tail.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 #[derive(Debug)]
-pub(crate) struct AsyncIndexTailHook {
-    pub(crate) repo_name: String,
-    pub(crate) reached: tokio::sync::Notify,
-    pub(crate) resume: tokio::sync::Notify,
-    pub(crate) armed: std::sync::atomic::AtomicBool,
+pub struct AsyncIndexTailHook {
+    pub repo_name: String,
+    pub reached: tokio::sync::Notify,
+    pub resume: tokio::sync::Notify,
+    pub armed: std::sync::atomic::AtomicBool,
 }
 
-#[cfg(test)]
-pub(crate) static TEST_ASYNC_INDEX_TAIL_HOOK: std::sync::OnceLock<
-    std::sync::Arc<AsyncIndexTailHook>,
-> = std::sync::OnceLock::new();
+#[cfg(any(test, feature = "test-util"))]
+pub static TEST_ASYNC_INDEX_TAIL_HOOK: std::sync::OnceLock<std::sync::Arc<AsyncIndexTailHook>> =
+    std::sync::OnceLock::new();
 
 pub(super) async fn fire_async_index_tail_test_hook(repo: &RepoCore) {
     #[cfg(test)]
@@ -490,9 +489,11 @@ impl From<TxError> for DbError {
 }
 
 mod durability_completion;
-#[cfg(test)]
-pub(crate) use durability_completion::TEST_SYNCED_WAL_REPO;
-pub(in crate::tx) use durability_completion::{commit_wal_durability, wal_completion};
+pub(in crate::tx) use durability_completion::commit_wal_durability;
+pub use durability_completion::wal_completion;
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub use durability_completion::TEST_SYNCED_WAL_REPO;
 
 /// cancel-safe: yes — read-only over `&TxContext`. The only `.await`
 /// is `interner_overlay.scan_async` which is itself cancel-safe (the

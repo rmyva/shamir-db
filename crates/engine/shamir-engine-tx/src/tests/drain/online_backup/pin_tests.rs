@@ -13,8 +13,8 @@ use shamir_query_types::{ReplicationServe, RetentionOverflow, WalCommitTier};
 use shamir_tx::IsolationLevel;
 use shamir_types::types::value::InnerValue;
 
-use crate::tx::repo::{BoxRepoFactory, DurabilityPolicy, RepoInstance};
-use crate::tx::table::TableConfig;
+use crate::repo::{BoxRepoFactory, DurabilityPolicy, RepoInstance};
+use crate::table::TableConfig;
 
 async fn disk_repo(path: &Path) -> RepoInstance {
     RepoInstance::from_factory_with_test_segment_bytes(

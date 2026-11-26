@@ -4,9 +4,9 @@
 use shamir_storage::storage_in_memory::InMemoryRepo;
 use std::sync::Arc;
 
-use crate::clean_horizon::retention::{enforce_retention, RetentionAction};
 use crate::repo::{BoxRepo, RepoInstance};
 use crate::table::TableConfig;
+use crate::tx::clean_horizon::retention::{enforce_retention, RetentionAction};
 
 #[tokio::test]
 async fn memory_wal_bypasses_retention_gate() {

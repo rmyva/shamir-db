@@ -8,8 +8,8 @@
 
 use std::time::Duration;
 
-use crate::tx::repo::instance::repo_instance::OnlineBackupError;
-use crate::tx::table::TableConfig;
+use crate::repo::instance::repo_instance::OnlineBackupError;
+use crate::table::TableConfig;
 use crate::tx::tests::drain::drainer_tests::support::{make_repo, rid, seed_inflight_put};
 
 const REFUSAL_BUDGET: Duration = Duration::from_secs(30);

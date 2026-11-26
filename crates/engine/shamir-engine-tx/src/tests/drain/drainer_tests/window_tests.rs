@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use shamir_wal::WalEntryV2;
 
+use crate::table::TableConfig;
 use crate::tx::drainer::Drainer;
-use crate::tx::table::TableConfig;
 
 use super::support::{make_repo, rid, seed_inflight_put};
 

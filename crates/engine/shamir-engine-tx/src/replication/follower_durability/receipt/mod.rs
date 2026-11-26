@@ -12,11 +12,12 @@
 mod apply;
 // Cold-start recovery (cold_reconcile) reaches the pipeline internals
 // through these modules.
-pub(crate) mod checkpoint;
+#[doc(hidden)]
+pub mod checkpoint;
 pub(crate) mod publish;
 pub(crate) mod resume;
 pub(crate) mod stage;
 
-pub(crate) use crate::ApplyOutcome;
+pub use crate::ApplyOutcome;
 pub(crate) use apply::apply_batch_receipt;
-pub(crate) use resume::worker::{ReceiptApplyJob, ReceiptLease};
+pub use resume::worker::{ReceiptApplyJob, ReceiptLease};

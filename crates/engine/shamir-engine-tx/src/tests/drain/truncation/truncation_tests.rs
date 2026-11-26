@@ -41,11 +41,11 @@ use shamir_test_diag::FlakeGuard;
 use shamir_tx::IsolationLevel;
 use shamir_types::types::value::InnerValue;
 
-use crate::tx::drainer::Drainer;
 #[cfg(feature = "fjall")]
-use crate::tx::repo::BoxRepoFactory;
-use crate::tx::repo::{BoxRepo, RepoInstance};
-use crate::tx::table::TableConfig;
+use crate::repo::BoxRepoFactory;
+use crate::repo::{BoxRepo, RepoInstance};
+use crate::table::TableConfig;
+use crate::tx::drainer::Drainer;
 
 fn make_mem_repo() -> RepoInstance {
     let repo = Arc::new(InMemoryRepo::new());

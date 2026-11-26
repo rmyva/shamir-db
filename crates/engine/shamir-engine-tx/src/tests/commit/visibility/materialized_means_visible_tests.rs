@@ -10,8 +10,8 @@ use shamir_types::types::value::InnerValue;
 use tokio::sync::{broadcast::error::TryRecvError, oneshot};
 use tokio::task::JoinHandle;
 
-use crate::tx::repo::RepoInstance;
-use crate::tx::table::table_manager::table_token_for;
+use crate::repo::RepoInstance;
+use crate::table::table_manager::table_token_for;
 use shamir_storage::error::DbError;
 
 use crate::tx::commit::TxError;

@@ -29,11 +29,11 @@ use shamir_types::types::record_id::RecordId;
 use shamir_types::types::value::InnerValue;
 use shamir_wal::WalOpV2;
 
+use crate::repo::repo_instance::RepoInstance;
+use crate::repo::repo_types::BoxRepo;
+use crate::table::table_manager::table_token_for;
+use crate::table::TableConfig;
 use crate::tx::commit_tx;
-use crate::tx::repo::repo_instance::RepoInstance;
-use crate::tx::repo::repo_types::BoxRepo;
-use crate::tx::table::table_manager::table_token_for;
-use crate::tx::table::TableConfig;
 
 fn make_repo() -> RepoInstance {
     let repo = Arc::new(InMemoryRepo::new());

@@ -20,9 +20,9 @@ use shamir_storage::storage_in_memory::InMemoryRepo;
 use shamir_tx::{IsolationLevel, TxContext, TxId};
 use shamir_types::access::Actor;
 
+use crate::repo::{BoxRepo, RepoInstance};
+use crate::table::TableConfig;
 use crate::tx::commit::pipeline::admission::tests::close_helpers::close;
-use crate::tx::repo::{BoxRepo, RepoInstance};
-use crate::tx::table::TableConfig;
 use crate::tx::CommitError;
 
 /// Backstop around the commit entry's `LEADER_REOPEN_WAIT_CAP` (2s under

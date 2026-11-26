@@ -36,12 +36,12 @@ use shamir_types::core::interner::{InternerKey, TouchInd};
 use shamir_types::types::common::new_map_wc;
 use shamir_types::types::value::InnerValue;
 
+use crate::index2::backend::{FtsMode, IndexQuery, IndexResult};
+use crate::repo::repo_instance::RepoInstance;
+use crate::repo::repo_types::BoxRepo;
+use crate::table::table_manager::table_token_for;
+use crate::table::TableConfig;
 use crate::tx::commit_phases::{FAIL_VECTOR_DELTA_TX_ID, FAIL_VECTOR_PROMOTE_TX_ID};
-use crate::tx::index2::backend::{FtsMode, IndexQuery, IndexResult};
-use crate::tx::repo::repo_instance::RepoInstance;
-use crate::tx::repo::repo_types::BoxRepo;
-use crate::tx::table::table_manager::table_token_for;
-use crate::tx::table::TableConfig;
 use crate::tx::tx_outcome::MaterializationState;
 use serial_test::serial;
 use shamir_index::tokenizer::token_identity;
@@ -51,7 +51,7 @@ fn make_repo() -> RepoInstance {
     RepoInstance::new("test".into(), BoxRepo::InMemory(repo), Vec::new())
 }
 
-async fn field_id(tbl: &crate::tx::table::TableManager, name: &str) -> u64 {
+async fn field_id(tbl: &crate::table::TableManager, name: &str) -> u64 {
     let interner = tbl.interner().get().await.unwrap();
     match interner.touch_ind(name).unwrap() {
         TouchInd::Exists(k) | TouchInd::New(k) => k.id(),
@@ -206,7 +206,7 @@ async fn committed_tx_hnsw_vector_searchable() {
         .lookup(IndexQuery::Vector {
             vec: vec![1.0, 0.0, 0.0],
             k: 10,
-            opts: crate::tx::index2::vector::SearchOpts::default(),
+            opts: crate::index2::vector::SearchOpts::default(),
         })
         .await
         .unwrap();
@@ -232,7 +232,7 @@ async fn committed_tx_hnsw_vector_searchable() {
             .lookup(IndexQuery::Vector {
                 vec: vec![1.0, 0.0, 0.0],
                 k: 10,
-                opts: crate::tx::index2::vector::SearchOpts::default(),
+                opts: crate::index2::vector::SearchOpts::default(),
             })
             .await
             .unwrap();
@@ -291,7 +291,7 @@ async fn aborted_tx_hnsw_staged_cleaned() {
                 IndexQuery::Vector {
                     vec: vec![1.0, 0.0, 0.0],
                     k: 10,
-                    opts: crate::tx::index2::vector::SearchOpts::default(),
+                    opts: crate::index2::vector::SearchOpts::default(),
                 },
                 None,
                 tx.staged_vectors_for(token),
@@ -318,7 +318,7 @@ async fn aborted_tx_hnsw_staged_cleaned() {
         .lookup(IndexQuery::Vector {
             vec: vec![1.0, 0.0, 0.0],
             k: 10,
-            opts: crate::tx::index2::vector::SearchOpts::default(),
+            opts: crate::index2::vector::SearchOpts::default(),
         })
         .await
         .unwrap();
@@ -378,7 +378,7 @@ async fn dropped_tx_staged_vectors_freed_via_raii() {
         .lookup(IndexQuery::Vector {
             vec: vec![0.0, 1.0, 0.0],
             k: 10,
-            opts: crate::tx::index2::vector::SearchOpts::default(),
+            opts: crate::index2::vector::SearchOpts::default(),
         })
         .await
         .unwrap();
@@ -424,7 +424,7 @@ async fn in_tx_search_sees_own_staged_vector() {
             IndexQuery::Vector {
                 vec: vec![1.0, 0.0, 0.0],
                 k: 10,
-                opts: crate::tx::index2::vector::SearchOpts::default(),
+                opts: crate::index2::vector::SearchOpts::default(),
             },
             None,
             tx.staged_vectors_for(token),
@@ -678,7 +678,7 @@ async fn committed_tx_multi_table_hnsw_vectors_each_searchable() {
     // `committed_tx_hnsw_vector_searchable`: the promote's underlying
     // adapter insert may finish asynchronously).
     async fn poll_for(
-        backend: &std::sync::Arc<dyn crate::tx::index2::backend::IndexBackend>,
+        backend: &std::sync::Arc<dyn crate::index2::backend::IndexBackend>,
         query_vec: Vec<f32>,
         rid: shamir_types::types::record_id::RecordId,
     ) -> bool {
@@ -687,7 +687,7 @@ async fn committed_tx_multi_table_hnsw_vectors_each_searchable() {
                 .lookup(IndexQuery::Vector {
                     vec: query_vec.clone(),
                     k: 10,
-                    opts: crate::tx::index2::vector::SearchOpts::default(),
+                    opts: crate::index2::vector::SearchOpts::default(),
                 })
                 .await
                 .unwrap();
@@ -720,7 +720,7 @@ async fn committed_tx_multi_table_hnsw_vectors_each_searchable() {
         .lookup(IndexQuery::Vector {
             vec: vec![0.0, 1.0, 0.0],
             k: 10,
-            opts: crate::tx::index2::vector::SearchOpts::default(),
+            opts: crate::index2::vector::SearchOpts::default(),
         })
         .await
         .unwrap();
@@ -885,7 +885,7 @@ async fn rv_index_l3_delta_prune_failed_promote_never_acks_chunk() {
         IndexQuery::Vector {
             vec: vec![0.0, 1.0, 0.0],
             k: 1,
-            opts: crate::tx::index2::vector::SearchOpts::default(),
+            opts: crate::index2::vector::SearchOpts::default(),
         },
     )
     .await

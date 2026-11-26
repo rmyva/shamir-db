@@ -5,8 +5,8 @@ use shamir_types::types::record_id::RecordId;
 use shamir_types::types::value::InnerValue;
 use shamir_wal::{WalDurability, WalEntryV2, WalOpV2, WalTicket, WalTicketState};
 
-use crate::tx::repo::{repo_token, BoxRepo, RepoInstance};
-use crate::tx::table::table_manager::table_token_for;
+use crate::repo::{repo_token, BoxRepo, RepoInstance};
+use crate::table::table_manager::table_token_for;
 
 pub(crate) fn make_repo() -> RepoInstance {
     let repo = Arc::new(InMemoryRepo::new());

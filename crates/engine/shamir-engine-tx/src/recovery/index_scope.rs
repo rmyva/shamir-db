@@ -73,7 +73,7 @@ fn parse_posting_key(key: &[u8]) -> PostingFormats<'_> {
 ///
 /// Sharing the parser rejects unsupported shapes before opening stores without
 /// duplicating format rules. Loaded definition identity is still checked after open.
-pub(crate) fn is_supported_posting_key(key: &[u8]) -> bool {
+pub fn is_supported_posting_key(key: &[u8]) -> bool {
     let formats = parse_posting_key(key);
     formats.base.is_some() || formats.sorted.is_some() || formats.index2.is_some()
 }

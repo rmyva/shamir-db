@@ -14,16 +14,16 @@ use shamir_types::access::Actor;
 use shamir_types::types::record_id::RecordId;
 use shamir_wal::{WalDurability, WalEntryV2, WalOpV2};
 
-use super::super::follower::ignore_bookmark_j;
 use super::helpers::{
     open_and_reconcile, open_refusal_with_retry, prepare_follower_image, prepare_image,
     raw_store_with_retry, temp_path,
 };
-use crate::apply_replicated::follower_durability::test_seam::{self, Phase};
-use crate::apply_replicated::{apply_replicated_batch, ApplyOutcome, ApplyPolicy};
 use crate::repo::{BoxRepoFactory, RepoInstance};
 use crate::table::TableConfig;
-use crate::ReplicatedEvent;
+use crate::tx::apply_replicated::follower_durability::test_seam::{self, Phase};
+use crate::tx::apply_replicated::{apply_replicated_batch, ApplyOutcome, ApplyPolicy};
+use crate::tx::recovery::cold_reconcile::follower::ignore_bookmark_j;
+use crate::tx::ReplicatedEvent;
 
 fn event(version: u64) -> ChangelogEvent {
     ChangelogEvent {

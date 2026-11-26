@@ -98,7 +98,7 @@ pub(in crate::tx) async fn finalize_sync_post_publish(
     // here, after the version is published (visibility), so it drains
     // promptly.
     repo.drainer().wake();
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     repo.fire_post_publish_pre_broadcast_test_hook().await;
     repo.broadcast_changefeed_event(changefeed_event);
     promote_vectors(tx, repo, commit_version).await;

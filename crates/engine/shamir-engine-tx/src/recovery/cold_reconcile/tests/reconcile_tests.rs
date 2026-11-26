@@ -1,10 +1,10 @@
 use super::helpers::{open_and_reconcile, open_unrecovered, prepare_image, temp_path};
-use crate::clean_horizon::checkpoint::test_seam;
 use crate::repo::{BoxRepoFactory, RepoFactory, RepoInstance};
 use crate::table::TableConfig;
+use crate::tx::clean_horizon::checkpoint::test_seam;
 
-use crate::cold_reconcile::algorithm::reconcile_with_hook;
-use crate::drainer::Drainer;
+use crate::tx::cold_reconcile::algorithm::reconcile_with_hook;
+use crate::tx::drainer::Drainer;
 use bytes::Bytes;
 use shamir_query_builder::write::doc;
 use shamir_query_types::{ReplicationServe, RetentionOverflow, WalCommitTier};
@@ -91,7 +91,7 @@ async fn seeded_retention_repo(path: &std::path::Path, action: RetentionOverflow
     repo.disable_background_drainer_for_test();
     for i in 0..8 {
         let (mut tx, _guard) = repo
-            .begin_tx(crate::IsolationLevel::Snapshot)
+            .begin_tx(crate::tx::IsolationLevel::Snapshot)
             .await
             .unwrap();
         let user_record = doc()
@@ -235,7 +235,7 @@ fn reconcile_crash_child_entrypoint() {
             let interner = table.interner().get().await.unwrap();
             let record = query_value_to_inner(&user_record, interner).unwrap();
             let (mut tx, _guard) = repo
-                .begin_tx(crate::IsolationLevel::Snapshot)
+                .begin_tx(crate::tx::IsolationLevel::Snapshot)
                 .await
                 .unwrap();
             table.insert_tx(&record, Some(&mut tx)).await.unwrap();

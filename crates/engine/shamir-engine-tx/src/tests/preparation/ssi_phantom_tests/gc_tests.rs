@@ -8,8 +8,8 @@ use shamir_tx::repo_tx_gate::{CommitWriteRecord, TableWriteFootprint};
 use shamir_tx::IsolationLevel;
 use shamir_types::types::value::InnerValue;
 
-use crate::tx::table::table_manager::table_token_for;
-use crate::tx::table::TableConfig;
+use crate::table::table_manager::table_token_for;
+use crate::table::TableConfig;
 
 use super::helpers::make_repo;
 

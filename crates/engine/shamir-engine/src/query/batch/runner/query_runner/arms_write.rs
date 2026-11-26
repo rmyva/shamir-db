@@ -9,7 +9,8 @@ use super::fk_isolation::{
 };
 use crate::query::batch::param_subst::{contains_param_ref, resolve_write_value};
 use crate::query::batch::receipts::write_result_to_query_result_with_encoding;
-use crate::query::batch::{BatchError, BatchOp};
+use crate::query::batch::BatchOp;
+use crate::query::batch::{BatchError, BatchTxPort};
 use crate::query::read::QueryResult;
 impl<'a> QueryRunner<'a> {
     pub(super) async fn run_insert_arm(

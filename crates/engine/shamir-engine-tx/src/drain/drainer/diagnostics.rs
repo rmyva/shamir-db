@@ -9,7 +9,7 @@ use crate::drainer::orphan_repair;
 
 impl Drainer {
     /// Best-effort telemetry reads; never initializes repository state.
-    pub(crate) fn enrich_diagnostics(&self, snapshot: &mut shamir_tx::GateDiagnostics) {
+    pub fn enrich_diagnostics(&self, snapshot: &mut shamir_tx::GateDiagnostics) {
         snapshot.orphan_replay_attempts_total =
             self.orphan_replay_attempts_total.load(Ordering::Relaxed);
         snapshot.orphan_replay_failures_total =

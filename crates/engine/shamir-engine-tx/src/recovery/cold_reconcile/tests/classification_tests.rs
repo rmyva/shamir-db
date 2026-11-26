@@ -1,4 +1,4 @@
-use crate::cold_reconcile::classification::{classify, Evidence};
+use crate::tx::cold_reconcile::classification::{classify, Evidence};
 
 #[test]
 fn wal_header_distinguishes_eventless_from_legacy_unknown() {

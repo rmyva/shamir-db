@@ -182,13 +182,13 @@ impl Drainer {
     }
 
     /// R2a-1d: the pause facade over `replaying` (capture/seal barriers).
-    pub(crate) fn pause(&self) -> &DrainPauseState {
+    pub fn pause(&self) -> &DrainPauseState {
         &self.pause
     }
 
     /// R2a-1d: busy probe for the barrier entry check — a seal hold or a
     /// transient pause currently owns `replaying`.
-    pub(crate) fn pause_held(&self) -> bool {
+    pub fn pause_held(&self) -> bool {
         self.pause.is_held()
     }
 
@@ -210,7 +210,7 @@ impl Drainer {
     /// R2a-1d: pending-work probe for the settle/recheck checks (atomic
     /// mirror of `window`; production-capable twin of the test-only
     /// `window_depth`).
-    pub(crate) fn pending_window_len(&self) -> usize {
+    pub fn pending_window_len(&self) -> usize {
         self.window_depth.load(Ordering::Relaxed)
     }
 }

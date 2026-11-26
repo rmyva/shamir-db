@@ -32,15 +32,15 @@ use shamir_types::types::value::InnerValue;
 #[cfg(feature = "fjall")]
 use shamir_wal::{WalDurability, WalEntryV2, WalOpV2};
 
+use crate::repo::repo_instance::RepoInstance;
+#[cfg(feature = "fjall")]
+use crate::repo::repo_token;
+use crate::repo::repo_types::BoxRepo;
+#[cfg(feature = "fjall")]
+use crate::repo::BoxRepoFactory;
+use crate::table::table_manager::table_token_for;
+use crate::table::TableConfig;
 use crate::tx::commit_tx;
-use crate::tx::repo::repo_instance::RepoInstance;
-#[cfg(feature = "fjall")]
-use crate::tx::repo::repo_token;
-use crate::tx::repo::repo_types::BoxRepo;
-#[cfg(feature = "fjall")]
-use crate::tx::repo::BoxRepoFactory;
-use crate::tx::table::table_manager::table_token_for;
-use crate::tx::table::TableConfig;
 use crate::tx::RepoVersionProvider;
 
 fn make_repo() -> RepoInstance {

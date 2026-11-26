@@ -19,7 +19,7 @@ use crate::repo::repo_instance::ChangefeedHandle;
 use crate::repo::{BoxRepo, RepoInstance};
 use crate::table::interner_manager::InternerManager;
 use crate::table::TableConfig;
-use crate::IsolationLevel;
+use crate::tx::IsolationLevel;
 use shamir_tx::ChangelogError;
 
 type StoreStream = Pin<Box<dyn Stream<Item = Result<Vec<(RecordKey, Bytes)>, DbError>> + Send>>;

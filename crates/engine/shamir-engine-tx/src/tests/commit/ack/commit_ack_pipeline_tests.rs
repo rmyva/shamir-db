@@ -13,14 +13,14 @@ use shamir_types::access::Actor;
 use shamir_types::types::value::InnerValue;
 use tokio::sync::Notify;
 
+use crate::query::batch::{execute_batch_unchecked, BatchResolver, TableResolver};
+use crate::query::TableRef;
+use crate::repo::RepoInstance;
+use crate::table::TableManager;
 use crate::tx::commit::{
     AsyncIndexTailHook, TxError, TEST_ASYNC_INDEX_TAIL_HOOK, TEST_SYNCED_WAL_REPO,
 };
 use crate::tx::materialize::TEST_PRE_MATERIALIZE_REPO;
-use crate::tx::query::batch::{execute_batch_unchecked, BatchResolver, TableResolver};
-use crate::tx::query::TableRef;
-use crate::tx::repo::RepoInstance;
-use crate::tx::table::TableManager;
 use crate::tx::tests::drain::orphans::post_wal_orphan_ordering_tests::fixture;
 use crate::tx::MaterializationState;
 
@@ -435,7 +435,7 @@ async fn nested_bounded_override_in_transactional_outer_rejected_before_any_writ
     )
     .await;
     assert!(
-        matches!(&result, Err(crate::tx::query::batch::BatchError::QueryError {
+        matches!(&result, Err(crate::query::batch::BatchError::QueryError {
         code: Some(code), ..
     }) if code == "validation"),
         "{result:?}"

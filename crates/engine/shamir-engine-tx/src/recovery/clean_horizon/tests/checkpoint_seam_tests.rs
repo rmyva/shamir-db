@@ -1,8 +1,8 @@
-use crate::clean_horizon::checkpoint::test_seam;
-use crate::drainer::Drainer;
 use crate::repo::{BoxRepoFactory, DurabilityPolicy, RepoInstance};
 use crate::table::TableConfig;
-use crate::tests::drain::truncation::truncation_tests::shamirwal_seg_count;
+use crate::tx::clean_horizon::checkpoint::test_seam;
+use crate::tx::drainer::Drainer;
+use crate::tx::tests::drain::truncation::truncation_tests::shamirwal_seg_count;
 use shamir_tx::IsolationLevel;
 use shamir_types::types::value::InnerValue;
 
@@ -44,7 +44,7 @@ async fn checkpoint_samples_w_before_changefeed_pending_gap_recheck() {
         pending.record_pending_changefeed_gap(11)
     });
 
-    assert!(crate::clean_horizon::checkpoint::checkpoint_before_truncate(&repo.core).await);
+    assert!(crate::tx::clean_horizon::checkpoint::checkpoint_before_truncate(&repo.core).await);
     let feed = repo.changefeed().await.unwrap().feed;
     assert_eq!(feed.first_gap_version(), 7);
     assert_eq!(feed.certified_gap_interval(), Some((7, 11)));

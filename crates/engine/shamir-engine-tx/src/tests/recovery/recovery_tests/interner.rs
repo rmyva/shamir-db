@@ -1,7 +1,7 @@
 use super::support::make_repo;
+use crate::table::table_manager::table_token_for;
+use crate::table::TableConfig;
 use crate::tx::pre_commit::REPO_INTERNER_SCOPE;
-use crate::tx::table::table_manager::table_token_for;
-use crate::tx::table::TableConfig;
 use shamir_query_builder::write::{self, doc};
 use shamir_tx::IsolationLevel;
 use shamir_types::types::record_id::RecordId;

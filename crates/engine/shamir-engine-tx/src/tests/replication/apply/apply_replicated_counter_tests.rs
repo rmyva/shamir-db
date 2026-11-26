@@ -10,9 +10,9 @@ use shamir_types::types::common::new_map;
 use shamir_types::types::record_id::RecordId;
 use shamir_types::types::value::InnerValue;
 
-use crate::tx::query::filter::eval_context::FilterContext;
-use crate::tx::repo::{BoxRepo, RepoInstance};
-use crate::tx::table::TableConfig;
+use crate::query::filter::eval_context::FilterContext;
+use crate::repo::{BoxRepo, RepoInstance};
+use crate::table::TableConfig;
 use crate::tx::{apply_replicated_batch, ApplyOutcome, ApplyPolicy, ReplicatedEvent};
 
 fn follower(tables: &[&str]) -> RepoInstance {

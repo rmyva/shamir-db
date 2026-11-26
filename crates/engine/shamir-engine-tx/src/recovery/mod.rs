@@ -6,8 +6,9 @@ pub mod cold_reconcile;
 mod index_scope;
 mod v2;
 
-pub(crate) use index_scope::is_supported_posting_key;
-pub(crate) use v2::recover_inflight_v2_strict;
-#[cfg(test)]
-pub(crate) use v2::FAIL_HISTORY_SEED_TX_ID;
+pub use index_scope::is_supported_posting_key;
+pub use v2::recover_inflight_v2_strict;
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub use v2::FAIL_HISTORY_SEED_TX_ID;
 pub use v2::{recover_inflight_v2, replay_v2_entry, replay_v2_op};

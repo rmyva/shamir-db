@@ -5,10 +5,10 @@ use shamir_query_types::{ReplicationServe, RetentionOverflow, WalCommitTier};
 use shamir_types::types::value::InnerValue;
 use tokio::sync::oneshot;
 
+use crate::repo::{BoxRepoFactory, DurabilityPolicy, RepoInstance};
+use crate::table::TableConfig;
 use crate::tx::clean_horizon::checkpoint::test_seam;
 use crate::tx::clean_horizon::retention::enforce_retention;
-use crate::tx::repo::{BoxRepoFactory, DurabilityPolicy, RepoInstance};
-use crate::tx::table::TableConfig;
 use crate::tx::IsolationLevel;
 
 async fn disk_repo(path: &Path, mode: RetentionOverflow) -> RepoInstance {

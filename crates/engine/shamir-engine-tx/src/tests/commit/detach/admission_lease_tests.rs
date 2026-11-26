@@ -18,14 +18,14 @@ use shamir_tx::{CommitVisibility, IsolationLevel};
 use shamir_types::types::value::InnerValue;
 use tokio::sync::Notify;
 
+use crate::repo::{BoxRepoFactory, RepoInstance};
+use crate::table::TableConfig;
 use crate::tx::commit::pipeline::admission::gate::CommitAdmissionGate;
 use crate::tx::commit::{
     AsyncIndexTailHook, PostValidatePrePublishHook, PostWalPrePublishHook,
     TEST_ASYNC_INDEX_TAIL_HOOK, TEST_POST_VALIDATE_PRE_PUBLISH_HOOK,
     TEST_POST_WAL_PRE_PUBLISH_HOOK,
 };
-use crate::tx::repo::{BoxRepoFactory, RepoInstance};
-use crate::tx::table::TableConfig;
 use crate::tx::MaterializationState;
 
 const BUDGET: Duration = Duration::from_secs(45);

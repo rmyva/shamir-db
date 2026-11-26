@@ -5,7 +5,6 @@
 use super::repo_core::RepoCore;
 use crate::commit::cold_open::{ColdOpenRegistration, ColdOpenTasks};
 use crate::repo::changelog_store::write_domain::RepoWritePermit;
-use crate::table::fk_reverse_cache::FkReverseCache;
 use crate::table::table_manager::table_token_for;
 use crate::table::{table_store_names, TableManager};
 use shamir_storage::error::{DbError, DbResult};
@@ -64,7 +63,7 @@ impl RepoCore {
 
     /// Resolve a token while the caller already holds this repository's permit.
     /// Cold setup runs inline; do not cancel while recovery may still be running.
-    pub(crate) async fn table_by_token_admitted(
+    pub async fn table_by_token_admitted(
         &self,
         token: u64,
         permit: &RepoWritePermit,
@@ -197,7 +196,7 @@ impl RepoCore {
     /// capability. Otherwise identical semantics to `get_table` (single-init
     /// `OnceCell`; an unconfigured name is refused before any catalogue cell
     /// is allocated, and re-checked inside the init closure).
-    pub(crate) async fn get_table_admitted_unfenced(
+    pub async fn get_table_admitted_unfenced(
         &self,
         table_name: &str,
         permit: &RepoWritePermit,

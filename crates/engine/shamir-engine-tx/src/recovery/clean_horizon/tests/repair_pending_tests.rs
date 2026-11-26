@@ -24,17 +24,17 @@ use shamir_types::access::Actor;
 use shamir_types::types::value::InnerValue;
 use tokio::sync::Notify;
 
-#[cfg(feature = "fjall")]
-use crate::clean_horizon::checkpoint::checkpoint_before_truncate;
-#[cfg(feature = "fjall")]
-use crate::clean_horizon::checkpoint::test_seam;
-use crate::clean_horizon::repair_pending_drain::drain_repair_pending;
 use crate::repo::changelog_store::StoreChangelog;
 use crate::repo::repo_instance::ChangefeedHandle;
 use crate::repo::{BoxRepo, RepoInstance};
 #[cfg(feature = "fjall")]
 use crate::repo::{BoxRepoFactory, DurabilityPolicy};
 use crate::table::TableConfig;
+#[cfg(feature = "fjall")]
+use crate::tx::clean_horizon::checkpoint::checkpoint_before_truncate;
+#[cfg(feature = "fjall")]
+use crate::tx::clean_horizon::checkpoint::test_seam;
+use crate::tx::clean_horizon::repair_pending_drain::drain_repair_pending;
 
 const MAX_KEY: u64 = u64::MAX;
 const BACKLOG_KEY: u64 = u64::MAX - 1;

@@ -32,10 +32,10 @@ use shamir_types::core::interner::{InternerKey, TouchInd};
 use shamir_types::types::common::new_map_wc;
 use shamir_types::types::value::InnerValue;
 
-use crate::tx::repo::repo_instance::RepoInstance;
-use crate::tx::repo::repo_types::BoxRepo;
-use crate::tx::table::table_manager::TableManager;
-use crate::tx::table::TableConfig;
+use crate::repo::repo_instance::RepoInstance;
+use crate::repo::repo_types::BoxRepo;
+use crate::table::table_manager::TableManager;
+use crate::table::TableConfig;
 
 fn make_repo() -> RepoInstance {
     let repo = Arc::new(InMemoryRepo::new());

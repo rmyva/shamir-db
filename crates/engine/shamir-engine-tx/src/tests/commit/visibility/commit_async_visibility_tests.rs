@@ -29,14 +29,14 @@ use shamir_tx::{CommitVisibility, IndexWriteOp, IsolationLevel, StagingStore, Tx
 use shamir_types::types::record_id::RecordId;
 use shamir_types::types::value::InnerValue;
 
+use crate::repo::repo_instance::RepoInstance;
+use crate::repo::repo_types::BoxRepo;
+use crate::table::table_manager::table_token_for;
+use crate::table::TableConfig;
 use crate::tx::commit_phases::{
     FAIL_PHASE_5A_TRANSIENT_REMAINING, FAIL_PHASE_5A_TRANSIENT_TX_ID, FAIL_PHASE_5C_TX_ID,
     MATERIALIZE_ATTEMPTS,
 };
-use crate::tx::repo::repo_instance::RepoInstance;
-use crate::tx::repo::repo_types::BoxRepo;
-use crate::tx::table::table_manager::table_token_for;
-use crate::tx::table::TableConfig;
 use crate::tx::tx_outcome::MaterializationState;
 
 fn make_repo() -> RepoInstance {

@@ -2,8 +2,8 @@ use bytes::Bytes;
 use shamir_tx::{IndexWriteOp, IsolationLevel};
 use shamir_types::types::value::InnerValue;
 
-use crate::tx::table::table_manager::table_token_for;
-use crate::tx::table::TableConfig;
+use crate::table::table_manager::table_token_for;
+use crate::table::TableConfig;
 use crate::tx::tests::drain::orphans::post_wal_orphan_ordering_tests::{fixture, panic_post_wal};
 use crate::tx::tests::recovery::snapshot_gc::snapshot_visibility_park_tests::spawn_settled_commit;
 

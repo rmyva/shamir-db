@@ -27,10 +27,10 @@ use shamir_tx::{CommitVisibility, IsolationLevel};
 use shamir_types::types::value::InnerValue;
 
 #[cfg(feature = "fjall")]
-use crate::tx::repo::BoxRepoFactory;
-use crate::tx::repo::{BoxRepo, RepoInstance};
-use crate::tx::table::table_manager::table_token_for;
-use crate::tx::table::TableConfig;
+use crate::repo::BoxRepoFactory;
+use crate::repo::{BoxRepo, RepoInstance};
+use crate::table::table_manager::table_token_for;
+use crate::table::TableConfig;
 
 fn make_repo() -> RepoInstance {
     let repo = Arc::new(InMemoryRepo::new());

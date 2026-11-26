@@ -16,10 +16,10 @@ async fn ssi_phantom_lookup_range_tx_records_exact_bounds_from_range_bounds() {
 
     let store: std::sync::Arc<dyn shamir_storage::types::Store> =
         std::sync::Arc::new(InMemoryStore::new());
-    let mgr = crate::tx::index::sorted_index_manager::SortedIndexManager::new(store)
+    let mgr = crate::index::sorted_index_manager::SortedIndexManager::new(store)
         .await
         .unwrap();
-    let def = crate::tx::index::sorted_index_manager::SortedIndexDefinition::new(101, vec![201]);
+    let def = crate::index::sorted_index_manager::SortedIndexDefinition::new(101, vec![201]);
     mgr.register(def).await.unwrap();
 
     let ctx = TxContext::new(TxId::new(1), 0, 0, IsolationLevel::Serializable);
@@ -64,10 +64,10 @@ async fn ssi_phantom_lookup_min_tx_records_full_prefix_interval() {
 
     let store: std::sync::Arc<dyn shamir_storage::types::Store> =
         std::sync::Arc::new(InMemoryStore::new());
-    let mgr = crate::tx::index::sorted_index_manager::SortedIndexManager::new(store)
+    let mgr = crate::index::sorted_index_manager::SortedIndexManager::new(store)
         .await
         .unwrap();
-    let def = crate::tx::index::sorted_index_manager::SortedIndexDefinition::new(101, vec![201]);
+    let def = crate::index::sorted_index_manager::SortedIndexDefinition::new(101, vec![201]);
     mgr.register(def).await.unwrap();
 
     let ctx = TxContext::new(TxId::new(1), 0, 0, IsolationLevel::Serializable);
@@ -100,10 +100,10 @@ async fn ssi_phantom_non_tx_lookup_range_does_not_allocate_predicate_set() {
 
     let store: std::sync::Arc<dyn shamir_storage::types::Store> =
         std::sync::Arc::new(InMemoryStore::new());
-    let mgr = crate::tx::index::sorted_index_manager::SortedIndexManager::new(store)
+    let mgr = crate::index::sorted_index_manager::SortedIndexManager::new(store)
         .await
         .unwrap();
-    let def = crate::tx::index::sorted_index_manager::SortedIndexDefinition::new(101, vec![201]);
+    let def = crate::index::sorted_index_manager::SortedIndexDefinition::new(101, vec![201]);
     mgr.register(def).await.unwrap();
 
     // No tx at all — must not allocate.
@@ -120,10 +120,10 @@ async fn ssi_phantom_snapshot_isolation_records_nothing_zero_overhead() {
 
     let store: std::sync::Arc<dyn shamir_storage::types::Store> =
         std::sync::Arc::new(InMemoryStore::new());
-    let mgr = crate::tx::index::sorted_index_manager::SortedIndexManager::new(store)
+    let mgr = crate::index::sorted_index_manager::SortedIndexManager::new(store)
         .await
         .unwrap();
-    let def = crate::tx::index::sorted_index_manager::SortedIndexDefinition::new(101, vec![201]);
+    let def = crate::index::sorted_index_manager::SortedIndexDefinition::new(101, vec![201]);
     mgr.register(def).await.unwrap();
 
     let ctx = TxContext::new(TxId::new(1), 0, 0, IsolationLevel::Snapshot);
@@ -143,11 +143,11 @@ async fn ssi_phantom_snapshot_isolation_records_nothing_zero_overhead() {
 /// under Serializable isolation.
 #[tokio::test]
 async fn ssi_phantom_index2_btree_range_records_index_range_via_default_lookup_tx() {
-    use crate::tx::index2::backend::{IndexBackend, IndexQuery};
-    use crate::tx::index2::descriptor::IndexDescriptor;
-    use crate::tx::index2::expr::IndexExpr;
-    use crate::tx::index2::functional_backend::FunctionalBackend;
-    use crate::tx::index2::kind::IndexKind;
+    use crate::index2::backend::{IndexBackend, IndexQuery};
+    use crate::index2::descriptor::IndexDescriptor;
+    use crate::index2::expr::IndexExpr;
+    use crate::index2::functional_backend::FunctionalBackend;
+    use crate::index2::kind::IndexKind;
     use shamir_storage::storage_in_memory::InMemoryStore;
     use shamir_tx::{TxContext, TxId};
 
@@ -198,8 +198,8 @@ async fn ssi_phantom_index2_btree_range_records_index_range_via_default_lookup_t
 /// degenerate (lo==hi with 0xFF pad) interval.
 #[tokio::test]
 async fn ssi_phantom_eq_on_sorted_indexed_field_records_degenerate_interval() {
-    use crate::tx::query::filter::eval::predicate_to_index_range;
-    use crate::tx::query::filter::Filter;
+    use crate::query::filter::eval::predicate_to_index_range;
+    use crate::query::filter::Filter;
     use shamir_storage::storage_in_memory::InMemoryStore;
     use shamir_types::core::interner::Interner;
 
@@ -208,11 +208,11 @@ async fn ssi_phantom_eq_on_sorted_indexed_field_records_degenerate_interval() {
 
     let store: std::sync::Arc<dyn shamir_storage::types::Store> =
         std::sync::Arc::new(InMemoryStore::new());
-    let mgr = crate::tx::index::sorted_index_manager::SortedIndexManager::new(store)
+    let mgr = crate::index::sorted_index_manager::SortedIndexManager::new(store)
         .await
         .unwrap();
     mgr.register(
-        crate::tx::index::sorted_index_manager::SortedIndexDefinition::new(
+        crate::index::sorted_index_manager::SortedIndexDefinition::new(
             age_ind.id(),
             vec![age_ind.id()],
         ),
@@ -222,7 +222,7 @@ async fn ssi_phantom_eq_on_sorted_indexed_field_records_degenerate_interval() {
 
     let filter = Filter::Eq {
         field: vec!["age".into()],
-        value: crate::tx::query::filter::FilterValue::Int(30),
+        value: crate::query::filter::FilterValue::Int(30),
     };
 
     let deps = predicate_to_index_range(&filter, &mgr, &i, 7);
@@ -244,8 +244,8 @@ async fn ssi_phantom_eq_on_sorted_indexed_field_records_degenerate_interval() {
 /// predicate_to_index_range: Or filter returns empty (caller records TableScan).
 #[tokio::test]
 async fn ssi_phantom_or_filter_records_table_scan_not_index_range() {
-    use crate::tx::query::filter::eval::predicate_to_index_range;
-    use crate::tx::query::filter::Filter;
+    use crate::query::filter::eval::predicate_to_index_range;
+    use crate::query::filter::Filter;
     use shamir_storage::storage_in_memory::InMemoryStore;
     use shamir_types::core::interner::Interner;
 
@@ -254,7 +254,7 @@ async fn ssi_phantom_or_filter_records_table_scan_not_index_range() {
 
     let store: std::sync::Arc<dyn shamir_storage::types::Store> =
         std::sync::Arc::new(InMemoryStore::new());
-    let mgr = crate::tx::index::sorted_index_manager::SortedIndexManager::new(store)
+    let mgr = crate::index::sorted_index_manager::SortedIndexManager::new(store)
         .await
         .unwrap();
 
@@ -262,11 +262,11 @@ async fn ssi_phantom_or_filter_records_table_scan_not_index_range() {
         filters: vec![
             Filter::Eq {
                 field: vec!["age".into()],
-                value: crate::tx::query::filter::FilterValue::Int(10),
+                value: crate::query::filter::FilterValue::Int(10),
             },
             Filter::Eq {
                 field: vec!["age".into()],
-                value: crate::tx::query::filter::FilterValue::Int(20),
+                value: crate::query::filter::FilterValue::Int(20),
             },
         ],
     };
@@ -282,8 +282,8 @@ async fn ssi_phantom_or_filter_records_table_scan_not_index_range() {
 /// empty (caller records TableScan).
 #[tokio::test]
 async fn ssi_phantom_and_with_one_unmapped_conjunct_falls_back_to_table_scan() {
-    use crate::tx::query::filter::eval::predicate_to_index_range;
-    use crate::tx::query::filter::Filter;
+    use crate::query::filter::eval::predicate_to_index_range;
+    use crate::query::filter::Filter;
     use shamir_storage::storage_in_memory::InMemoryStore;
     use shamir_types::core::interner::Interner;
 
@@ -292,11 +292,11 @@ async fn ssi_phantom_and_with_one_unmapped_conjunct_falls_back_to_table_scan() {
 
     let store: std::sync::Arc<dyn shamir_storage::types::Store> =
         std::sync::Arc::new(InMemoryStore::new());
-    let mgr = crate::tx::index::sorted_index_manager::SortedIndexManager::new(store)
+    let mgr = crate::index::sorted_index_manager::SortedIndexManager::new(store)
         .await
         .unwrap();
     mgr.register(
-        crate::tx::index::sorted_index_manager::SortedIndexDefinition::new(
+        crate::index::sorted_index_manager::SortedIndexDefinition::new(
             age_ind.id(),
             vec![age_ind.id()],
         ),
@@ -308,7 +308,7 @@ async fn ssi_phantom_and_with_one_unmapped_conjunct_falls_back_to_table_scan() {
         filters: vec![
             Filter::Gte {
                 field: vec!["age".into()],
-                value: crate::tx::query::filter::FilterValue::Int(18),
+                value: crate::query::filter::FilterValue::Int(18),
             },
             // Regex has no sorted index — unmapped conjunct.
             Filter::Regex {
@@ -332,9 +332,9 @@ async fn ssi_phantom_no_where_records_table_scan_for_list_stream() {
     use futures::StreamExt;
 
     let repo = make_repo();
-    repo.add_table_for_test(crate::tx::table::TableConfig::new("users"));
+    repo.add_table_for_test(crate::table::TableConfig::new("users"));
     let _tbl = repo.get_table("users").await.unwrap();
-    let table_token = crate::tx::table::table_manager::table_token_for("users");
+    let table_token = crate::table::table_manager::table_token_for("users");
 
     let (tx, _g) = repo.begin_tx(IsolationLevel::Serializable).await.unwrap();
 
@@ -371,19 +371,19 @@ async fn ssi_phantom_filter_stream_tx_records_coarse_when_filter_has_no_sorted_i
     use futures::StreamExt;
 
     let repo = make_repo();
-    repo.add_table_for_test(crate::tx::table::TableConfig::new("users"));
+    repo.add_table_for_test(crate::table::TableConfig::new("users"));
     let tbl = repo.get_table("users").await.unwrap();
-    let table_token = crate::tx::table::table_manager::table_token_for("users");
+    let table_token = crate::table::table_manager::table_token_for("users");
 
     let (tx, _g) = repo.begin_tx(IsolationLevel::Serializable).await.unwrap();
 
     let interner = tbl.interner().get().await.unwrap();
-    let filter = crate::tx::query::filter::Filter::Regex {
+    let filter = crate::query::filter::Filter::Regex {
         field: vec!["name".into()],
         pattern: "^A".into(),
     };
     let refs = shamir_types::types::common::new_map();
-    let ctx = crate::tx::query::filter::eval_context::FilterContext::new(interner, &refs);
+    let ctx = crate::query::filter::eval_context::FilterContext::new(interner, &refs);
 
     let stream = tbl
         .filter_stream_tx(Some(&tx), 100, &filter, &ctx)

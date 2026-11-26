@@ -1,7 +1,7 @@
 use shamir_wal::WalOpV2;
 
+use crate::table::{table_manager::table_token_for, TableConfig};
 use crate::tx::drainer::Drainer;
-use crate::tx::table::{table_manager::table_token_for, TableConfig};
 
 use super::support::{make_repo, seed_inflight_entry};
 

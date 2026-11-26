@@ -20,11 +20,11 @@ use shamir_types::types::record_id::RecordId;
 use shamir_types::types::value::InnerValue;
 use tokio::sync::broadcast::error::TryRecvError;
 
+use crate::repo::repo_instance::ChangefeedHandle;
+use crate::repo::{BoxRepo, RepoInstance};
+use crate::table::table_manager::table_token_for;
+use crate::table::TableConfig;
 use crate::tx::apply_replicated::follower_durability::test_seam::{self, Phase};
-use crate::tx::repo::repo_instance::ChangefeedHandle;
-use crate::tx::repo::{BoxRepo, RepoInstance};
-use crate::tx::table::table_manager::table_token_for;
-use crate::tx::table::TableConfig;
 use crate::tx::{apply_replicated_batch, ApplyOutcome, ApplyPolicy, ReplicatedEvent};
 
 fn follower_repo() -> RepoInstance {

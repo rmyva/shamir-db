@@ -2,7 +2,7 @@ use shamir_tx::IsolationLevel;
 use shamir_types::core::interner::InternerKey;
 use shamir_types::types::value::InnerValue;
 
-use crate::tx::table::TableConfig;
+use crate::table::TableConfig;
 
 use super::support::{key_id, make_repo, record_with_str, record_with_two_str};
 
@@ -337,7 +337,7 @@ async fn released_unique_keys_in_tx_walks_correctly() {
     // - "z" is live (owned by C)
 
     // Refresh the cache and borrow the released set
-    crate::tx::table::refresh_released_unique_cache(&mut tx, token);
+    crate::table::refresh_released_unique_cache(&mut tx, token);
     let released = &tx.released_unique_cache[&token].released;
 
     // Build the expected index keys for "x" and "y"

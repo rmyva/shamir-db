@@ -20,10 +20,10 @@ use shamir_tx::IsolationLevel;
 use shamir_types::types::value::InnerValue;
 use tokio::sync::Barrier;
 
-use crate::tx::repo::repo_instance::RepoInstance;
-use crate::tx::repo::repo_types::BoxRepo;
-use crate::tx::table::table_manager::table_token_for;
-use crate::tx::table::TableConfig;
+use crate::repo::repo_instance::RepoInstance;
+use crate::repo::repo_types::BoxRepo;
+use crate::table::table_manager::table_token_for;
+use crate::table::TableConfig;
 use crate::tx::CommitError;
 
 fn make_repo() -> RepoInstance {

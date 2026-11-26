@@ -14,15 +14,15 @@ use crate::commit_phases::{
 };
 use crate::tx_outcome::MaterializationState;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 use super::commit_phases::{
     FAIL_VECTOR_DELTA_TX_ID, FAIL_VECTOR_PROMOTE_ONCE_REMAINING, FAIL_VECTOR_PROMOTE_ONCE_TX_ID,
     FAIL_VECTOR_PROMOTE_TX_ID,
 };
 
-#[cfg(test)]
-pub(in crate::tx) static TEST_PRE_MATERIALIZE_REPO: std::sync::OnceLock<String> =
-    std::sync::OnceLock::new();
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub static TEST_PRE_MATERIALIZE_REPO: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// Phases 5a–6 of the commit pipeline, run OUTSIDE `commit_lock` (P2b).
 ///
@@ -72,7 +72,7 @@ pub(in crate::tx) async fn materialize(
     let mut ok = true;
 
     // The existing hook follows 5a; opt in to park before any data is visible.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     if TEST_PRE_MATERIALIZE_REPO
         .get()
         .is_some_and(|name| name == repo.name())
@@ -442,7 +442,7 @@ pub(in crate::tx) async fn post_publish_cleanup(
 /// the static is absent and the load branch is elided. Tests MUST
 /// reset to `false` between runs to avoid cross-test bleed.
 #[cfg(debug_assertions)]
-pub(crate) static FORCE_A5_UNSAFE: std::sync::atomic::AtomicBool =
+pub static FORCE_A5_UNSAFE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 /// A5 interner-hwm gate: true iff WAL truncation for an entry carrying this
@@ -519,7 +519,7 @@ pub(crate) async fn apply_vector_graph_batch(
     // this injection fires ONLY for the graph half; the delta half has its
     // own injection (`FAIL_VECTOR_DELTA_TX_ID`) and its own (Deferred)
     // failure contract.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     if _tx_id != 0 && FAIL_VECTOR_PROMOTE_TX_ID.load(std::sync::atomic::Ordering::SeqCst) == _tx_id
     {
         return Err(DbError::Internal(format!(
@@ -581,7 +581,7 @@ pub(crate) async fn apply_vector_graph_batch(
                 // in-loop retry re-runs and succeeds. Mirrors the
                 // `FAIL_PHASE_5A_TRANSIENT_REMAINING` remaining-failures
                 // pattern so only the armed tx's first attempts fail.
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-util"))]
                 if _tx_id != 0
                     && FAIL_VECTOR_PROMOTE_ONCE_TX_ID.load(std::sync::atomic::Ordering::SeqCst)
                         == _tx_id
@@ -669,7 +669,7 @@ pub(crate) async fn apply_vector_delta_batch(
     // DISTINCT from `FAIL_VECTOR_PROMOTE_TX_ID` (graph half): a delta-half
     // failure loses the durable bridge, so it MUST be reported; a
     // graph-half failure leaves the delta durable, so it stays Complete.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     if _tx_id != 0 && FAIL_VECTOR_DELTA_TX_ID.load(std::sync::atomic::Ordering::SeqCst) == _tx_id {
         return Err(DbError::Internal(format!(
             "injected Phase 5d (delta-append) failure for tx {_tx_id}"

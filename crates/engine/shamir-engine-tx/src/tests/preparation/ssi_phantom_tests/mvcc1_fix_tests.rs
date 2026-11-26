@@ -21,8 +21,8 @@ use shamir_tx::predicate_set::PredicateDep;
 use shamir_tx::IsolationLevel;
 use shamir_types::types::value::InnerValue;
 
-use crate::tx::table::table_manager::table_token_for;
-use crate::tx::table::TableConfig;
+use crate::table::table_manager::table_token_for;
+use crate::table::TableConfig;
 use crate::tx::CommitError;
 
 use super::helpers::{make_repo, test_bound_key};
@@ -117,10 +117,7 @@ async fn mvcc1_serializable_aborts_on_conflicting_non_tx_insert_index_range() {
     let idx_id = age_ind.id();
     tbl.sorted_indexes()
         .register(
-            crate::tx::index::sorted_index_manager::SortedIndexDefinition::new(
-                idx_id,
-                vec![idx_id],
-            ),
+            crate::index::sorted_index_manager::SortedIndexDefinition::new(idx_id, vec![idx_id]),
         )
         .await
         .unwrap();

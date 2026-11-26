@@ -5,9 +5,9 @@ use shamir_storage::storage_in_memory::InMemoryStore;
 use shamir_storage::types::Store;
 use shamir_tx::{IsolationLevel, StagingStore, TxContext, TxId};
 
+use crate::table::TableConfig;
 use crate::tx::commit_tx;
 use crate::tx::drainer::Drainer;
-use crate::tx::table::TableConfig;
 
 use super::support::{make_repo, rid, seed_inflight_put};
 
@@ -94,7 +94,7 @@ async fn commit_offered_entries_match_wal() {
 async fn drain_step_still_drains_correctly_with_offer_wired() {
     let repo = make_repo();
     repo.disable_background_drainer_for_test();
-    repo.add_table_for_test(crate::tx::table::TableConfig::new("t"));
+    repo.add_table_for_test(crate::table::TableConfig::new("t"));
 
     for i in 1..=2u64 {
         let mut tx = TxContext::new(TxId::new(i), 0, 0, IsolationLevel::Snapshot);

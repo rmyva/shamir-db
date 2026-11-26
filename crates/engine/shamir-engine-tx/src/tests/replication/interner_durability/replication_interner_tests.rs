@@ -10,9 +10,9 @@ use shamir_types::core::interner::InternerKey;
 use shamir_types::types::record_id::RecordId;
 use shamir_types::types::value::{InnerValue, QueryValue};
 
+use crate::repo::{BoxRepo, RepoInstance};
+use crate::table::TableConfig;
 use crate::tx::apply_replicated::ApplyRejectReason;
-use crate::tx::repo::{BoxRepo, RepoInstance};
-use crate::tx::table::TableConfig;
 use crate::tx::{apply_replicated_batch, ApplyOutcome, ApplyPolicy, ReplicatedEvent};
 
 /// Apply ONE event through the public batch entry (the receipt pipeline).

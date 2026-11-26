@@ -18,10 +18,10 @@ use shamir_types::types::record_id::RecordId;
 use shamir_types::types::value::InnerValue;
 use shamir_wal::{WalDurability, WalEntryV2, WalOpV2};
 
-use crate::tx::meta::recovery_marker::{load_last_committed, save_last_committed};
-use crate::tx::repo::{repo_token, BoxRepoFactory, RepoInstance};
-use crate::tx::table::table_manager::table_token_for;
-use crate::tx::table::TableConfig;
+use crate::meta::recovery_marker::{load_last_committed, save_last_committed};
+use crate::repo::{repo_token, BoxRepoFactory, RepoInstance};
+use crate::table::table_manager::table_token_for;
+use crate::table::TableConfig;
 
 fn rid(n: u8) -> RecordId {
     let mut a = [0u8; 16];

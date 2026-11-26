@@ -1,5 +1,5 @@
 //! Deterministic tests for synchronous publication/termination serialization.
-use crate::cold_reconcile::lifecycle::PubTermInterlock;
+use crate::tx::cold_reconcile::lifecycle::PubTermInterlock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;

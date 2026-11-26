@@ -2,7 +2,7 @@ use crate::commit::core::RepoCore;
 
 #[cfg(any(test, feature = "test-util"))]
 #[path = "checkpoint/test_seam.rs"]
-pub(crate) mod test_seam;
+pub mod test_seam;
 
 pub(crate) async fn checkpoint_before_truncate(repo: &RepoCore) -> bool {
     if repo.initialized_mem_wal() {

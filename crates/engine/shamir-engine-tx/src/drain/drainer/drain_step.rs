@@ -26,7 +26,7 @@ use crate::materialize::interner_delta_safe_to_truncate;
 /// a `--release` build pays zero cost — the static is absent and the load
 /// branch is elided.
 #[cfg(debug_assertions)]
-pub(crate) static FAIL_INDEX_BATCH_TABLE_ID: AtomicU64 = AtomicU64::new(0);
+pub static FAIL_INDEX_BATCH_TABLE_ID: AtomicU64 = AtomicU64::new(0);
 
 impl Drainer {
     /// cancel-safe: NO — multi-step state mutation per entry (replay →

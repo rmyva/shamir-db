@@ -11,9 +11,9 @@ use shamir_types::types::common::new_map_wc;
 use shamir_types::types::record_id::RecordId;
 use shamir_types::types::value::InnerValue;
 
-use crate::tx::index::sorted_index_manager::{SortedIndexDefinition, SortedIndexManager};
+use crate::index::sorted_index_manager::{SortedIndexDefinition, SortedIndexManager};
+use crate::query::filter::{Filter, FilterValue};
 use crate::tx::predicate_range::{predicate_to_index_deps, predicate_to_index_range};
-use crate::tx::query::filter::{Filter, FilterValue};
 
 async fn fixture() -> (SortedIndexManager, Arc<Interner>, u64) {
     let info_store: Arc<dyn Store> = Arc::new(InMemoryStore::new());

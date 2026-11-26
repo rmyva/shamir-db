@@ -693,19 +693,19 @@ impl RepoInstance {
             )));
         }
         super::table_store::copy_table_store(
-            &self.core.repo(),
+            self.core.repo(),
             &source_names.data,
             &destination_names.data,
         )
         .await?;
         super::table_store::copy_table_store(
-            &self.core.repo(),
+            self.core.repo(),
             &source_names.info,
             &destination_names.info,
         )
         .await?;
         super::table_store::copy_table_store(
-            &self.core.repo(),
+            self.core.repo(),
             &source_names.history,
             &destination_names.history,
         )

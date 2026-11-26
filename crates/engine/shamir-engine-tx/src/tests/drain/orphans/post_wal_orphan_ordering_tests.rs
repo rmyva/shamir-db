@@ -8,14 +8,14 @@ use shamir_tx::{IndexWriteOp, IsolationLevel, TxContext};
 use shamir_types::types::value::InnerValue;
 use tokio::sync::Notify;
 
+use crate::meta::recovery_marker::load_last_committed;
+use crate::repo::instance::repo_instance::OnlineBackupError;
+use crate::repo::{BoxRepoFactory, RepoInstance};
+use crate::table::table_manager::table_token_for;
+use crate::table::TableConfig;
 use crate::tx::commit::{
     PostWalPrePublishHook, TEST_ORPHAN_MARKER_PARK, TEST_POST_WAL_PRE_PUBLISH_HOOK,
 };
-use crate::tx::meta::recovery_marker::load_last_committed;
-use crate::tx::repo::instance::repo_instance::OnlineBackupError;
-use crate::tx::repo::{BoxRepoFactory, RepoInstance};
-use crate::tx::table::table_manager::table_token_for;
-use crate::tx::table::TableConfig;
 use crate::tx::tests::recovery::snapshot_gc::snapshot_visibility_park_tests::spawn_settled_commit;
 
 pub(crate) async fn fixture(name: &str) -> (RepoInstance, Arc<PostWalPrePublishHook>) {

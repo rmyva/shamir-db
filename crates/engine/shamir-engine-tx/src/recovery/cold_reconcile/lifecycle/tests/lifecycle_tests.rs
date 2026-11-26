@@ -1,6 +1,6 @@
 //! Deterministic tests for lifecycle admission, worker completion, and shutdown waiters.
-use crate::apply_replicated::follower_durability::receipt::resume::worker::ReceiptLease;
-use crate::cold_reconcile::lifecycle::{
+use crate::tx::apply_replicated::follower_durability::receipt::resume::worker::ReceiptLease;
+use crate::tx::cold_reconcile::lifecycle::{
     spawn_worker, InstallError, JobSubmitError, RepoUnitLifecycle, RepoWorkerLifecycle,
     ShutdownError, WorkerLease, WorkerTerminal,
 };

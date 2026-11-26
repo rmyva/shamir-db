@@ -28,7 +28,7 @@ pub(crate) fn commit_tx_with_options(
     commit_tx_with_cancel(tx, repo, wait, None)
 }
 
-pub(crate) fn commit_tx_with_cancel(
+pub fn commit_tx_with_cancel(
     tx: TxContext,
     repo: &RepoCore,
     wait: VisibilityWait,
@@ -104,7 +104,7 @@ pub(crate) async fn commit_tx_with_kind(
 
 /// cancel-safe: yes — only read-only observation and a soft brake remain;
 /// dropping an outcome's background handle detaches, never aborts its tail.
-pub(crate) async fn acknowledge_known_outcome(
+pub async fn acknowledge_known_outcome(
     result: Result<TxOutcome, TxError>,
     repo: &RepoCore,
     gate: &shamir_tx::RepoTxGate,
@@ -309,8 +309,8 @@ fn settled_sample(gate: &shamir_tx::RepoTxGate, version: u64) -> VisibilityState
 ///
 /// Takes `high` as a parameter so tests can drive the state machine with a tiny
 /// artificial gap; production callers pass [`MAX_UNDRAINED_VERSIONS`].
-#[cfg(test)]
-pub(crate) async fn apply_backpressure(repo: &RepoCore, high: u64) {
+#[cfg(any(test, feature = "test-util"))]
+pub async fn apply_backpressure(repo: &RepoCore, high: u64) {
     let Ok(gate) = repo.tx_gate().await else {
         // No gate (repo teardown / construction race) — nothing to brake on.
         return;

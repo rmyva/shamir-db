@@ -6,10 +6,10 @@ use crate::table::TableCatalog;
 use crate::apply_replicated::follower_durability::receipt::{
     ApplyOutcome, ReceiptApplyJob, ReceiptLease,
 };
-#[cfg(any(test, feature = "test-util"))]
-use crate::clean_horizon_test_seam as test_seam;
 use crate::cold_reconcile::lifecycle::ForegroundLifecycle;
 use crate::commit::rename_fence::RenameFenceView;
+#[cfg(any(test, feature = "test-util"))]
+use crate::recovery::clean_horizon::checkpoint::test_seam;
 #[cfg(any(test, feature = "test-util"))]
 use crate::test_seams::JournalPublishHook;
 #[cfg(any(test, feature = "test-util"))]
@@ -67,21 +67,33 @@ pub struct RepoCore {
     pub(crate) clean_horizon_test_state:
         Arc<std::sync::OnceLock<Arc<std::sync::Mutex<test_seam::State>>>>,
     #[cfg(any(test, feature = "test-util"))]
-    pub(crate) background_drainer_disabled: Arc<std::sync::atomic::AtomicBool>,
+    pub background_drainer_disabled: Arc<std::sync::atomic::AtomicBool>,
+}
+
+pub struct RepoCoreInit {
+    pub name: String,
+    pub repo: BoxRepo,
+    pub catalog: TableCatalog,
+    pub durability_handle: DurabilityHandle,
+    pub horizon: TxHorizon,
+    pub live_weak: Weak<()>,
+    pub rename_fence: RenameFenceView,
+    pub wal_segment_bytes: u64,
 }
 
 impl RepoCore {
     /// Construct the coordinator from the shell-owned shared-state bundles.
-    pub fn from_shell(
-        name: String,
-        repo: BoxRepo,
-        catalog: TableCatalog,
-        durability_handle: DurabilityHandle,
-        horizon: TxHorizon,
-        live_weak: Weak<()>,
-        rename_fence: RenameFenceView,
-        wal_segment_bytes: u64,
-    ) -> Self {
+    pub fn from_shell(init: RepoCoreInit) -> Self {
+        let RepoCoreInit {
+            name,
+            repo,
+            catalog,
+            durability_handle,
+            horizon,
+            live_weak,
+            rename_fence,
+            wal_segment_bytes,
+        } = init;
         Self {
             name,
             repo,
@@ -123,7 +135,7 @@ impl RepoCore {
     pub fn set_commit_visibility_wait(&self, wait: VisibilityWait) {
         self.horizon.set_commit_visibility_wait(wait);
     }
-    pub(crate) fn fk_reverse_cache(&self) -> &Arc<FkReverseCache> {
+    pub fn fk_reverse_cache(&self) -> &Arc<FkReverseCache> {
         &self.fk_reverse_cache
     }
     pub fn rename_fence(&self) -> &RenameFenceView {

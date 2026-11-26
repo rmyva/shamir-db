@@ -4,9 +4,9 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use crate::tx::repo::{BoxRepoFactory, RepoFactory, RepoInstance};
-use crate::tx::table::interner_manager::InternerManager;
-use crate::tx::table::TableConfig;
+use crate::repo::{BoxRepoFactory, RepoFactory, RepoInstance};
+use crate::table::interner_manager::InternerManager;
+use crate::table::TableConfig;
 use crate::tx::{apply_replicated_batch, ApplyOutcome, ApplyPolicy, ReplicatedEvent};
 use async_trait::async_trait;
 use bytes::Bytes;

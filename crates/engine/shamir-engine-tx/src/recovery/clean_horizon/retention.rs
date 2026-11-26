@@ -81,7 +81,7 @@ pub(crate) async fn enforce_retention(
     if delete_through > 0 {
         let wal = repo.repo_wal().await?;
         repo.flush_all_history().await?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-util"))]
         super::checkpoint::test_seam::before_delete(repo).await;
         // Pin publication may have raced any of the certification/flush
         // awaits above. Sample and admit only here, never from `last` alone.

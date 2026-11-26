@@ -47,7 +47,7 @@ use shamir_tx::{RepoTxGate, VersionGuard};
 /// One unit of receipt-pipeline work, owned by the lifecycle worker. `repo`
 /// is an owned clone: the job outlives any caller that drops its reply
 /// receiver. Payload + reply ONLY (`LifecycleJob` carries the reply).
-pub(crate) struct ReceiptApplyJob {
+pub struct ReceiptApplyJob {
     pub(crate) repo: RepoCore,
     pub(crate) info: Arc<dyn Store>,
     pub(crate) events: Vec<ReplicatedEvent>,
@@ -61,7 +61,7 @@ pub(crate) struct ReceiptApplyJob {
 /// join), and `run_receipt_pipeline` borrows through
 /// `WorkerExecutionState::lease()`.
 #[derive(Clone)]
-pub(crate) struct ReceiptLease {
+pub struct ReceiptLease {
     inner: Arc<LeaseInner>,
 }
 

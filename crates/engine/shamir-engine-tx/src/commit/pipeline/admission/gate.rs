@@ -151,7 +151,7 @@ impl CommitAdmissionGate {
     /// waiting is [`CommitAdmissionCloseOwner::wait_zero`] with the
     /// caller's cap; the old combined close-and-wait shape lives on as the
     /// cfg(test) helper in this module's tests.
-    pub(crate) fn begin_close(
+    pub fn begin_close(
         self: &Arc<Self>,
     ) -> Result<CommitAdmissionCloseOwner, CommitAdmissionError> {
         let previous = self.state.fetch_or(CLOSE_TAKEN, Ordering::AcqRel);
@@ -171,7 +171,7 @@ impl CommitAdmissionGate {
     /// (`Duration::MAX` = unbounded) the typed
     /// [`CommitAdmissionError::CloseTimeout`] is returned with no side
     /// effect — the caller's owner drop reopens.
-    pub(crate) async fn wait_zero(&self, cap: Duration) -> Result<(), CommitAdmissionError> {
+    pub async fn wait_zero(&self, cap: Duration) -> Result<(), CommitAdmissionError> {
         let deadline = if cap == Duration::MAX {
             None
         } else {

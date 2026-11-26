@@ -2,7 +2,6 @@ use crate::repo::instance::support::metrics::{EngineMetrics, EngineMetricsSnapsh
 use crate::repo::journal::backend::durability_handle::retention_gate::RetentionGate;
 use crate::repo::repo_types::BoxRepo;
 pub use crate::repo::version_provider::repo_token;
-use crate::table::fk_reverse_cache::FkReverseCache;
 // R2a-1d: the tx-layer test tree names the typed barrier failures. R2a
 // step 3a (server adapter) additionally needs to NAME `SealHold`,
 // `OnlineBackupError` (barrier failures / seal holds) and
@@ -10,10 +9,10 @@ use crate::table::fk_reverse_cache::FkReverseCache;
 // no semantics changed.
 use crate::repo::DurabilityHandle;
 use crate::table::{TableCatalog, TableConfig, TableManager};
-use crate::tx::cold_reconcile::lifecycle::ForegroundLifecycle;
+use crate::tx::commit::core::repo_core::RepoCoreInit;
 use crate::tx::commit::pipeline::admission::gate::CommitAdmissionGate;
 pub use crate::tx::drain::truncation_pin_guard::TruncationPinGuard;
-use crate::tx::CommitTailBarrier;
+use crate::tx::{CommitTailBarrier, RepoCore};
 pub use lifecycle::{OnlineBackupError, SealHold};
 use shamir_query_types::batch::VisibilityWait;
 #[cfg(test)]
@@ -32,7 +31,6 @@ pub(crate) use crate::repo::journal::backend::durability_handle::ChangefeedHandl
 // Cold opens handed off by dropped callers (`tx/commit/core/catalog_access.rs`)
 // register here; `RepoInstance::shutdown_clean` drains the owner before
 // commit quiescence.
-pub(crate) use lifecycle::ColdOpenTasks;
 
 /// Manages a single repository and its tables.
 ///
@@ -152,19 +150,19 @@ impl RepoInstance {
         let live = Arc::new(());
         let rename_fence = Arc::new(scc::HashMap::with_hasher(THasher::default()));
         let rename_fence_len = Arc::new(AtomicUsize::new(0));
-        let core = crate::tx::RepoCore::from_shell(
-            name.clone(),
+        let core = RepoCore::from_shell(RepoCoreInit {
+            name: name.clone(),
             repo,
             catalog,
             durability_handle,
             horizon,
-            Arc::downgrade(&live),
-            crate::tx::commit::rename_fence::RenameFenceView::new(
+            live_weak: Arc::downgrade(&live),
+            rename_fence: crate::tx::commit::rename_fence::RenameFenceView::new(
                 Arc::clone(&rename_fence),
                 Arc::clone(&rename_fence_len),
             ),
-            crate::repo::durability_policy::effective_wal_segment_bytes(),
-        );
+            wal_segment_bytes: crate::repo::durability_policy::effective_wal_segment_bytes(),
+        });
         Self {
             name,
             live: Some(live),

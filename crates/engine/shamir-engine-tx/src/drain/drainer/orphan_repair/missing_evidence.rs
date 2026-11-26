@@ -7,7 +7,7 @@ use shamir_tx::RepoTxGate;
 
 /// Settle registered orphans whose replay evidence disappeared from RAM and
 /// WAL. Ordinary pending versions and any retained evidence are untouched.
-pub(in crate::drain::drainer) async fn settle_missing_evidence(
+pub async fn settle_missing_evidence(
     drainer: &Drainer,
     repo: &RepoCore,
     gate: &RepoTxGate,

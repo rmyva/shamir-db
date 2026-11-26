@@ -27,17 +27,17 @@ use shamir_types::core::interner::{InternerKey, TouchInd};
 use shamir_types::types::common::new_map_wc;
 use shamir_types::types::value::InnerValue;
 
-use crate::tx::index2::backend::{IndexBackend, IndexQuery, IndexResult};
-use crate::tx::repo::repo_instance::RepoInstance;
-use crate::tx::repo::repo_types::BoxRepo;
-use crate::tx::table::TableConfig;
+use crate::index2::backend::{IndexBackend, IndexQuery, IndexResult};
+use crate::repo::repo_instance::RepoInstance;
+use crate::repo::repo_types::BoxRepo;
+use crate::table::TableConfig;
 
 fn make_repo() -> RepoInstance {
     let repo = Arc::new(InMemoryRepo::new());
     RepoInstance::new("test".into(), BoxRepo::InMemory(repo), Vec::new())
 }
 
-async fn field_id(tbl: &crate::tx::table::TableManager, name: &str) -> u64 {
+async fn field_id(tbl: &crate::table::TableManager, name: &str) -> u64 {
     let interner = tbl.interner().get().await.unwrap();
     match interner.touch_ind(name).unwrap() {
         TouchInd::Exists(k) | TouchInd::New(k) => k.id(),
@@ -88,7 +88,7 @@ async fn poll_vector_hits(
             .lookup(IndexQuery::Vector {
                 vec: query.clone(),
                 k: 10,
-                opts: crate::tx::index2::vector::SearchOpts::default(),
+                opts: crate::index2::vector::SearchOpts::default(),
             })
             .await
             .unwrap();
@@ -102,7 +102,7 @@ async fn poll_vector_hits(
         .lookup(IndexQuery::Vector {
             vec: query,
             k: 10,
-            opts: crate::tx::index2::vector::SearchOpts::default(),
+            opts: crate::index2::vector::SearchOpts::default(),
         })
         .await
         .unwrap();

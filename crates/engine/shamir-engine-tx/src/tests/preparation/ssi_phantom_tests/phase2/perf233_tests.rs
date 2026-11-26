@@ -3,7 +3,7 @@
 use shamir_tx::IsolationLevel;
 use shamir_types::types::value::InnerValue;
 
-use crate::tx::table::TableConfig;
+use crate::table::TableConfig;
 
 use super::super::helpers::make_repo;
 

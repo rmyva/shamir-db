@@ -21,5 +21,6 @@ pub mod error;
 pub mod gate;
 pub(crate) mod lease;
 
-#[cfg(test)]
-pub(crate) mod tests;
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub mod tests;

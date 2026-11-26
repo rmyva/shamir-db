@@ -39,14 +39,14 @@ use shamir_types::core::interner::{InternerKey, TouchInd};
 use shamir_types::types::common::new_map_wc;
 use shamir_types::types::value::InnerValue;
 
-use crate::tx::index2::backend::{IndexQuery, IndexResult};
-use crate::tx::index2::functional_backend::FunctionalBackend;
+use crate::index2::backend::{IndexQuery, IndexResult};
+use crate::index2::functional_backend::FunctionalBackend;
+use crate::query::filter::eval_context::FilterContext;
+use crate::repo::repo_instance::RepoInstance;
+use crate::repo::repo_types::BoxRepo;
+use crate::table::TableConfig;
+use crate::table::TableManager;
 use crate::tx::pre_commit::{RederivePreTxReadFailHook, TEST_REDERIVE_PRE_TX_READ_FAILURE};
-use crate::tx::query::filter::eval_context::FilterContext;
-use crate::tx::repo::repo_instance::RepoInstance;
-use crate::tx::repo::repo_types::BoxRepo;
-use crate::tx::table::TableConfig;
-use crate::tx::table::TableManager;
 
 fn make_repo() -> RepoInstance {
     let repo = Arc::new(InMemoryRepo::new());
@@ -208,7 +208,7 @@ async fn index2_storage_read_error_aborts_commit_no_partial_state() {
     let repo = make_repo();
     repo.add_table_for_test(TableConfig::new("t"));
     let tbl = repo.get_table("t").await.unwrap();
-    let token = crate::tx::table::table_manager::table_token_for("t");
+    let token = crate::table::table_manager::table_token_for("t");
     let name_key = key_id(&tbl, "name").await;
 
     let alice = tbl
@@ -353,7 +353,7 @@ async fn sorted_storage_read_error_aborts_commit_no_partial_state() {
     let repo = make_repo();
     repo.add_table_for_test(TableConfig::new("t"));
     let tbl = repo.get_table("t").await.unwrap();
-    let token = crate::tx::table::table_manager::table_token_for("t");
+    let token = crate::table::table_manager::table_token_for("t");
     let name_key = key_id(&tbl, "name").await;
 
     let alice = tbl

@@ -39,7 +39,15 @@ impl TruncationPin {
             state: ArcSwap::from_pointee(State::default()),
         }
     }
+}
 
+impl Default for TruncationPin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TruncationPin {
     /// Retains versions >= floor after return; cannot resurrect already deleted
     /// history. cancel-safe: yes — no publication before the final synchronous
     /// CAS/guard return, and waiting owns no registry entry.

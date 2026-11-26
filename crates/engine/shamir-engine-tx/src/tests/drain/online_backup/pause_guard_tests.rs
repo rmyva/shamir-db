@@ -10,9 +10,9 @@ use std::pin::Pin;
 use std::task::Poll;
 use std::time::Duration;
 
+use crate::repo::RepoInstance;
+use crate::table::TableConfig;
 use crate::tx::drain::drain_pause::DrainPauseBusy;
-use crate::tx::repo::RepoInstance;
-use crate::tx::table::TableConfig;
 use crate::tx::tests::drain::drainer_tests::support::{make_repo, rid, seed_inflight_put};
 
 /// Generous harness cap for tests that PROVE a parked pass RELEASES. The

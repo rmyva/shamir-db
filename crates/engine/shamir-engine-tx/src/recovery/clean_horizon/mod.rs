@@ -13,7 +13,7 @@
 //! Callers use the full `crate::clean_horizon::{...}` paths; no
 //! re-exports are kept so the surface stays greppable.
 
-pub(crate) mod checkpoint;
+pub mod checkpoint;
 pub(crate) mod recovery_floor;
 pub(crate) mod repair_pending_drain;
 pub(crate) mod retention;

@@ -7,10 +7,10 @@ use shamir_tx::{IsolationLevel, StagingStore, TxContext, TxId};
 use shamir_types::types::value::InnerValue;
 use shamir_wal::{WalDurability, WalEntryV2, WalOpV2};
 
+use crate::repo::repo_token;
+use crate::table::{table_manager::table_token_for, TableConfig};
 use crate::tx::commit_tx;
 use crate::tx::drainer::Drainer;
-use crate::tx::repo::repo_token;
-use crate::tx::table::{table_manager::table_token_for, TableConfig};
 
 use super::support::{make_repo, rid, seed_inflight_put};
 
@@ -337,7 +337,7 @@ async fn drain_step_empty_window_no_recover_call() {
 async fn drain_step_recovers_dropped_entries_via_gap_reseed() {
     let repo = make_repo();
     repo.disable_background_drainer_for_test();
-    repo.add_table_for_test(crate::tx::table::TableConfig::new("t"));
+    repo.add_table_for_test(crate::table::TableConfig::new("t"));
 
     // Set a very low watermark so most offers are dropped.
     let drainer = repo.drainer();

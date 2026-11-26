@@ -49,12 +49,12 @@ impl RepoInstance {
         let to = pair.to.clone();
         let mut pair = Some(pair);
         let updated = self
-            .rename_fence()
+            .rename_fence
             .update_sync(&from, |_, entry| match entry {
                 RenameFenceEntry::InFlight {
                     from: old_from,
                     to: old_to,
-                } if old_from == &from && old_to == &to => match pair.take() {
+                } if *old_from == from && *old_to == to => match pair.take() {
                     Some(retained) => {
                         *entry = RenameFenceEntry::Source(Box::new(retained));
                         true

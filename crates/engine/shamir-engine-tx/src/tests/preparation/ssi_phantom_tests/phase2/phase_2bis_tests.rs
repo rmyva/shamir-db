@@ -13,8 +13,8 @@ use shamir_tx::repo_tx_gate::{CommitWriteRecord, TableWriteFootprint};
 use shamir_tx::IsolationLevel;
 use shamir_types::types::value::InnerValue;
 
-use crate::tx::table::table_manager::table_token_for;
-use crate::tx::table::TableConfig;
+use crate::table::table_manager::table_token_for;
+use crate::table::TableConfig;
 use crate::tx::CommitError;
 
 use super::super::helpers::{make_repo, test_bound_key, test_index_id, test_posting_key};

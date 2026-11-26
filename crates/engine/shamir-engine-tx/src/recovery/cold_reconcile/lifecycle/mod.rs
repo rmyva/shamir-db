@@ -11,14 +11,16 @@ pub(crate) mod owner;
 // Inactive worker foundation; retained for tests and future receipt-pipeline wiring.
 pub(crate) mod worker;
 
-#[cfg(test)]
-pub(crate) use interlock::PubTermInterlock;
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub use interlock::PubTermInterlock;
 pub(crate) use interlock::PublicationClosed;
 // Receipt-pipeline production surface (PR6b-2c): re-exported unconditionally;
 // ShutdownError is only named in tests, the rest are production-wired.
 pub(crate) use job::JobSubmitError;
-#[cfg(test)]
-pub(crate) use owner::RepoUnitLifecycle;
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub use owner::RepoUnitLifecycle;
 #[cfg_attr(not(test), allow(unused_imports))]
 // ShutdownError is only named in tests; the other owner types are production-wired.
 pub use owner::{
@@ -27,5 +29,6 @@ pub use owner::{
 pub(crate) use worker::LifecycleStatus;
 pub(crate) use worker::WorkerExecutionState;
 pub(crate) use worker::WorkerLease;
-#[cfg(test)]
-pub(crate) use worker::{spawn_worker, FailClosedResource};
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub use worker::{spawn_worker, FailClosedResource};

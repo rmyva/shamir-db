@@ -1,9 +1,9 @@
 #[cfg(feature = "fjall")]
 use super::support::reopen_disk_repo;
 #[cfg(feature = "fjall")]
-use crate::tx::repo::{BoxRepoFactory, RepoInstance};
+use crate::repo::{BoxRepoFactory, RepoInstance};
 #[cfg(feature = "fjall")]
-use crate::tx::table::TableConfig;
+use crate::table::TableConfig;
 #[cfg(feature = "fjall")]
 use shamir_query_builder::write::{self, doc};
 #[cfg(feature = "fjall")]

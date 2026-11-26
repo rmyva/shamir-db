@@ -11,7 +11,7 @@ use shamir_storage::types::Repo as _;
 use std::sync::Arc;
 
 #[cfg(all(test, feature = "fjall"))]
-use crate::tx::clean_horizon::tests::test_journal_seam;
+use crate::tx::tests::clean_horizon_tests::test_journal_seam;
 
 impl RepoInstance {
     #[cfg(all(test, feature = "fjall"))]

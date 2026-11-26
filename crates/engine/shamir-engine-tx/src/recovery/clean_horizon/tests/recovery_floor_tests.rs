@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::clean_horizon::recovery_floor::reserve_recovery_floor;
 use crate::meta::recovery_marker::{load_last_committed, save_last_committed};
 use crate::repo::{BoxRepoFactory, DurabilityPolicy, RepoInstance};
 use crate::table::TableConfig;
+use crate::tx::clean_horizon::recovery_floor::reserve_recovery_floor;
 
 async fn open_disk(name: &str, path: PathBuf, tables: Vec<TableConfig>) -> RepoInstance {
     RepoInstance::from_factory_with_test_segment_bytes(

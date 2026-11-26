@@ -1,6 +1,6 @@
 mod algorithm;
 mod classification;
-mod follower;
+pub mod follower;
 pub mod lifecycle;
 mod receipt_recovery;
 

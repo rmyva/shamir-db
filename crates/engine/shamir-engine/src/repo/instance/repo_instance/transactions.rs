@@ -260,7 +260,7 @@ impl RepoInstance {
     /// changing one clone leaves existing clones (including registered handles)
     /// unchanged even though they share the same gate and storage.
     /// Value-only implicit commits remain Strict until VIS-4 provides receipts.
-    pub fn with_commit_visibility_wait(mut self, wait: VisibilityWait) -> Self {
+    pub fn with_commit_visibility_wait(self, wait: VisibilityWait) -> Self {
         self.core.set_commit_visibility_wait(wait);
         self
     }

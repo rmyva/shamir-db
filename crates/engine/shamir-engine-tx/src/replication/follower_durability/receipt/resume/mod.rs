@@ -4,6 +4,6 @@
 pub(crate) mod activation;
 pub(crate) mod identity;
 pub(crate) mod lookup;
-pub(crate) mod worker;
+pub mod worker;
 
 pub(crate) use lookup::{lookup, match_offered, tail_events};

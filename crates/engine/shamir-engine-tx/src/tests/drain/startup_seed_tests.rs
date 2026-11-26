@@ -3,13 +3,13 @@ use std::sync::Arc;
 use shamir_storage::storage_in_memory::InMemoryRepo;
 
 use super::*;
-use crate::tx::repo::RepoInstance;
+use crate::repo::RepoInstance;
 
 #[tokio::test]
 async fn startup_seed_waits_and_filters_delayed_snapshot() {
     let repo = RepoInstance::new(
         "seed-test".into(),
-        crate::tx::repo::BoxRepo::InMemory(Arc::new(InMemoryRepo::new())),
+        crate::repo::BoxRepo::InMemory(Arc::new(InMemoryRepo::new())),
         Vec::new(),
     );
     let gate = repo.tx_gate().await.unwrap();

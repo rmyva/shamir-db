@@ -17,13 +17,13 @@ use shamir_types::codecs::interned::codec::query_value_to_inner;
 use shamir_types::types::value::InnerValue;
 use tokio::sync::{broadcast::error::TryRecvError, Notify};
 
+use crate::repo::{BoxRepoFactory, RepoInstance};
+use crate::table::table_manager::TableManager;
+use crate::table::TableConfig;
 use crate::tx::commit::{
     AsyncIndexTailHook, PostWalPrePublishHook, TEST_ASYNC_INDEX_TAIL_HOOK,
     TEST_POST_WAL_PRE_PUBLISH_HOOK,
 };
-use crate::tx::repo::{BoxRepoFactory, RepoInstance};
-use crate::tx::table::table_manager::TableManager;
-use crate::tx::table::TableConfig;
 use crate::tx::{CommitError, MaterializationState};
 
 const BUDGET: Duration = Duration::from_secs(45);

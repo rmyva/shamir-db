@@ -9,10 +9,10 @@ use shamir_tx::{IndexWriteOp, IsolationLevel};
 use shamir_types::types::value::InnerValue;
 use tokio::sync::{oneshot, Notify};
 
+use crate::repo::{BoxRepoFactory, RepoInstance};
+use crate::table::table_manager::table_token_for;
+use crate::table::TableConfig;
 use crate::tx::commit::{PostWalPrePublishHook, TEST_POST_WAL_PRE_PUBLISH_HOOK};
-use crate::tx::repo::{BoxRepoFactory, RepoInstance};
-use crate::tx::table::table_manager::table_token_for;
-use crate::tx::table::TableConfig;
 use crate::tx::tests::recovery::snapshot_gc::snapshot_visibility_park_tests::spawn_settled_commit;
 
 /// The embedded store releases its directory lock when its background workers

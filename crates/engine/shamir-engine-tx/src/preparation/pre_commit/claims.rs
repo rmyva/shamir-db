@@ -31,12 +31,12 @@ use crate::commit::TxError;
 /// own concurrent DDL-side writer, if it also commits) passes straight
 /// through. Shape mirrors `commit.rs::PostValidatePrePublishHook` (F-46)
 /// and `table_manager_crud.rs::PostBarrierPreWriteHook` (F-48) exactly.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 #[derive(Debug)]
-pub(crate) struct PostPrelockPreMaterializeHook {
-    pub(crate) reached: std::sync::atomic::AtomicUsize,
-    pub(crate) resume: tokio::sync::Notify,
-    pub(crate) armed: std::sync::atomic::AtomicBool,
+pub struct PostPrelockPreMaterializeHook {
+    pub reached: std::sync::atomic::AtomicUsize,
+    pub resume: tokio::sync::Notify,
+    pub armed: std::sync::atomic::AtomicBool,
 }
 
 /// Test-only pause seam. Fires in `pre_commit_prelock` immediately AFTER
@@ -50,8 +50,8 @@ pub(crate) struct PostPrelockPreMaterializeHook {
 /// across test files. Uninstalled (`None`, the default for every other
 /// test) this is a single `OnceLock::get()` read with no lock, no
 /// allocation, no await point taken.
-#[cfg(test)]
-pub(crate) static TEST_POST_PRELOCK_PRE_MATERIALIZE_HOOK: std::sync::OnceLock<
+#[cfg(any(test, feature = "test-util"))]
+pub static TEST_POST_PRELOCK_PRE_MATERIALIZE_HOOK: std::sync::OnceLock<
     std::sync::Arc<PostPrelockPreMaterializeHook>,
 > = std::sync::OnceLock::new();
 
@@ -91,10 +91,10 @@ pub(super) async fn fire_post_prelock_pre_materialize_test_hook() {
 /// (`Vec<(u64, String, u64)>`) is UNCHANGED; no version bump. The constant
 /// `0` is chosen so a future reader can distinguish "repo scope" from any
 /// nonzero per-table token if a hybrid scheme ever returns.
-pub(crate) const REPO_INTERNER_SCOPE: u64 = 0;
+pub const REPO_INTERNER_SCOPE: u64 = 0;
 
 /// Return the expected scope if the supplied WAL interner scope is not repository-wide.
-pub(crate) fn unexpected_repo_interner_scope(scope: u64) -> Option<u64> {
+pub fn unexpected_repo_interner_scope(scope: u64) -> Option<u64> {
     (scope != REPO_INTERNER_SCOPE).then_some(REPO_INTERNER_SCOPE)
 }
 

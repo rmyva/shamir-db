@@ -30,12 +30,12 @@ use tokio::sync::{Mutex, OwnedMutexGuard};
 /// concurrent barrier). Carries no side effect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("the drain pause is already held (a seal hold or concurrent barrier owns it)")]
-pub(crate) struct DrainPauseBusy;
+pub struct DrainPauseBusy;
 
 /// One per drainer: the SAME `Arc<Mutex<()>>` the drain paths lock, plus
 /// the long-holder busy flag. `Drainer` owns exactly one; see
 /// [`crate::drainer::Drainer::pause`].
-pub(crate) struct DrainPauseState {
+pub struct DrainPauseState {
     lock: Arc<Mutex<()>>,
     held: Arc<AtomicBool>,
 }
@@ -61,7 +61,7 @@ impl DrainPauseState {
     ///
     /// cancel-safe: yes — nothing is mutated before the guard exists; a
     /// cancelled wait clears the tentative busy flag (`PauseAttempt`).
-    pub(crate) async fn acquire(&self) -> Result<DrainPauseGuard, DrainPauseBusy> {
+    pub async fn acquire(&self) -> Result<DrainPauseGuard, DrainPauseBusy> {
         if self.held.swap(true, Ordering::AcqRel) {
             return Err(DrainPauseBusy);
         }
@@ -116,7 +116,7 @@ impl Drop for PauseAttempt {
 /// pause exactly once: the lock guard is released and the busy flag is
 /// cleared after it.
 #[must_use = "dropping the guard releases the drain pause"]
-pub(crate) struct DrainPauseGuard {
+pub struct DrainPauseGuard {
     flag: Arc<AtomicBool>,
     /// Never read — held for its Drop (the mutex release), which runs after
     /// the guard's own Drop body clears the busy flag (field order).

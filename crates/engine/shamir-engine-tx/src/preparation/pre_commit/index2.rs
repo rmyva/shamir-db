@@ -23,24 +23,24 @@ use crate::index2::kind::IndexKind;
 //
 // One-shot per arm: once an armed `(table_token, id)` fires it is consumed,
 // so a retry of the SAME id reads normally.
-#[cfg(test)]
-pub(crate) static TEST_REDERIVE_PRE_TX_READ_FAILURE: std::sync::OnceLock<
+#[cfg(any(test, feature = "test-util"))]
+pub static TEST_REDERIVE_PRE_TX_READ_FAILURE: std::sync::OnceLock<
     std::sync::Arc<RederivePreTxReadFailHook>,
 > = std::sync::OnceLock::new();
 
 /// Test-only one-shot failure injector for [`read_pre_tx_bytes`]. See
 /// [`TEST_REDERIVE_PRE_TX_READ_FAILURE`]'s doc for the rationale.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 #[derive(Debug, Default)]
-pub(crate) struct RederivePreTxReadFailHook {
-    inner: std::sync::Mutex<Vec<(u64, RecordId)>>,
+pub struct RederivePreTxReadFailHook {
+    pub inner: std::sync::Mutex<Vec<(u64, RecordId)>>,
 }
 
 #[cfg(test)]
 impl RederivePreTxReadFailHook {
     /// Arm a one-shot injected `Err` for the next
     /// `read_pre_tx_bytes(table_token, id)`.
-    pub(crate) fn arm(&self, table_token: u64, id: RecordId) {
+    pub fn arm(&self, table_token: u64, id: RecordId) {
         self.inner.lock().unwrap().push((table_token, id));
     }
 

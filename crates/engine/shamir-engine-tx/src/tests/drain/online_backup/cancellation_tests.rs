@@ -48,9 +48,9 @@ use shamir_test_diag::FlakeGuard;
 use shamir_tx::IsolationLevel;
 use shamir_types::types::value::InnerValue;
 
-use crate::tx::repo::instance::repo_instance::OnlineBackupError;
-use crate::tx::repo::RepoInstance;
-use crate::tx::table::TableConfig;
+use crate::repo::instance::repo_instance::OnlineBackupError;
+use crate::repo::RepoInstance;
+use crate::table::TableConfig;
 use crate::tx::tests::drain::drainer_tests::support::make_repo;
 
 /// Harness cap around each bounded await / blocking recv; the

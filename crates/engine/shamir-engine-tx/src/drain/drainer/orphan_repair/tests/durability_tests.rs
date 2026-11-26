@@ -8,12 +8,12 @@ use shamir_storage::types::Repo as _;
 use shamir_tx::IsolationLevel;
 use shamir_types::types::value::InnerValue;
 
-use crate::clean_horizon::checkpoint::test_seam;
 use crate::meta::recovery_marker::load_last_committed;
 use crate::repo::{BoxRepoFactory, DurabilityPolicy, RepoFactory, RepoInstance};
 use crate::table::TableConfig;
-use crate::tests::drain::orphans::post_wal_orphan_ordering_tests::{fixture, panic_post_wal};
-use crate::tests::recovery::snapshot_gc::snapshot_visibility_park_tests::spawn_settled_commit;
+use crate::tx::clean_horizon::checkpoint::test_seam;
+use crate::tx::tests::drain::orphans::post_wal_orphan_ordering_tests::{fixture, panic_post_wal};
+use crate::tx::tests::recovery::snapshot_gc::snapshot_visibility_park_tests::spawn_settled_commit;
 
 const CHILD: &str = "SHAMIR_ORPHAN_REPAIR_DURABILITY_CHILD";
 const PATH: &str = "SHAMIR_ORPHAN_REPAIR_DURABILITY_PATH";

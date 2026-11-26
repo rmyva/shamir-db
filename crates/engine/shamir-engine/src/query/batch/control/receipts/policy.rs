@@ -1,5 +1,7 @@
 use std::borrow::Cow;
 
+use crate::query::batch::BatchTxPort;
+
 use shamir_collections::{TFxMap, TFxSet};
 
 use crate::query::batch::{BatchError, BatchOp, BatchRequest, BatchResolver, QueryEntry};

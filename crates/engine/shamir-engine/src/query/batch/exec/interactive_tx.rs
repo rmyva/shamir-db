@@ -1,10 +1,12 @@
-use crate::query::batch::authorized::Authorized;
+use std::time::Instant;
+
 use crate::query::batch::batch_execute::{execute_plan_tx, filter_results};
 use crate::query::batch::batch_validate::{
     validate_abort_on_skip_scope, validate_executable_guards, validate_tables,
 };
 use crate::query::batch::exec_scope::ExecScope;
 use crate::query::batch::executor_traits::{AdminExecutor, BatchResolver, FunctionInvoker};
+use crate::query::batch::Authorized;
 #[cfg(test)]
 use crate::query::batch::BatchRequest;
 use crate::query::batch::BatchTxPort;

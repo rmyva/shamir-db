@@ -5,10 +5,10 @@ use shamir_tx::{CommitVisibility, IsolationLevel};
 use shamir_types::types::value::InnerValue;
 use shamir_wal::{WalAppendError, WalEntryV2, WalOpV2, WalTicket, WalTicketState};
 
+use crate::repo::{repo_token, BoxRepo, RepoInstance};
+use crate::table::{table_manager::table_token_for, TableConfig};
 use crate::tx::commit::{wal_completion, TxError, TEST_SYNCED_WAL_REPO};
 use crate::tx::drainer::Drainer;
-use crate::tx::repo::{repo_token, BoxRepo, RepoInstance};
-use crate::tx::table::{table_manager::table_token_for, TableConfig};
 
 use super::support::{make_repo, rid, seed_inflight_put, transfer_pending};
 

@@ -4,15 +4,15 @@ use shamir_query_types::{ReplicationServe, RetentionOverflow, WalCommitTier};
 use shamir_storage::error::DbResult;
 
 #[cfg(feature = "fjall")]
-use crate::clean_horizon::checkpoint::test_seam;
-#[cfg(feature = "fjall")]
-use crate::clean_horizon::retention::{enforce_retention, RetentionAction};
-#[cfg(feature = "fjall")]
-use crate::drainer::Drainer;
-#[cfg(feature = "fjall")]
 use crate::repo::{BoxRepoFactory, DurabilityPolicy, RepoInstance};
 #[cfg(feature = "fjall")]
 use crate::table::TableConfig;
+#[cfg(feature = "fjall")]
+use crate::tx::clean_horizon::checkpoint::test_seam;
+#[cfg(feature = "fjall")]
+use crate::tx::clean_horizon::retention::{enforce_retention, RetentionAction};
+#[cfg(feature = "fjall")]
+use crate::tx::drainer::Drainer;
 #[cfg(feature = "fjall")]
 use futures::{pin_mut, StreamExt};
 
@@ -61,7 +61,7 @@ async fn seed(repo: &RepoInstance, count: usize) {
     let table = repo.get_table("t").await.unwrap();
     for index in 0..count {
         let (mut tx, _guard) = repo
-            .begin_tx(crate::IsolationLevel::Snapshot)
+            .begin_tx(crate::tx::IsolationLevel::Snapshot)
             .await
             .unwrap();
         table
@@ -134,7 +134,9 @@ async fn declare_gap_persists_floor_and_unlinks_safe_retained_wal() {
         "all 80 commits must remain in retained WAL"
     );
     for entry in entries {
-        crate::replay_v2_entry(&entry, &repo.core).await.unwrap();
+        crate::tx::replay_v2_entry(&entry, &repo.core)
+            .await
+            .unwrap();
     }
     repo.repo_interner().await.unwrap().persist().await.unwrap();
     let gate = repo.tx_gate().await.unwrap();
@@ -238,7 +240,7 @@ async fn refused_admission_does_not_publish_and_drain_allows_retry() {
     let wal = repo.repo_wal().await.unwrap();
     let before_entries = wal.recover().await.unwrap().len();
     let (mut rejected, rejected_guard) = repo
-        .begin_tx(crate::IsolationLevel::Snapshot)
+        .begin_tx(crate::tx::IsolationLevel::Snapshot)
         .await
         .unwrap();
     table
@@ -250,7 +252,7 @@ async fn refused_admission_does_not_publish_and_drain_allows_retry() {
         .unwrap();
     assert!(matches!(
         repo.commit_tx(rejected).await,
-        Err(crate::CommitError::WalRetentionExceeded)
+        Err(crate::tx::CommitError::WalRetentionExceeded)
     ));
     drop(rejected_guard);
     assert_eq!(repo.current_commit_version().await.unwrap(), current);
@@ -260,7 +262,7 @@ async fn refused_admission_does_not_publish_and_drain_allows_retry() {
     Drainer::new().drain_all(&repo.core).await.unwrap();
     assert!(!repo.wal_retention_refuse_writes());
     let (mut accepted, _guard) = repo
-        .begin_tx(crate::IsolationLevel::Snapshot)
+        .begin_tx(crate::tx::IsolationLevel::Snapshot)
         .await
         .unwrap();
     table
@@ -298,7 +300,7 @@ async fn hybrid_wal_bypasses_retention_gate_and_checkpoint() {
     );
     assert!(!repo.wal_retention_refuse_writes());
     let _ = test_seam::take_order(&repo.core);
-    assert!(crate::clean_horizon::checkpoint::checkpoint_before_truncate(&repo.core).await);
+    assert!(crate::tx::clean_horizon::checkpoint::checkpoint_before_truncate(&repo.core).await);
     assert_eq!(feed.clean_horizon(), initial_j);
     assert!(test_seam::take_order(&repo.core).is_empty());
 }

@@ -1,7 +1,7 @@
 use super::support::make_repo;
+use crate::table::table_manager::table_token_for;
+use crate::table::TableConfig;
 use crate::tx::recovery::FAIL_HISTORY_SEED_TX_ID;
-use crate::tx::table::table_manager::table_token_for;
-use crate::tx::table::TableConfig;
 use shamir_types::types::record_id::RecordId;
 use shamir_types::types::value::InnerValue;
 use shamir_wal::{WalDurability, WalEntryV2, WalOpV2};

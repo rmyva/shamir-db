@@ -72,16 +72,16 @@ use shamir_types::core::interner::{InternerKey, TouchInd};
 use shamir_types::types::common::new_map_wc;
 use shamir_types::types::value::{InnerValue, QueryValue};
 
+use crate::query::filter::eval_context::FilterContext;
+use crate::query::read::QueryResult;
+use crate::repo::repo_instance::RepoInstance;
+use crate::repo::repo_types::BoxRepo;
+use crate::table::TableConfig;
+use crate::table::TableManager;
+use crate::table::{SeekLoopPreIterHook, TEST_SEEK_LOOP_PRE_ITER_HOOK};
 use crate::tx::commit_phases::{
     IndexBatchBumpApplyHook, TEST_INDEX_BATCH_BUMP_APPLY_HOOK, TEST_LEGACY_APPLY_THEN_BUMP_ORDER,
 };
-use crate::tx::query::filter::eval_context::FilterContext;
-use crate::tx::query::read::QueryResult;
-use crate::tx::repo::repo_instance::RepoInstance;
-use crate::tx::repo::repo_types::BoxRepo;
-use crate::tx::table::TableConfig;
-use crate::tx::table::TableManager;
-use crate::tx::table::{SeekLoopPreIterHook, TEST_SEEK_LOOP_PRE_ITER_HOOK};
 
 /// Serialises the arm → commit → reset window of every test in this module.
 /// `TEST_LEGACY_APPLY_THEN_BUMP_ORDER`, `TEST_INDEX_BATCH_BUMP_APPLY_HOOK`

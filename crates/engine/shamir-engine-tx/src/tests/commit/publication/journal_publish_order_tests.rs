@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -8,7 +8,7 @@ use shamir_storage::types::Repo;
 use shamir_tx::{ChangelogEvent, CommitVisibility, IsolationLevel, JournalRead};
 use shamir_types::access::Actor;
 use shamir_types::types::value::InnerValue;
-use tokio::sync::{Barrier, Notify};
+use tokio::sync::Barrier;
 
 use crate::repo::instance::repo_instance::ChangefeedHandle;
 use crate::repo::repo_types::BoxRepo;

@@ -1,6 +1,6 @@
 //! F-48b (#867, P0) — tx-commit-path writer-drain barrier proof.
 //!
-//! Sibling of `crate::tx::table::tests::schema_activation_barrier_tests.rs`'s
+//! Sibling of `crate::table::tests::schema_activation_barrier_tests.rs`'s
 //! F-48 drain test (`f48_drain_catches_writer_that_read_false_before_flag_went_up`).
 //! That test proved the drain closes the check-then-act race for the NON-tx
 //! `TableManager::insert` path. This test proves the SAME drain closes the
@@ -49,13 +49,13 @@ use shamir_types::types::common::new_map_wc;
 use shamir_types::types::value::InnerValue;
 use tokio::sync::Notify;
 
+use crate::repo::repo_instance::RepoInstance;
+use crate::repo::repo_types::BoxRepo;
+use crate::table::TableConfig;
+use crate::table::TableManager;
 use crate::tx::pre_commit::{
     PostPrelockPreMaterializeHook, TEST_POST_PRELOCK_PRE_MATERIALIZE_HOOK,
 };
-use crate::tx::repo::repo_instance::RepoInstance;
-use crate::tx::repo::repo_types::BoxRepo;
-use crate::tx::table::TableConfig;
-use crate::tx::table::TableManager;
 
 fn make_repo() -> RepoInstance {
     let repo = Arc::new(InMemoryRepo::new());

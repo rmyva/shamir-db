@@ -4,9 +4,9 @@ use shamir_storage::storage_in_memory::InMemoryRepo;
 use shamir_tx::IsolationLevel;
 use shamir_types::types::value::InnerValue;
 
-use crate::tx::repo::repo_instance::RepoInstance;
-use crate::tx::repo::repo_types::BoxRepo;
-use crate::tx::table::TableConfig;
+use crate::repo::repo_instance::RepoInstance;
+use crate::repo::repo_types::BoxRepo;
+use crate::table::TableConfig;
 
 fn make_repo() -> RepoInstance {
     let repo = Arc::new(InMemoryRepo::new());
@@ -203,11 +203,11 @@ async fn ssi_conflict_detected_on_concurrent_tx_writes() {
     // Two SSI transactions read the same record; first commits;
     // second must get SsiConflict because version_cache was bumped.
     // This proves Stage 5.1 closed Known Production Limitation #1.
-    use crate::tx::table::table_manager::table_token_for;
+    use crate::table::table_manager::table_token_for;
     use crate::tx::CommitError;
 
     let repo = make_repo();
-    repo.add_table_for_test(crate::tx::table::TableConfig::new("t"));
+    repo.add_table_for_test(crate::table::TableConfig::new("t"));
     let tbl = repo.get_table("t").await.unwrap();
 
     // Pre-populate a record outside any transaction.
@@ -297,7 +297,7 @@ async fn si_lost_update_last_writer_wins() {
 /// Scenario #7: Snapshot holds stable view while concurrent tx commits happen.
 #[tokio::test]
 async fn snapshot_stable_during_concurrent_tx_commits() {
-    use crate::tx::table::table_manager::table_token_for;
+    use crate::table::table_manager::table_token_for;
 
     let repo = make_repo();
     repo.add_table_for_test(TableConfig::new("t"));
@@ -412,7 +412,7 @@ async fn si_counter_race_lost_updates() {
 /// The new record ("phantom") must NOT be visible at tx1's snapshot version.
 #[tokio::test]
 async fn snapshot_prevents_phantom_reads() {
-    use crate::tx::table::table_manager::table_token_for;
+    use crate::table::table_manager::table_token_for;
 
     let repo = make_repo();
     repo.add_table_for_test(TableConfig::new("t"));
@@ -470,11 +470,11 @@ async fn snapshot_prevents_phantom_reads() {
 /// because both read the same pair of records that the other modified.
 #[tokio::test]
 async fn ssi_write_skew_one_aborts() {
-    use crate::tx::table::table_manager::table_token_for;
+    use crate::table::table_manager::table_token_for;
     use crate::tx::CommitError;
 
     let repo = make_repo();
-    repo.add_table_for_test(crate::tx::table::TableConfig::new("doctors"));
+    repo.add_table_for_test(crate::table::TableConfig::new("doctors"));
     let tbl = repo.get_table("doctors").await.unwrap();
 
     // Insert two on-call doctors.
@@ -530,7 +530,7 @@ async fn ssi_write_skew_one_aborts() {
 #[tokio::test]
 async fn counter_advances_after_tx_commit() {
     let repo = make_repo();
-    repo.add_table_for_test(crate::tx::table::TableConfig::new("t"));
+    repo.add_table_for_test(crate::table::TableConfig::new("t"));
     let tbl = repo.get_table("t").await.unwrap();
 
     let (mut tx, _g) = repo.begin_tx(IsolationLevel::Snapshot).await.unwrap();
@@ -564,7 +564,7 @@ async fn version_monotonic_across_restart() {
         BoxRepo::InMemory(Arc::clone(&underlying)),
         Vec::new(),
     );
-    repo1.add_table_for_test(crate::tx::table::TableConfig::new("t"));
+    repo1.add_table_for_test(crate::table::TableConfig::new("t"));
     let tbl = repo1.get_table("t").await.unwrap();
     let mut last_v_before = 0u64;
     for i in 0..5i64 {
@@ -583,7 +583,7 @@ async fn version_monotonic_across_restart() {
 
     // Phase 2: fresh repo over same underlying.
     let repo2 = RepoInstance::new("test".into(), BoxRepo::InMemory(underlying), Vec::new());
-    repo2.add_table_for_test(crate::tx::table::TableConfig::new("t"));
+    repo2.add_table_for_test(crate::table::TableConfig::new("t"));
     let tbl = repo2.get_table("t").await.unwrap();
     let (mut tx, _g) = repo2.begin_tx(IsolationLevel::Snapshot).await.unwrap();
     tbl.insert_tx(&InnerValue::Int(42), Some(&mut tx))
@@ -606,10 +606,10 @@ async fn concurrent_ssi_storm_exactly_one_wins() {
     use tokio::sync::Barrier;
 
     let repo = make_repo();
-    repo.add_table_for_test(crate::tx::table::TableConfig::new("t"));
+    repo.add_table_for_test(crate::table::TableConfig::new("t"));
     let tbl = repo.get_table("t").await.unwrap();
     let rid = tbl.insert(&InnerValue::Int(0)).await.unwrap();
-    let token = crate::tx::table::table_manager::table_token_for("t");
+    let token = crate::table::table_manager::table_token_for("t");
 
     let n = 20;
     let barrier = Arc::new(Barrier::new(n));
@@ -684,10 +684,10 @@ async fn repro24_concurrent_ssi_storm_multithread() {
 
     for round in 0..ROUNDS {
         let repo = make_repo();
-        repo.add_table_for_test(crate::tx::table::TableConfig::new("t"));
+        repo.add_table_for_test(crate::table::TableConfig::new("t"));
         let tbl = repo.get_table("t").await.unwrap();
         let rid = tbl.insert(&InnerValue::Int(0)).await.unwrap();
-        let token = crate::tx::table::table_manager::table_token_for("t");
+        let token = crate::table::table_manager::table_token_for("t");
 
         let n = 20;
         let barrier = Arc::new(Barrier::new(n));
@@ -769,7 +769,7 @@ async fn repro24_concurrent_ssi_storm_multithread() {
 /// test invocation exercises many scheduling outcomes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn crit4_write_skew_lockfree_disjoint_writesets() {
-    use crate::tx::table::table_manager::table_token_for;
+    use crate::table::table_manager::table_token_for;
     use tokio::sync::Barrier;
 
     const ROUNDS: usize = 15;
@@ -778,7 +778,7 @@ async fn crit4_write_skew_lockfree_disjoint_writesets() {
 
     for round in 0..ROUNDS {
         let repo = make_repo();
-        repo.add_table_for_test(crate::tx::table::TableConfig::new("kv"));
+        repo.add_table_for_test(crate::table::TableConfig::new("kv"));
         let tbl = repo.get_table("kv").await.unwrap();
 
         // Seed two records x and y at the same version.

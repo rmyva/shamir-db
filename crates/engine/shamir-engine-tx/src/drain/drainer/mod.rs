@@ -81,9 +81,10 @@ use shamir_wal::WalEntryV2;
 
 mod state;
 
-mod orphan_repair;
+pub mod orphan_repair;
 
 pub use state::Drainer;
 
-#[cfg(all(test, debug_assertions))]
-pub(crate) use state::drain_step::FAIL_INDEX_BATCH_TABLE_ID;
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub use state::drain_step::FAIL_INDEX_BATCH_TABLE_ID;

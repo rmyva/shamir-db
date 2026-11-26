@@ -9,6 +9,6 @@ mod retained_freeze;
 mod view;
 
 pub use fence_entry::RenameFenceEntry;
-pub(crate) use in_doubt::RenameInDoubt;
-pub(crate) use retained_freeze::RetainedFreeze;
+pub use in_doubt::RenameInDoubt;
+pub use retained_freeze::RetainedFreeze;
 pub use view::RenameFenceView;

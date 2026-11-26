@@ -8,8 +8,8 @@ use shamir_tx::repo_tx_gate::{CommitWriteRecord, TableWriteFootprint};
 use shamir_tx::IsolationLevel;
 use shamir_types::types::value::InnerValue;
 
-use crate::tx::table::table_manager::table_token_for;
-use crate::tx::table::TableConfig;
+use crate::table::table_manager::table_token_for;
+use crate::table::TableConfig;
 use crate::tx::CommitError;
 
 use super::helpers::{make_repo, test_posting_key};
@@ -28,7 +28,7 @@ async fn ssi_phantom_indexed_range_aborts_second_commit() {
     let age_ind = interner.touch_ind("age").unwrap().into_key();
     tbl.sorted_indexes()
         .register(
-            crate::tx::index::sorted_index_manager::SortedIndexDefinition::new(
+            crate::index::sorted_index_manager::SortedIndexDefinition::new(
                 age_ind.id(),
                 vec![age_ind.id()],
             ),
@@ -58,13 +58,13 @@ async fn ssi_phantom_indexed_range_aborts_second_commit() {
     gate.publish_committed_max(tx1_commit_v);
 
     // Execute a query with WHERE age >= 30 under tx2.
-    let filter = crate::tx::query::filter::Filter::Gte {
+    let filter = crate::query::filter::Filter::Gte {
         field: vec!["age".into()],
-        value: crate::tx::query::filter::FilterValue::Int(30),
+        value: crate::query::filter::FilterValue::Int(30),
     };
-    let query = crate::tx::query::read::ReadQuery::new("users").filter(filter);
+    let query = crate::query::read::ReadQuery::new("users").filter(filter);
     let refs = shamir_types::types::common::new_map();
-    let ctx = crate::tx::query::filter::eval_context::FilterContext::new(interner, &refs);
+    let ctx = crate::query::filter::eval_context::FilterContext::new(interner, &refs);
     let _ = tbl.read_tx(&query, &ctx, Some(&tx2)).await.unwrap();
 
     // Verify predicate was captured.
@@ -104,7 +104,7 @@ async fn ssi_phantom_between_range_aborts() {
     let age_ind = interner.touch_ind("age").unwrap().into_key();
     tbl.sorted_indexes()
         .register(
-            crate::tx::index::sorted_index_manager::SortedIndexDefinition::new(
+            crate::index::sorted_index_manager::SortedIndexDefinition::new(
                 age_ind.id(),
                 vec![age_ind.id()],
             ),
@@ -133,14 +133,14 @@ async fn ssi_phantom_between_range_aborts() {
     });
     gate.publish_committed_max(tx1_commit_v);
 
-    let filter = crate::tx::query::filter::Filter::Between {
+    let filter = crate::query::filter::Filter::Between {
         field: vec!["age".into()],
-        from: crate::tx::query::filter::FilterValue::Int(10),
-        to: crate::tx::query::filter::FilterValue::Int(20),
+        from: crate::query::filter::FilterValue::Int(10),
+        to: crate::query::filter::FilterValue::Int(20),
     };
-    let query = crate::tx::query::read::ReadQuery::new("users").filter(filter);
+    let query = crate::query::read::ReadQuery::new("users").filter(filter);
     let refs = shamir_types::types::common::new_map();
-    let ctx = crate::tx::query::filter::eval_context::FilterContext::new(interner, &refs);
+    let ctx = crate::query::filter::eval_context::FilterContext::new(interner, &refs);
     let _ = tbl.read_tx(&query, &ctx, Some(&tx2)).await.unwrap();
 
     tbl.insert_tx(&InnerValue::Str("dummy".into()), Some(&mut tx2))
@@ -166,7 +166,7 @@ async fn ssi_phantom_disjoint_indexed_ranges_both_commit() {
     let age_ind = interner.touch_ind("age").unwrap().into_key();
     tbl.sorted_indexes()
         .register(
-            crate::tx::index::sorted_index_manager::SortedIndexDefinition::new(
+            crate::index::sorted_index_manager::SortedIndexDefinition::new(
                 age_ind.id(),
                 vec![age_ind.id()],
             ),
@@ -195,13 +195,13 @@ async fn ssi_phantom_disjoint_indexed_ranges_both_commit() {
     });
     gate.publish_committed_max(tx1_commit_v);
 
-    let filter = crate::tx::query::filter::Filter::Lt {
+    let filter = crate::query::filter::Filter::Lt {
         field: vec!["age".into()],
-        value: crate::tx::query::filter::FilterValue::Int(30),
+        value: crate::query::filter::FilterValue::Int(30),
     };
-    let query = crate::tx::query::read::ReadQuery::new("users").filter(filter);
+    let query = crate::query::read::ReadQuery::new("users").filter(filter);
     let refs = shamir_types::types::common::new_map();
-    let ctx = crate::tx::query::filter::eval_context::FilterContext::new(interner, &refs);
+    let ctx = crate::query::filter::eval_context::FilterContext::new(interner, &refs);
     let _ = tbl.read_tx(&query, &ctx, Some(&tx2)).await.unwrap();
 
     tbl.insert_tx(&InnerValue::Str("dummy".into()), Some(&mut tx2))
@@ -247,13 +247,13 @@ async fn ssi_phantom_no_index_records_table_scan_and_aborts() {
     });
     gate.publish_committed_max(tx1_commit_v);
 
-    let filter = crate::tx::query::filter::Filter::Gte {
+    let filter = crate::query::filter::Filter::Gte {
         field: vec!["age".into()],
-        value: crate::tx::query::filter::FilterValue::Int(18),
+        value: crate::query::filter::FilterValue::Int(18),
     };
-    let query = crate::tx::query::read::ReadQuery::new("users").filter(filter);
+    let query = crate::query::read::ReadQuery::new("users").filter(filter);
     let refs = shamir_types::types::common::new_map();
-    let ctx = crate::tx::query::filter::eval_context::FilterContext::new(interner, &refs);
+    let ctx = crate::query::filter::eval_context::FilterContext::new(interner, &refs);
     let _ = tbl.read_tx(&query, &ctx, Some(&tx2)).await.unwrap();
 
     // Should have fallen back to TableScan.

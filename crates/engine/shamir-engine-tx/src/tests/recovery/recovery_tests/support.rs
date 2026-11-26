@@ -3,10 +3,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 #[cfg(feature = "fjall")]
-use crate::tx::repo::BoxRepoFactory;
-use crate::tx::repo::{BoxRepo, RepoInstance};
+use crate::repo::BoxRepoFactory;
+use crate::repo::{BoxRepo, RepoInstance};
 #[cfg(feature = "fjall")]
-use crate::tx::table::TableConfig;
+use crate::table::TableConfig;
 use shamir_storage::storage_in_memory::InMemoryRepo;
 /// Retry helper for reopening a disk-backed repo on Windows, where the
 /// file lock is released lazily after `drop`. On non-Windows platforms this

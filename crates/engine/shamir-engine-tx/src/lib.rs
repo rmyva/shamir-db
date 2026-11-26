@@ -3,16 +3,11 @@
 // Preserve historical crate-local paths after extracting the implementation.
 extern crate self as tx;
 
-pub(crate) use shamir_engine_query as query;
 pub(crate) use shamir_engine_repo as repo;
 pub(crate) use shamir_engine_repo::meta;
 pub(crate) use shamir_engine_table as table;
 pub(crate) use shamir_index as index2;
-pub(crate) use shamir_index::base_index as index;
 
-#[cfg(any(test, feature = "test-util"))]
-#[path = "recovery/clean_horizon/checkpoint/test_seam.rs"]
-pub(crate) mod clean_horizon_test_seam;
 #[cfg(any(test, feature = "test-util"))]
 #[path = "commit/test_seams.rs"]
 pub mod test_seams;
@@ -25,11 +20,8 @@ pub mod publish_journaled {
 
 pub mod commit;
 pub(crate) mod internal_ack {
-    #[cfg(test)]
-    pub(crate) use crate::commit::acknowledgement::apply_backpressure;
     pub(crate) use crate::commit::acknowledgement::{
-        acknowledge_known_outcome, apply_backpressure_with_budget, commit_batch_tx,
-        commit_tx_with_cancel, commit_tx_with_kind, commit_tx_with_options, release_batch_locks,
+        apply_backpressure_with_budget, commit_tx_with_options,
     };
 }
 pub use commit::acknowledgement as ack;

@@ -40,10 +40,10 @@ use shamir_types::access::Actor;
 use shamir_types::types::value::InnerValue;
 use shamir_wal::{WalAppendError, WalOpV2};
 
-use crate::tx::query::batch::{execute_batch_unchecked, BatchResolver, TableResolver};
-use crate::tx::query::TableRef;
-use crate::tx::repo::{BoxRepo, RepoInstance};
-use crate::tx::table::{TableConfig, TableManager};
+use crate::query::batch::{execute_batch_unchecked, BatchResolver, TableResolver};
+use crate::query::TableRef;
+use crate::repo::{BoxRepo, RepoInstance};
+use crate::table::{TableConfig, TableManager};
 use crate::tx::tests::drain::truncation::truncation_tests::reopen_disk_repo;
 use crate::tx::CommitError;
 

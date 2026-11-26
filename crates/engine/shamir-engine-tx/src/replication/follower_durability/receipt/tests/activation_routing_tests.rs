@@ -19,9 +19,6 @@ use shamir_types::access::Actor;
 use shamir_types::types::record_id::RecordId;
 use shamir_types::types::value::InnerValue;
 
-use crate::apply_replicated::follower_durability::receipt::resume::activation::admission_decision;
-use crate::apply_replicated::follower_durability::receipt::resume::activation::admit_follower;
-use crate::apply_replicated::follower_durability::receipt::resume::activation::FollowerAdmission;
 use crate::meta::recovery_marker::{load_last_committed, save_last_committed_flushed};
 use crate::meta::repl::bookmark_v3::{
     classify_follower_bookmark, save_bookmark_v3, BookmarkV3, FollowerBookmarkState,
@@ -30,7 +27,10 @@ use crate::meta::MetaEnvelope;
 use crate::repo::seed_install::{SeedInstallState, SeedReceipt};
 use crate::repo::{BoxRepo, RepoInstance};
 use crate::table::TableConfig;
-use crate::{apply_replicated_batch, ApplyPolicy, ReplicatedEvent};
+use crate::tx::apply_replicated::follower_durability::receipt::resume::activation::admission_decision;
+use crate::tx::apply_replicated::follower_durability::receipt::resume::activation::admit_follower;
+use crate::tx::apply_replicated::follower_durability::receipt::resume::activation::FollowerAdmission;
+use crate::tx::{apply_replicated_batch, ApplyPolicy, ReplicatedEvent};
 
 fn repo() -> RepoInstance {
     RepoInstance::new(
@@ -260,7 +260,10 @@ async fn valid_v3_record_including_zero_bookmark_applies() {
             apply_replicated_batch(&repo.core, &[event(bookmark + 1)], 0, ApplyPolicy::Trusted)
                 .await
                 .unwrap();
-        assert_eq!(outcome, crate::ApplyOutcome::Applied { local_version: 1 });
+        assert_eq!(
+            outcome,
+            crate::tx::ApplyOutcome::Applied { local_version: 1 }
+        );
     }
 }
 
@@ -285,7 +288,10 @@ async fn v3_native_follower_applies_and_checkpoints_the_bookmark() {
     let outcome = apply_replicated_batch(&repo.core, &[event(11)], 0, ApplyPolicy::Trusted)
         .await
         .unwrap();
-    assert_eq!(outcome, crate::ApplyOutcome::Applied { local_version: 1 });
+    assert_eq!(
+        outcome,
+        crate::tx::ApplyOutcome::Applied { local_version: 1 }
+    );
     assert_eq!(repo.replication_bookmark().await.unwrap(), 11);
 }
 

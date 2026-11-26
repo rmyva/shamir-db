@@ -8,11 +8,11 @@ use shamir_types::types::record_id::RecordId;
 use shamir_types::types::value::InnerValue;
 use tokio::sync::oneshot;
 
+use crate::query::filter::FilterContext;
+use crate::query::read::ReadQuery;
+use crate::repo::RepoInstance;
+use crate::table::{TableConfig, TableManager};
 use crate::tx::materialize::TEST_PRE_MATERIALIZE_REPO;
-use crate::tx::query::filter::FilterContext;
-use crate::tx::query::read::ReadQuery;
-use crate::tx::repo::RepoInstance;
-use crate::tx::table::{TableConfig, TableManager};
 use crate::tx::tests::drain::orphans::post_wal_orphan_ordering_tests::fixture;
 
 async fn scores(table: &TableManager, query: &ReadQuery, tx: &TxContext) -> Vec<i64> {

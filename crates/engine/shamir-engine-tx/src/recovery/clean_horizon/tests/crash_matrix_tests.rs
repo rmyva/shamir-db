@@ -4,12 +4,12 @@ use std::time::Duration;
 
 use shamir_storage::types::Repo as _;
 
-use crate::clean_horizon::checkpoint::test_seam;
-use crate::drainer::Drainer;
 use crate::meta::recovery_marker::load_last_committed;
 use crate::repo::{BoxRepoFactory, DurabilityPolicy, RepoFactory, RepoInstance};
 use crate::table::TableConfig;
-use crate::IsolationLevel;
+use crate::tx::clean_horizon::checkpoint::test_seam;
+use crate::tx::drainer::Drainer;
+use crate::tx::IsolationLevel;
 use futures::{pin_mut, StreamExt};
 use shamir_tx::changefeed::ChangelogEvent;
 use shamir_types::types::value::InnerValue;

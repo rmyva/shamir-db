@@ -11,12 +11,12 @@ use shamir_types::types::common::new_map;
 use shamir_types::types::record_id::RecordId;
 use shamir_types::types::value::InnerValue;
 
+use crate::query::filter::FilterContext;
+use crate::query::read::{QueryResult, ReadQuery};
+use crate::repo::RepoInstance;
+use crate::table::TableManager;
 use crate::tx::commit::TxError;
 use crate::tx::materialize::TEST_PRE_MATERIALIZE_REPO;
-use crate::tx::query::filter::FilterContext;
-use crate::tx::query::read::{QueryResult, ReadQuery};
-use crate::tx::repo::RepoInstance;
-use crate::tx::table::TableManager;
 use crate::tx::tests::drain::orphans::post_wal_orphan_ordering_tests::fixture;
 use crate::tx::{MaterializationState, TxOutcome};
 
@@ -182,7 +182,7 @@ async fn parked_snapshot_reads_and_own_commit() {
 #[tokio::test]
 async fn serializable_begin_below_parked_commit_preserves_predicate_window() {
     let (repo, hook) = fixture("serializable_visibility_park").await;
-    repo.add_table_for_test(crate::tx::table::TableConfig::new("c"));
+    repo.add_table_for_test(crate::table::TableConfig::new("c"));
     let a = repo.get_table("a").await.unwrap();
     let b = repo.get_table("b").await.unwrap();
     let c = repo.get_table("c").await.unwrap();

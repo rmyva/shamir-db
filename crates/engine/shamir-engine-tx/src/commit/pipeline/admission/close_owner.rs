@@ -27,7 +27,7 @@ impl CommitAdmissionCloseOwner {
     /// Await zero pre-close-admitted leases (bounded by `cap`;
     /// `Duration::MAX` = unbounded). Cancel-safe: a cancelled wait leaves
     /// the gate closed but owned — the owner's drop reopens.
-    pub(crate) async fn wait_zero(&self, cap: Duration) -> Result<(), CommitAdmissionError> {
+    pub async fn wait_zero(&self, cap: Duration) -> Result<(), CommitAdmissionError> {
         self.gate.wait_zero(cap).await
     }
 }

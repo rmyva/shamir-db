@@ -1,9 +1,9 @@
 use super::repo_core::RepoCore;
-#[cfg(any(test, feature = "test-util"))]
-use crate::clean_horizon_test_seam as test_seam;
 use crate::cold_reconcile::lifecycle::{InstallError, JobSubmitError};
 use crate::follower_durability::receipt::resume::worker::receipt_handler;
 use crate::follower_durability::receipt::{ReceiptApplyJob, ReceiptLease};
+#[cfg(any(test, feature = "test-util"))]
+use crate::recovery::clean_horizon::checkpoint::test_seam;
 use crate::repo::journal::backend::durability_handle::ChangefeedHandle;
 use crate::{ApplyOutcome, ApplyPolicy, ReplicatedEvent};
 use shamir_storage::error::{DbError, DbResult};

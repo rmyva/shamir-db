@@ -204,7 +204,7 @@ impl RepoCore {
     /// The repo's `WalGroupCommit` (captured when `repo_wal` initializes).
     /// Used by the replication read path to sample `R` and coalesce syncs.
     /// Also exposes the recoverability watermark to embedded callers.
-    pub(crate) async fn wal_group(&self) -> DbResult<Arc<shamir_wal::WalGroupCommit>> {
+    pub async fn wal_group(&self) -> DbResult<Arc<shamir_wal::WalGroupCommit>> {
         self.repo_wal().await?;
         self.durability_handle
             .wal_group
@@ -224,7 +224,7 @@ impl RepoCore {
     }
 
     /// Snapshot read of the shared policy; pins the value against concurrent stores.
-    pub(crate) fn durability_policy(&self) -> arc_swap::Guard<Arc<DurabilityPolicy>> {
+    pub fn durability_policy(&self) -> arc_swap::Guard<Arc<DurabilityPolicy>> {
         self.durability_handle.durability_policy()
     }
 

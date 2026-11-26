@@ -27,7 +27,6 @@ mod online_backup;
 // failures into `PortError`) — pure re-export, no semantics changed.
 pub use online_backup::{OnlineBackupError, SealHold};
 mod recovery;
-pub(crate) use recovery::ColdOpenTasks;
 mod seed_backing_impl;
 mod seed_metadata_impl;
 

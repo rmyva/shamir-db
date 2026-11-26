@@ -1,7 +1,7 @@
 use shamir_tx::IsolationLevel;
 use shamir_types::types::value::InnerValue;
 
-use crate::tx::table::TableConfig;
+use crate::table::TableConfig;
 
 use super::support::{key_id, make_repo, record_with_str};
 

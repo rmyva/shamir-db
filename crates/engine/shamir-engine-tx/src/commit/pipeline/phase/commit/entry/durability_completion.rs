@@ -5,8 +5,8 @@ use shamir_wal::WalAppendError;
 
 use crate::repo::journal::backend::durability_handle::{wal_durability_for, DurabilityHandle};
 
-#[cfg(test)]
-pub(crate) static TEST_SYNCED_WAL_REPO: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+#[cfg(any(test, feature = "test-util"))]
+pub static TEST_SYNCED_WAL_REPO: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 pub(crate) fn commit_wal_durability(
     durability: &DurabilityHandle,
@@ -28,7 +28,7 @@ pub(crate) fn commit_wal_durability(
 /// the caller settles the version for R-contiguity at that point (B3).
 /// `Unknown`/`Indeterminate` report `WalOutcomeUnknown { commit_version }`:
 /// the frame was queued, so the attempt may have survived — never aborted.
-pub(crate) fn wal_completion(
+pub fn wal_completion(
     gate: &shamir_tx::RepoTxGate,
     commit_version: u64,
     result: Result<(), WalAppendError>,

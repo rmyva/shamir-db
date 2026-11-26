@@ -44,10 +44,10 @@ impl TableInitHook {
 
 #[cfg(any(test, feature = "test-util"))]
 impl TableInitHook {
-    pub(crate) async fn wait_entered(&self) {
+    pub async fn wait_entered(&self) {
         self.entered.notified().await;
     }
-    pub(crate) fn resume(&self) {
+    pub fn resume(&self) {
         self.resume.notify_one();
     }
 }

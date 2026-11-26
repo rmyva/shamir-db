@@ -1,5 +1,5 @@
 mod range;
-pub(crate) mod receipt;
+pub mod receipt;
 #[cfg(test)]
 pub(crate) mod test_seam;
 

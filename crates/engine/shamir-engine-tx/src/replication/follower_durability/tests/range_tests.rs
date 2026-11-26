@@ -1,4 +1,4 @@
-use super::super::in_flight_range;
+use crate::tx::replication::follower_durability::in_flight_range;
 
 #[test]
 fn known_horizon_limits_uncertainty_to_later_versions() {

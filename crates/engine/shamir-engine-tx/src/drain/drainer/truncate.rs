@@ -4,7 +4,7 @@ use std::time::Duration;
 use shamir_storage::error::{DbError, DbResult};
 use shamir_tx::{CancelHandle, RequestCancelled, WaitState};
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 use crate::clean_horizon::checkpoint::test_seam;
 use crate::commit::core::RepoCore;
 use crate::materialize::interner_delta_safe_to_truncate;
@@ -143,7 +143,7 @@ impl Drainer {
             // nothing (the data is also already in `history`).
             crate::commit::maybe_crash("pre_truncate", repo).await;
             repo.flush_all_history().await?;
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-util"))]
             test_seam::before_delete(repo).await;
             let removed = match repo.try_begin_truncate(checkpoint_ceiling) {
                 Some(lease) => lease.truncate(Arc::clone(&wal)).await?,
@@ -181,7 +181,7 @@ impl Drainer {
 
     /// Cooperative cancellation only while acquiring the replay lock or
     /// between passes. Never race this entire future against cancellation.
-    pub(crate) async fn drain_all_with_cancel(
+    pub async fn drain_all_with_cancel(
         &self,
         repo: &RepoCore,
         cancel: Option<&CancelHandle>,
@@ -350,7 +350,3 @@ impl Drainer {
         });
     }
 }
-
-#[cfg(test)]
-#[path = "../../tests/drain/startup_seed_tests.rs"]
-mod startup_seed_tests;

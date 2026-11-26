@@ -132,7 +132,7 @@ pub(super) async fn commit_tx_inner_legacy_async(
     maybe_crash("phase6_async", repo).await;
     drop(commit_guard);
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     repo.fire_post_publish_pre_broadcast_test_hook().await;
     repo.broadcast_changefeed_event(changefeed_event);
 
@@ -465,7 +465,7 @@ pub(super) async fn commit_tx_lockfree(
 /// txs (they never acquire locks), so this is a no-op for them — zero
 /// overhead on the non-Pessimistic commit paths. Each `(table_token, key)`
 /// is routed to the corresponding table's `MvccStore::release_locks`.
-pub(crate) async fn release_pessimistic_locks(tx: &TxContext, repo: &RepoCore) {
+pub async fn release_pessimistic_locks(tx: &TxContext, repo: &RepoCore) {
     if tx.locked_keys.is_empty() {
         return;
     }

@@ -78,7 +78,7 @@ impl RepoCore {
     /// `assign_next_version()` is strictly greater than every version a
     /// recovered entry will replay at. The scan is the same cheap
     /// `recover()` replay recovery runs and happens once per gate (OnceCell).
-    pub(crate) async fn tx_gate(&self) -> DbResult<Arc<shamir_tx::RepoTxGate>> {
+    pub async fn tx_gate(&self) -> DbResult<Arc<shamir_tx::RepoTxGate>> {
         self.horizon
             .tx_gate_cell()
             .get_or_try_init(|| async {
@@ -184,7 +184,7 @@ impl RepoCore {
     /// versions older than `min_alive`.
     ///
     /// `repo_id` in the TxContext is populated via `repo_token`.
-    pub(crate) async fn begin_tx(
+    pub async fn begin_tx(
         &self,
         isolation: shamir_tx::IsolationLevel,
     ) -> DbResult<(shamir_tx::TxContext, shamir_tx::SnapshotGuard)> {
@@ -238,9 +238,7 @@ impl RepoCore {
 
     /// Per-table MvccStore map used by the commit pipeline to route
     /// data writes through version-aware storage.
-    pub(crate) fn per_table_mvcc(
-        &self,
-    ) -> &Arc<scc::HashMap<u64, Arc<shamir_tx::MvccStore>, THasher>> {
+    pub fn per_table_mvcc(&self) -> &Arc<scc::HashMap<u64, Arc<shamir_tx::MvccStore>, THasher>> {
         self.catalog.mvcc_map_for_commit_pipeline()
     }
 
@@ -294,7 +292,7 @@ impl RepoCore {
     /// calls `repo.drainer().wake()` after publishing a version to nudge
     /// the loop.
     pub fn drainer(&self) -> Arc<crate::drainer::Drainer> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-util"))]
         if self
             .background_drainer_disabled
             .load(std::sync::atomic::Ordering::Acquire)

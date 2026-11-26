@@ -18,9 +18,9 @@ use shamir_types::access::Actor;
 use shamir_types::types::value::InnerValue;
 use shamir_wal::WalOpV2;
 
-use crate::tx::repo::instance::repo_instance::TruncationPinGuard;
-use crate::tx::repo::RepoInstance;
-use crate::tx::table::{table_manager::table_token_for, TableConfig};
+use crate::repo::instance::repo_instance::TruncationPinGuard;
+use crate::repo::RepoInstance;
+use crate::table::{table_manager::table_token_for, TableConfig};
 use crate::tx::tests::drain::drainer_tests::support::{make_repo, seed_inflight_entry};
 use crate::tx::CommitError;
 

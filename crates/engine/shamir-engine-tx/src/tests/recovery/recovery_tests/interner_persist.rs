@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use super::support::make_repo;
+use crate::repo::{BoxRepo, RepoInstance};
+use crate::table::interner_manager::InternerManager;
+use crate::table::table_manager::table_token_for;
+use crate::table::TableConfig;
 use crate::tx::pre_commit::REPO_INTERNER_SCOPE;
-use crate::tx::repo::{BoxRepo, RepoInstance};
-use crate::tx::table::interner_manager::InternerManager;
-use crate::tx::table::table_manager::table_token_for;
-use crate::tx::table::TableConfig;
 use shamir_storage::storage_in_memory::InMemoryRepo;
 use shamir_storage::types::Repo;
 use shamir_types::types::record_id::RecordId;

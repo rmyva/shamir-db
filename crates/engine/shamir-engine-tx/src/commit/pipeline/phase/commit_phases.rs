@@ -1,15 +1,15 @@
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 use std::sync::atomic::Ordering::SeqCst;
 
 use shamir_collections::TFxMap;
 use shamir_collections::THasher;
 use shamir_storage::error::DbError;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 use shamir_storage::types::Store;
 use shamir_tunables::instance_defaults::INTERNER_CHECKPOINT_INTERVAL;
 use shamir_tx::{IndexWriteOp, TxContext};
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 use std::sync::Arc;
 
 use super::materialize::{apply_vector_delta_batch, apply_vector_graph_batch};
@@ -24,7 +24,7 @@ use crate::tx_outcome::MaterializationState;
 /// persistent failure falls through to deferral (recovery re-applies the
 /// WAL entry). Transient-vs-persistent is NOT perfectly classified —
 /// idempotent re-application makes that unnecessary.
-pub(in crate::tx) const MATERIALIZE_ATTEMPTS: u32 = 3;
+pub const MATERIALIZE_ATTEMPTS: u32 = 3;
 
 /// Test-only injection: when set to a non-zero tx_id, Phase 5c (index
 /// apply) returns a synthetic storage error for the matching tx. Used by
@@ -32,9 +32,9 @@ pub(in crate::tx) const MATERIALIZE_ATTEMPTS: u32 = 3;
 /// reported COMMITTED-with-deferred-materialization (not aborted) and is
 /// then reconciled by recovery. Persisted across the bounded retry so
 /// the failure is treated as persistent → deferral.
-#[cfg(test)]
-pub(crate) static FAIL_PHASE_5C_TX_ID: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub static FAIL_PHASE_5C_TX_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Test-only injection (audit MED multi-table deferral): when
 /// [`FAIL_PHASE_5A_TX_ID`] matches the committing tx AND
@@ -46,13 +46,14 @@ pub(crate) static FAIL_PHASE_5C_TX_ID: std::sync::atomic::AtomicU64 =
 /// partial cross-table materialization the audit flagged. Persisted across
 /// the bounded retry so the failure is treated as persistent → deferral.
 /// Both registers must be non-zero to arm; a zero token disarms.
-#[cfg(test)]
-pub(crate) static FAIL_PHASE_5A_TX_ID: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub static FAIL_PHASE_5A_TX_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Companion table-token selector for [`FAIL_PHASE_5A_TX_ID`]. See its doc.
-#[cfg(test)]
-pub(crate) static FAIL_PHASE_5A_TABLE_TOKEN: std::sync::atomic::AtomicU64 =
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub static FAIL_PHASE_5A_TABLE_TOKEN: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
 /// Test-only injection (P2 perf fix regression, audit 4.7): unlike
@@ -63,15 +64,17 @@ pub(crate) static FAIL_PHASE_5A_TABLE_TOKEN: std::sync::atomic::AtomicU64 =
 /// (not just defers) once `apply_data_batch` no longer needs an upfront
 /// `ops.clone()`: the SAME borrowed `&[KvOp]` must still be applied
 /// correctly on the attempt that finally succeeds.
-#[cfg(test)]
-pub(crate) static FAIL_PHASE_5A_TRANSIENT_TX_ID: std::sync::atomic::AtomicU64 =
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub static FAIL_PHASE_5A_TRANSIENT_TX_ID: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
 /// Remaining-failures counter for [`FAIL_PHASE_5A_TRANSIENT_TX_ID`]. Each
 /// matching call to `apply_data_batch` decrements this and fails while it
 /// is `> 0`; once it reaches `0` the call goes through for real.
-#[cfg(test)]
-pub(crate) static FAIL_PHASE_5A_TRANSIENT_REMAINING: std::sync::atomic::AtomicU32 =
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub static FAIL_PHASE_5A_TRANSIENT_REMAINING: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
 
 /// Test-only injection: when set to a non-zero tx_id, the post-lock HNSW
@@ -83,8 +86,9 @@ pub(crate) static FAIL_PHASE_5A_TRANSIENT_REMAINING: std::sync::atomic::AtomicU3
 /// chunk that was appended PRE-publish by `apply_vector_delta_phase`).
 /// Persisted across the bounded retry so the failure is treated as
 /// persistent.
-#[cfg(test)]
-pub(crate) static FAIL_VECTOR_PROMOTE_TX_ID: std::sync::atomic::AtomicU64 =
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub static FAIL_VECTOR_PROMOTE_TX_ID: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
 /// Test-only injection (round-2 finding 1): unlike
@@ -96,16 +100,18 @@ pub(crate) static FAIL_VECTOR_PROMOTE_TX_ID: std::sync::atomic::AtomicU64 =
 /// and the in-loop bounded retry re-runs and succeeds — proving a failed
 /// promote is retried with the ticket STILL ACTIVE, not silently
 /// acknowledged via a consumed ticket.
-#[cfg(test)]
-pub(crate) static FAIL_VECTOR_PROMOTE_ONCE_TX_ID: std::sync::atomic::AtomicU64 =
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub static FAIL_VECTOR_PROMOTE_ONCE_TX_ID: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
 /// Remaining-failures counter for [`FAIL_VECTOR_PROMOTE_ONCE_TX_ID`]. Each
 /// matching in-loop attempt decrements this and fails while it is `> 0`;
 /// once it reaches `0` the real `promote` goes through. Mirrors the
 /// `FAIL_PHASE_5A_TRANSIENT_REMAINING` pattern.
-#[cfg(test)]
-pub(crate) static FAIL_VECTOR_PROMOTE_ONCE_REMAINING: std::sync::atomic::AtomicU32 =
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub static FAIL_VECTOR_PROMOTE_ONCE_REMAINING: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
 
 /// Test-only injection (#426, VR-4 Phase 5d durability variant A): when set
@@ -120,8 +126,9 @@ pub(crate) static FAIL_VECTOR_PROMOTE_ONCE_REMAINING: std::sync::atomic::AtomicU
 /// `Deferred` (not a silent `Complete`) gives the client a detectable
 /// signal to retry. Persisted across the bounded retry so the failure is
 /// treated as persistent → deferral (not a transient retry success).
-#[cfg(test)]
-pub(crate) static FAIL_VECTOR_DELTA_TX_ID: std::sync::atomic::AtomicU64 =
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub static FAIL_VECTOR_DELTA_TX_ID: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
 /// F-74 (#901) test-only ordering toggle for [`apply_index_batch`]. When
@@ -131,8 +138,9 @@ pub(crate) static FAIL_VECTOR_DELTA_TX_ID: std::sync::atomic::AtomicU64 =
 /// window this task closes and prove it RED, then flip this back to `false`
 /// (the default) and prove the identical scenario GREEN. `nextest` runs each
 /// test in its own process, so this global cannot leak across test files.
-#[cfg(test)]
-pub(crate) static TEST_LEGACY_APPLY_THEN_BUMP_ORDER: std::sync::atomic::AtomicBool =
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub static TEST_LEGACY_APPLY_THEN_BUMP_ORDER: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 /// F-74 (#901) test-only pause/resume handshake for
@@ -144,16 +152,18 @@ pub(crate) static TEST_LEGACY_APPLY_THEN_BUMP_ORDER: std::sync::atomic::AtomicBo
 /// actually parked at the seam; `resume` is the release signal; `armed`
 /// makes the pause one-shot (CAS true→false) so only the FIRST committer to
 /// reach the seam in a given test actually parks.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
 #[derive(Debug)]
-pub(crate) struct IndexBatchBumpApplyHook {
-    pub(crate) reached: std::sync::atomic::AtomicUsize,
-    pub(crate) resume: tokio::sync::Notify,
-    pub(crate) armed: std::sync::atomic::AtomicBool,
+pub struct IndexBatchBumpApplyHook {
+    pub reached: std::sync::atomic::AtomicUsize,
+    pub resume: tokio::sync::Notify,
+    pub armed: std::sync::atomic::AtomicBool,
 }
 
-#[cfg(test)]
-pub(crate) static TEST_INDEX_BATCH_BUMP_APPLY_HOOK: std::sync::OnceLock<
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub static TEST_INDEX_BATCH_BUMP_APPLY_HOOK: std::sync::OnceLock<
     std::sync::Arc<IndexBatchBumpApplyHook>,
 > = std::sync::OnceLock::new();
 
@@ -164,7 +174,7 @@ pub(crate) static TEST_INDEX_BATCH_BUMP_APPLY_HOOK: std::sync::OnceLock<
 /// program point between "epoch bump" and "posting apply", whichever one ran
 /// first.
 async fn fire_index_batch_bump_apply_test_hook() {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     if let Some(hook) = TEST_INDEX_BATCH_BUMP_APPLY_HOOK.get() {
         hook.reached
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -639,7 +649,7 @@ pub(crate) async fn apply_data_batch(
     // the partial cross-table materialization the audit flagged. Both
     // registers must match; armed via `FAIL_PHASE_5A_TX_ID` +
     // `FAIL_PHASE_5A_TABLE_TOKEN`.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     {
         let armed_tx = FAIL_PHASE_5A_TX_ID.load(SeqCst);
         let armed_token = FAIL_PHASE_5A_TABLE_TOKEN.load(SeqCst);
@@ -654,7 +664,7 @@ pub(crate) async fn apply_data_batch(
     // exactly `FAIL_PHASE_5A_TRANSIENT_REMAINING` attempts for the matching
     // tx, then let the call through for real — proves `retry_materialize`
     // recovers (not just defers) with the borrowed `&[KvOp]` signature.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     {
         if _tx_id != 0 && FAIL_PHASE_5A_TRANSIENT_TX_ID.load(SeqCst) == _tx_id {
             let decremented = FAIL_PHASE_5A_TRANSIENT_REMAINING.fetch_update(SeqCst, SeqCst, |r| {
@@ -767,7 +777,7 @@ pub(crate) async fn apply_index_batch(
     // Test-only failure injection: simulate a persistent Phase 5c storage
     // error for a specific tx so a post-commit-point failure can be
     // exercised in-process (Vector I.3). Armed via `FAIL_PHASE_5C_TX_ID`.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     if _tx_id != 0 && FAIL_PHASE_5C_TX_ID.load(std::sync::atomic::Ordering::SeqCst) == _tx_id {
         return Err(DbError::Internal(format!(
             "injected Phase 5c failure for tx {_tx_id}"
@@ -784,10 +794,10 @@ pub(crate) async fn apply_index_batch(
         // can be proven RED (and, once cleared, proven GREEN again) against
         // the exact same pause seam (`fire_index_batch_bump_apply_test_hook`)
         // placed strictly between the two calls in both orderings.
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-util"))]
         let legacy_apply_then_bump =
             TEST_LEGACY_APPLY_THEN_BUMP_ORDER.load(std::sync::atomic::Ordering::SeqCst);
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-util")))]
         let legacy_apply_then_bump = false;
 
         if legacy_apply_then_bump {
@@ -846,21 +856,20 @@ pub(crate) async fn apply_index_batch(
 /// marker save into a non-abortable task inside `persist_markers` (see
 /// [`orphan_marker_park_save`]). Process-global (per-test process
 /// isolation).
-#[cfg(test)]
-pub(crate) struct OrphanMarkerSaveHook {
-    pub(crate) repo_name: String,
-    pub(crate) armed: std::sync::atomic::AtomicBool,
+#[cfg(any(test, feature = "test-util"))]
+pub struct OrphanMarkerSaveHook {
+    pub repo_name: String,
+    pub armed: std::sync::atomic::AtomicBool,
     /// Bounded one-shot: the save task notifies the test it reached the
     /// park (read/compare done, save not started).
-    pub(crate) reached: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    pub reached: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     /// Bounded one-shot: the test releases the save task.
-    pub(crate) release: std::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    pub release: std::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
 }
 
-#[cfg(test)]
-pub(crate) static TEST_ORPHAN_MARKER_PARK: std::sync::OnceLock<
-    std::sync::Arc<OrphanMarkerSaveHook>,
-> = std::sync::OnceLock::new();
+#[cfg(any(test, feature = "test-util"))]
+pub static TEST_ORPHAN_MARKER_PARK: std::sync::OnceLock<std::sync::Arc<OrphanMarkerSaveHook>> =
+    std::sync::OnceLock::new();
 
 /// R2a follow-up 3: run the real marker save through the armed park gate.
 /// The save is dispatched as a spawned, non-abortable task owning a clone
@@ -872,7 +881,7 @@ pub(crate) static TEST_ORPHAN_MARKER_PARK: std::sync::OnceLock<
 /// suspension suspends the WHOLE marker write and any concurrent writer's
 /// `try_lock` fails loudly. Replaces the direct save; returns `true` when
 /// it ran.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 async fn orphan_marker_park_save(
     repo: &RepoCore,
     info_store: &Arc<dyn Store>,
@@ -921,7 +930,7 @@ async fn orphan_marker_park_save(
 /// for this repository, the marker save is dispatched as a non-abortable
 /// task outliving a dropped future (`orphan_marker_park_save`); otherwise
 /// the direct save runs.
-pub(crate) async fn persist_markers(
+pub async fn persist_markers(
     repo: &RepoCore,
     gate: &shamir_tx::RepoTxGate,
     _commit_version: u64,
@@ -955,7 +964,7 @@ pub(crate) async fn persist_markers(
             // `orphan_marker_park_save`); the hook path replaces the direct
             // save — never write twice. Both paths run under the mutex
             // guard above, keeping the on-disk marker monotonic (§1.7).
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-util"))]
             if orphan_marker_park_save(repo, &info_store, candidate).await? {
                 // The hook path replaced the direct save — never write
                 // twice.

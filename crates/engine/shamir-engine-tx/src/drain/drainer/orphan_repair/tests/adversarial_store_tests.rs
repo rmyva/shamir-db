@@ -8,13 +8,13 @@ use shamir_types::access::Actor;
 use shamir_types::types::value::InnerValue;
 use tokio::sync::Notify;
 
-use crate::commit::{PostWalPrePublishHook, TEST_POST_WAL_PRE_PUBLISH_HOOK};
-use crate::drainer::orphan_repair::repair_event;
 use crate::repo::changelog_store::StoreChangelog;
 use crate::repo::repo_instance::ChangefeedHandle;
 use crate::repo::{BoxRepo, RepoInstance};
 use crate::table::TableConfig;
-use crate::tests::drain::orphans::post_wal_orphan_ordering_tests::panic_post_wal;
+use crate::tx::commit::{PostWalPrePublishHook, TEST_POST_WAL_PRE_PUBLISH_HOOK};
+use crate::tx::drainer::orphan_repair::repair_event;
+use crate::tx::tests::drain::orphans::post_wal_orphan_ordering_tests::panic_post_wal;
 use shamir_tx::ChangelogError;
 
 struct CountingStore {

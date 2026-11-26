@@ -1,7 +1,7 @@
 use shamir_tx::IsolationLevel;
 use shamir_types::types::value::InnerValue;
 
-use crate::tests::drain::orphans::post_wal_orphan_ordering_tests::{fixture, panic_post_wal};
+use crate::tx::tests::drain::orphans::post_wal_orphan_ordering_tests::{fixture, panic_post_wal};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn orphan_repair_metrics_count_repair_once_and_not_on_replay() {

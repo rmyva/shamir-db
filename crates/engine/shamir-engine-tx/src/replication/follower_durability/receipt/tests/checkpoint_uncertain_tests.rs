@@ -20,11 +20,6 @@ use shamir_types::codecs::basic::bincode as bincode_codec;
 use shamir_types::types::record_id::RecordId;
 use shamir_types::types::value::InnerValue;
 
-use super::super::stage::{
-    inject_materialization_batch_failures, set_materialization_readback_unavailable,
-    MaterializationBatchFailure,
-};
-use crate::apply_replicated::{apply_replicated_batch, ApplyOutcome, ApplyPolicy};
 use crate::meta::repl::bookmark::load_clean_horizon;
 use crate::meta::repl::bookmark_v3::load_bookmark_v3;
 use crate::meta::repl::receipt::receipt_key;
@@ -32,9 +27,14 @@ use crate::meta::repl::{decode_receipt, MAX_RECEIPT_EVENTS};
 use crate::meta::MetaKey;
 use crate::repo::{BoxRepoFactory, RepoInstance};
 use crate::table::TableConfig;
-use crate::ReplicatedEvent;
+use crate::tx::apply_replicated::{apply_replicated_batch, ApplyOutcome, ApplyPolicy};
+use crate::tx::replication::follower_durability::receipt::stage::{
+    inject_materialization_batch_failures, set_materialization_readback_unavailable,
+    MaterializationBatchFailure,
+};
+use crate::tx::ReplicatedEvent;
 
-use super::super::checkpoint::{
+use crate::tx::replication::follower_durability::receipt::checkpoint::{
     checkpoint_reconciles, checkpoint_test_lock, disable_uncertain_reconcile, set_fail_final_flush,
     set_simulate_checkpoint_uncertain, set_uncertain_without_commit,
 };
@@ -42,7 +42,7 @@ use super::super::checkpoint::{
 struct MaterializationSeamReset(String);
 impl Drop for MaterializationSeamReset {
     fn drop(&mut self) {
-        super::super::stage::clear_materialization_batch_failures(&self.0);
+        crate::tx::replication::follower_durability::receipt::stage::clear_materialization_batch_failures(&self.0);
         set_materialization_readback_unavailable(&self.0, false);
     }
 }
@@ -247,7 +247,7 @@ async fn materialization_batch_failure_preserves_prepared_receipt_and_retry_allo
     assert_eq!(gate.last_committed(), 0);
     assert_eq!(gate.durable_watermark(), 0);
 
-    super::super::stage::clear_materialization_batch_failures(&name);
+    crate::tx::replication::follower_durability::receipt::stage::clear_materialization_batch_failures(&name);
     assert_eq!(
         apply_replicated_batch(&repo.core, &events, 0, ApplyPolicy::Trusted)
             .await
@@ -612,7 +612,7 @@ async fn multichunk_materialization_failure_resumes_same_receipt_without_extra_a
     assert_eq!(gate.last_committed(), 0);
     assert_eq!(gate.durable_watermark(), 0);
 
-    super::super::stage::clear_materialization_batch_failures(&name);
+    crate::tx::replication::follower_durability::receipt::stage::clear_materialization_batch_failures(&name);
     assert_eq!(
         apply_replicated_batch(&repo.core, &events, 0, ApplyPolicy::Trusted)
             .await
@@ -678,7 +678,9 @@ async fn post_checkpoint_flush_failure_with_open_gap_is_done() {
     struct FinalFlushReset(String);
     impl Drop for FinalFlushReset {
         fn drop(&mut self) {
-            super::super::checkpoint::set_fail_final_flush(&self.0, false);
+            crate::tx::replication::follower_durability::receipt::checkpoint::set_fail_final_flush(
+                &self.0, false,
+            );
         }
     }
     let temp = tempfile::TempDir::new().unwrap();

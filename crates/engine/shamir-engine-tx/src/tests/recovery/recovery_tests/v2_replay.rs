@@ -1,9 +1,9 @@
 use super::support::make_repo;
 #[cfg(feature = "fjall")]
 use super::support::reopen_disk_repo;
-use crate::tx::repo::repo_token;
-use crate::tx::table::table_manager::table_token_for;
-use crate::tx::table::TableConfig;
+use crate::repo::repo_token;
+use crate::table::table_manager::table_token_for;
+use crate::table::TableConfig;
 use shamir_types::types::record_id::RecordId;
 use shamir_types::types::value::InnerValue;
 use shamir_wal::{WalDurability, WalEntryV2, WalOpV2};

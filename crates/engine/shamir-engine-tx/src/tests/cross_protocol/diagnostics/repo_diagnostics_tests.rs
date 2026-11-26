@@ -10,13 +10,13 @@ use shamir_tx::{GateBlockerClass, GateDiagnostics, IsolationLevel};
 use shamir_types::types::value::InnerValue;
 use shamir_wal::WalEntryV2;
 
+use crate::repo::{BoxRepo, RepoInstance};
+#[cfg(debug_assertions)]
+use crate::table::table_manager::table_token_for;
+use crate::table::TableConfig;
 use crate::tx::drainer::Drainer;
 #[cfg(debug_assertions)]
 use crate::tx::drainer::FAIL_INDEX_BATCH_TABLE_ID;
-use crate::tx::repo::{BoxRepo, RepoInstance};
-#[cfg(debug_assertions)]
-use crate::tx::table::table_manager::table_token_for;
-use crate::tx::table::TableConfig;
 use crate::tx::test_seams::JournalPublishHook;
 use crate::tx::tests::drain::orphans::post_wal_orphan_ordering_tests::fixture;
 #[cfg(debug_assertions)]

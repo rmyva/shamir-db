@@ -54,7 +54,7 @@ fn check_index_route(idx_id: u32) -> DbResult<()> {
 /// reach this `pub(crate)` static) additionally honors the
 /// `SHAMIR_TEST_FAIL_HISTORY_SEED` env var to arm the same fault.
 #[cfg(debug_assertions)]
-pub(crate) static FAIL_HISTORY_SEED_TX_ID: std::sync::atomic::AtomicU64 =
+pub static FAIL_HISTORY_SEED_TX_ID: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
 /// cancel-safe: NO — multi-step state mutation. Each branch issues a
@@ -462,7 +462,7 @@ pub async fn recover_inflight_v2(repo: &RepoCore, permit: &RepoWritePermit) -> D
 /// The caller must prepare the exact gate and an offline WAL configuration
 /// before calling; cold certification can consult the repo's WAL group.
 /// cancel-safe: NO
-pub(crate) async fn recover_inflight_v2_strict(
+pub async fn recover_inflight_v2_strict(
     repo: &RepoCore,
     permit: &RepoWritePermit,
     mut entries: Vec<WalEntryV2>,

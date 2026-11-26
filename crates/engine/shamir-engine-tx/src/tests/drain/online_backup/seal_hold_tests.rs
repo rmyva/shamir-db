@@ -18,14 +18,14 @@ use shamir_query_types::batch::VisibilityWait;
 use shamir_tx::IsolationLevel;
 use shamir_types::types::value::InnerValue;
 
-use crate::tx::repo::instance::repo_instance::OnlineBackupError;
-use crate::tx::table::TableConfig;
+use crate::repo::instance::repo_instance::OnlineBackupError;
+use crate::table::TableConfig;
 use crate::tx::tests::drain::drainer_tests::support::make_repo;
 
 /// Harness cap; the handshakes are the hold lifecycle itself.
 const APPLY_BUDGET: Duration = Duration::from_secs(30);
 
-async fn commit_insert(repo: &crate::tx::repo::RepoInstance, value: &str) {
+async fn commit_insert(repo: &crate::repo::RepoInstance, value: &str) {
     let table = repo.get_table("t").await.unwrap();
     let (mut tx, _guard) = repo.begin_tx(IsolationLevel::Snapshot).await.unwrap();
     table

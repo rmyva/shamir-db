@@ -52,13 +52,13 @@ use shamir_types::types::record_id::RecordId;
 use shamir_types::types::value::InnerValue;
 use tokio::sync::oneshot;
 
+use crate::index2::backend::{IndexBackend, IndexQuery, IndexResult};
+use crate::repo::repo_instance::RepoInstance;
+use crate::repo::repo_types::BoxRepo;
+use crate::table::TableConfig;
 use crate::tx::commit_phases::{
     FAIL_VECTOR_PROMOTE_ONCE_REMAINING, FAIL_VECTOR_PROMOTE_ONCE_TX_ID, FAIL_VECTOR_PROMOTE_TX_ID,
 };
-use crate::tx::index2::backend::{IndexBackend, IndexQuery, IndexResult};
-use crate::tx::repo::repo_instance::RepoInstance;
-use crate::tx::repo::repo_types::BoxRepo;
-use crate::tx::table::TableConfig;
 use crate::tx::test_seams::JournalPublishHook;
 use crate::tx::tx_outcome::MaterializationState;
 use shamir_index::vector::vector_backend::VectorBackend;
@@ -75,7 +75,7 @@ fn make_repo() -> RepoInstance {
     RepoInstance::new("promote_order".into(), BoxRepo::InMemory(repo), Vec::new())
 }
 
-async fn field_id(tbl: &crate::tx::table::TableManager, name: &str) -> u64 {
+async fn field_id(tbl: &crate::table::TableManager, name: &str) -> u64 {
     let interner = tbl.interner().get().await.unwrap();
     match interner.touch_ind(name).unwrap() {
         TouchInd::Exists(k) | TouchInd::New(k) => k.id(),
@@ -135,7 +135,7 @@ async fn distance_of(backend: &VectorBackend, q: &[f64], rid: &RecordId) -> f32 
         IndexQuery::Vector {
             vec: q,
             k: 10,
-            opts: crate::tx::index2::vector::SearchOpts::default(),
+            opts: crate::index2::vector::SearchOpts::default(),
         },
     )
     .await
@@ -157,7 +157,7 @@ async fn hits_contain(backend: &VectorBackend, q: &[f64], rid: &RecordId) -> boo
         IndexQuery::Vector {
             vec: q,
             k: 10,
-            opts: crate::tx::index2::vector::SearchOpts::default(),
+            opts: crate::index2::vector::SearchOpts::default(),
         },
     )
     .await

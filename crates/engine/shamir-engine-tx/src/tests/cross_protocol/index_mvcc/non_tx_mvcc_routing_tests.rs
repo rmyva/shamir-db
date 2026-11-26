@@ -8,9 +8,9 @@ use std::sync::Arc;
 use shamir_storage::storage_in_memory::InMemoryRepo;
 use shamir_types::types::value::InnerValue;
 
-use crate::tx::repo::repo_instance::RepoInstance;
-use crate::tx::repo::repo_types::BoxRepo;
-use crate::tx::table::TableConfig;
+use crate::repo::repo_instance::RepoInstance;
+use crate::repo::repo_types::BoxRepo;
+use crate::table::TableConfig;
 
 fn make_repo() -> RepoInstance {
     let repo = Arc::new(InMemoryRepo::new());
@@ -31,7 +31,7 @@ async fn non_tx_insert_updates_version_cache() {
     let rid = tbl.insert(&InnerValue::Str("v1".into())).await.unwrap();
 
     // version_cache must now contain a non-zero version for the rid.
-    let token = crate::tx::table::table_manager::table_token_for("t");
+    let token = crate::table::table_manager::table_token_for("t");
     let key = rid.to_bytes();
     let mvcc = repo
         .per_table_mvcc()
@@ -64,7 +64,7 @@ async fn non_tx_set_archives_old_value_under_snapshot() {
     tbl.set(rid, &InnerValue::Str("v2".into())).await.unwrap();
 
     // Snapshot still reads v1 via MvccStore::get_at.
-    let token = crate::tx::table::table_manager::table_token_for("t");
+    let token = crate::table::table_manager::table_token_for("t");
     let mvcc = repo
         .per_table_mvcc()
         .read_async(&token, |_, m| Arc::clone(m))
@@ -93,7 +93,7 @@ async fn non_tx_delete_archives_old_value_under_snapshot() {
     let removed = tbl.delete(rid).await.unwrap();
     assert!(removed, "delete of existing record must report true");
 
-    let token = crate::tx::table::table_manager::table_token_for("t");
+    let token = crate::table::table_manager::table_token_for("t");
     let mvcc = repo
         .per_table_mvcc()
         .read_async(&token, |_, m| Arc::clone(m))
@@ -133,7 +133,7 @@ async fn non_tx_insert_many_updates_version_cache_per_record() {
         .unwrap();
     assert_eq!(ids.len(), 3);
 
-    let token = crate::tx::table::table_manager::table_token_for("t");
+    let token = crate::table::table_manager::table_token_for("t");
     let mvcc = repo
         .per_table_mvcc()
         .read_async(&token, |_, m| Arc::clone(m))

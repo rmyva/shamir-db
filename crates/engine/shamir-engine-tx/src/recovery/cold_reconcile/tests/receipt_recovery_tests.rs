@@ -14,15 +14,15 @@ use shamir_types::access::Actor;
 use shamir_types::types::record_id::RecordId;
 use shamir_types::types::value::InnerValue;
 
-use crate::apply_replicated::follower_durability::receipt::stage;
-use crate::apply_replicated::follower_durability::test_seam::{self, Phase};
 use crate::meta::repl::bookmark_v3::load_bookmark_v3;
 use crate::meta::repl::receipt::receipt_key;
 use crate::repo::RepoInstance;
+use crate::tx::apply_replicated::follower_durability::receipt::stage;
+use crate::tx::apply_replicated::follower_durability::test_seam::{self, Phase};
 
 use super::helpers::open_with_retry;
-use crate::apply_replicated::{apply_replicated_batch, ApplyPolicy};
-use crate::ReplicatedEvent;
+use crate::tx::apply_replicated::{apply_replicated_batch, ApplyPolicy};
+use crate::tx::ReplicatedEvent;
 
 fn event(leader_version: u64, id: u8) -> ReplicatedEvent {
     ReplicatedEvent {

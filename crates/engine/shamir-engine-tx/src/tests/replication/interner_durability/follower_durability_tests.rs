@@ -13,10 +13,10 @@ use shamir_types::access::Actor;
 use shamir_types::types::record_id::RecordId;
 use shamir_types::types::value::InnerValue;
 
+use crate::meta::{MetaEnvelope, MetaKey};
+use crate::repo::{BoxRepo, RepoInstance};
+use crate::table::TableConfig;
 use crate::tx::apply_replicated::follower_durability::in_flight_range;
-use crate::tx::meta::{MetaEnvelope, MetaKey};
-use crate::tx::repo::{BoxRepo, RepoInstance};
-use crate::tx::table::TableConfig;
 use crate::tx::{apply_replicated_batch, ApplyPolicy, ReplicatedEvent};
 
 fn repo() -> RepoInstance {
@@ -132,10 +132,10 @@ async fn normal_commit_tail_preserves_reserved_floor_and_transaction_id() {
     let repo = repo();
     let gate = repo.tx_gate().await.unwrap();
     let info = repo.tx_info_store().await.unwrap();
-    crate::tx::meta::recovery_marker::save_last_committed_flushed(&info, 12)
+    crate::meta::recovery_marker::save_last_committed_flushed(&info, 12)
         .await
         .unwrap();
-    crate::tx::meta::recovery_marker::save_next_tx_id_snapshot(&info, 99)
+    crate::meta::recovery_marker::save_next_tx_id_snapshot(&info, 99)
         .await
         .unwrap();
     info.flush().await.unwrap();
@@ -143,13 +143,13 @@ async fn normal_commit_tail_preserves_reserved_floor_and_transaction_id() {
         .await
         .unwrap();
     assert_eq!(
-        crate::tx::meta::recovery_marker::load_last_committed(&info)
+        crate::meta::recovery_marker::load_last_committed(&info)
             .await
             .unwrap(),
         Some(12),
     );
     assert_eq!(
-        crate::tx::meta::recovery_marker::load_next_tx_id_snapshot(&info)
+        crate::meta::recovery_marker::load_next_tx_id_snapshot(&info)
             .await
             .unwrap(),
         Some(99),
@@ -166,7 +166,7 @@ fn corrupt_marker_refuses_factory_open() {
         runtime.block_on(async {
             let seed = RepoInstance::from_factory(
                 "follower".into(),
-                crate::tx::repo::BoxRepoFactory::fjall_raw(directory.path()),
+                crate::repo::BoxRepoFactory::fjall_raw(directory.path()),
                 vec![TableConfig::new("items")],
             )
             .await
@@ -182,7 +182,7 @@ fn corrupt_marker_refuses_factory_open() {
     runtime.block_on(async {
         let result = RepoInstance::from_factory(
             "follower".into(),
-            crate::tx::repo::BoxRepoFactory::fjall_raw(directory.path()),
+            crate::repo::BoxRepoFactory::fjall_raw(directory.path()),
             vec![TableConfig::new("items")],
         )
         .await;

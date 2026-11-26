@@ -1,5 +1,5 @@
 //! Supervisor join, lease release, and fail-closed panic tests.
-use crate::cold_reconcile::lifecycle::{
+use crate::tx::cold_reconcile::lifecycle::{
     spawn_worker, FailClosedResource, ForegroundLifecycle, JobSubmitError, LifecycleStatus,
     RepoUnitLifecycle, ShutdownError, WorkerLease, WorkerTerminal,
 };

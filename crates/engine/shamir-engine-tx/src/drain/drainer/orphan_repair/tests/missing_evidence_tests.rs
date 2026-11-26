@@ -4,11 +4,11 @@ use std::sync::Arc;
 use shamir_storage::storage_in_memory::InMemoryRepo;
 use shamir_wal::WalEntryV2;
 
-use super::super::missing_evidence::settle_missing_evidence;
-use crate::drainer::Drainer;
 use crate::repo::{BoxRepo, RepoInstance};
-use crate::test_seams::JournalPublishHook;
-use crate::tests::drain::orphans::post_wal_orphan_ordering_tests::fixture;
+use crate::tx::drain::drainer::orphan_repair::settle_missing_evidence;
+use crate::tx::drainer::Drainer;
+use crate::tx::test_seams::JournalPublishHook;
+use crate::tx::tests::drain::orphans::post_wal_orphan_ordering_tests::fixture;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn missing_evidence_gap_init_failure_is_counted_and_retry_clears_error() {

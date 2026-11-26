@@ -2,6 +2,9 @@
 //! close-and-wait call, rebuilt on the ungated production entry points
 //! (`begin_close` + `wait_zero`) after R2a-1d split them.
 
+// Test-only module: compiled empty when the crate is built with `test-util` alone.
+#![cfg(test)]
+
 use std::sync::Arc;
 use std::time::Duration;
 

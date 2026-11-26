@@ -22,8 +22,8 @@ use std::time::Duration;
 use shamir_tx::IsolationLevel;
 use shamir_types::types::value::InnerValue;
 
-use crate::tx::repo::{BoxRepoFactory, RepoInstance};
-use crate::tx::table::TableConfig;
+use crate::repo::{BoxRepoFactory, RepoInstance};
+use crate::table::TableConfig;
 use crate::tx::CommitError;
 
 /// Opens a disk-backed repo at `path` whose WAL sibling directory

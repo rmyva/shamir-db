@@ -3,8 +3,8 @@ use shamir_tx::{IsolationLevel, Retention};
 use shamir_types::types::common::new_map;
 use shamir_types::types::value::InnerValue;
 
+use crate::query::filter::FilterContext;
 use crate::tx::commit::TxError;
-use crate::tx::query::filter::FilterContext;
 use crate::tx::tests::drain::orphans::post_wal_orphan_ordering_tests::fixture;
 use crate::tx::tests::recovery::snapshot_gc::snapshot_visibility_park_tests::spawn_settled_commit;
 

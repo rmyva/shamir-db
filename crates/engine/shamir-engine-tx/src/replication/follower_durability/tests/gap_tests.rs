@@ -1,8 +1,8 @@
-use crate::apply_replicated::apply_replicated_batch;
 use crate::meta::repl_bookmark::{load_clean_horizon, load_replication_bookmark};
 use crate::repo::{BoxRepo, RepoInstance};
 use crate::table::TableConfig;
-use crate::{ApplyOutcome, ApplyPolicy, ReplicatedEvent};
+use crate::tx::apply_replicated::apply_replicated_batch;
+use crate::tx::{ApplyOutcome, ApplyPolicy, ReplicatedEvent};
 use bytes::Bytes;
 use shamir_storage::storage_in_memory::InMemoryRepo;
 use shamir_storage::types::RecordKey;

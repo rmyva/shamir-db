@@ -9,11 +9,11 @@ use shamir_types::access::Actor;
 use shamir_types::types::record_id::RecordId;
 use shamir_wal::WalOpV2;
 
+use crate::repo::repo_instance::RepoInstance;
+use crate::repo::repo_types::BoxRepo;
+use crate::table::table_manager::table_token_for;
+use crate::table::TableConfig;
 use crate::tx::commit_tx;
-use crate::tx::repo::repo_instance::RepoInstance;
-use crate::tx::repo::repo_types::BoxRepo;
-use crate::tx::table::table_manager::table_token_for;
-use crate::tx::table::TableConfig;
 
 fn make_repo() -> RepoInstance {
     let repo = Arc::new(InMemoryRepo::new());
@@ -397,7 +397,7 @@ async fn ssi_no_conflict_when_only_non_tx_writes_predate_snapshot() {
 
     let (mut tx, _g) = repo.begin_tx(IsolationLevel::Serializable).await.unwrap();
 
-    let token = crate::tx::table::table_manager::table_token_for("users");
+    let token = crate::table::table_manager::table_token_for("users");
     // T1a: non-tx writes now bump the MVCC version + advance last_committed (the HIGH-4 "non-tx doesn't bump" assumption is intentionally reversed), so record the read at the actual snapshot version, not a hardcoded 0.
     tx.record_read(token, rid.to_bytes(), tx.snapshot_version);
 
@@ -411,7 +411,7 @@ async fn ssi_no_conflict_when_only_non_tx_writes_predate_snapshot() {
 #[tokio::test]
 async fn expired_tx_rejected_at_commit() {
     let repo = make_repo();
-    repo.add_table_for_test(crate::tx::table::TableConfig::new("t"));
+    repo.add_table_for_test(crate::table::TableConfig::new("t"));
 
     let (tx, _g) = repo.begin_tx(IsolationLevel::Snapshot).await.unwrap();
 
@@ -437,7 +437,7 @@ async fn expired_tx_rejected_at_commit() {
 #[tokio::test]
 async fn tx_metrics_track_commit_and_abort() {
     let repo = make_repo();
-    repo.add_table_for_test(crate::tx::table::TableConfig::new("t"));
+    repo.add_table_for_test(crate::table::TableConfig::new("t"));
 
     // Start + commit a tx.
     let (tx, _g) = repo
@@ -468,7 +468,7 @@ async fn last_committed_version_persists_across_restart() {
         BoxRepo::InMemory(Arc::clone(&underlying)),
         Vec::new(),
     );
-    repo1.add_table_for_test(crate::tx::table::TableConfig::new("t"));
+    repo1.add_table_for_test(crate::table::TableConfig::new("t"));
 
     // Commit a few txs so commit_version advances past 0.
     for i in 0..3i64 {
@@ -494,7 +494,7 @@ async fn last_committed_version_persists_across_restart() {
     drop(repo1);
 
     let repo2 = RepoInstance::new("test".into(), BoxRepo::InMemory(underlying), Vec::new());
-    repo2.add_table_for_test(crate::tx::table::TableConfig::new("t"));
+    repo2.add_table_for_test(crate::table::TableConfig::new("t"));
     let last_v_post = repo2.tx_gate().await.unwrap().last_committed();
     assert_eq!(
         last_v_post, last_v_pre,
@@ -509,7 +509,7 @@ async fn last_committed_version_persists_across_restart() {
 #[tokio::test]
 async fn commit_tx_advances_table_counter() {
     let repo = make_repo();
-    repo.add_table_for_test(crate::tx::table::TableConfig::new("t"));
+    repo.add_table_for_test(crate::table::TableConfig::new("t"));
     let tbl = repo.get_table("t").await.unwrap();
     let before = tbl.counter().get().await.unwrap();
 

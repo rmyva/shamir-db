@@ -1,5 +1,5 @@
 //! Tests for owner drop and physical resource release.
-use crate::cold_reconcile::lifecycle::{
+use crate::tx::cold_reconcile::lifecycle::{
     spawn_worker, InstallError, RepoWorkerLifecycle, WorkerLease,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
