@@ -1,10 +1,38 @@
+use crate::access::{Actor, ResourceMeta};
 use crate::engine::repo::{BoxRepoFactory, RepoConfig};
 use crate::shamir_db::{ShamirDb, SystemStoreConfig};
 use crate::types::value::InnerValue;
 use futures::StreamExt;
 use shamir_test_diag::FlakeGuard;
+use shamir_types::types::common::new_map;
 use shamir_types::types::record_id::RecordId;
+use shamir_types::types::value::QueryValue;
 use tokio::runtime::Builder;
+
+/// Not a latency assertion: these tests need the clean shutdown to finish.
+/// Windows CI runners stall every process's fsync for 10+ s at times, so any
+/// wall-clock budget here is a false failure; nextest's per-test timeout is
+/// the hang detector and names the test.
+const BOOT_TEST_FLUSH_BUDGET: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// Re-open the system store expecting a boot rejection, retrying while the
+/// dropped instance still holds the fjall file lock (released lazily after
+/// the drop). Returns the rejection's message.
+async fn boot_rejection(path: std::path::PathBuf) -> String {
+    for _ in 0..100 {
+        match ShamirDb::init(SystemStoreConfig::Fjall(path.clone())).await {
+            Ok(_) => panic!("boot must be rejected"),
+            Err(e) => {
+                let message = e.to_string();
+                if !message.contains("Locked") {
+                    return message;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        }
+    }
+    panic!("fjall lock was not released within the retry window");
+}
 
 async fn rows(table: &crate::engine::table::TableManager) -> Vec<(RecordId, InnerValue)> {
     table
@@ -22,6 +50,35 @@ fn assert_exact_rows(actual: &[(RecordId, InnerValue)], expected: &[(RecordId, I
     for row in expected {
         assert!(actual.contains(row));
     }
+}
+
+#[tokio::test]
+async fn rv_db_reserved_name_persisted_catalogue_is_rejected_on_boot() {
+    // Removing `validate_catalogue_db_names(&db_records)?` from core.rs makes this test pass on the broken build.
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("system.redb");
+    let db = ShamirDb::init(SystemStoreConfig::Fjall(path.clone()))
+        .await
+        .unwrap();
+    let mut fields = new_map();
+    fields.insert("name".into(), QueryValue::Str("users".into()));
+    let record = QueryValue::Map(fields);
+    db.system_store()
+        .save_database(
+            "users",
+            &record,
+            &ResourceMeta::owned_enforced(Actor::System),
+        )
+        .await
+        .unwrap();
+    db.system_store()
+        .flush_buffers_with_quiesce_timeout(BOOT_TEST_FLUSH_BUDGET)
+        .await
+        .unwrap();
+    drop(db);
+    let error = boot_rejection(path).await;
+    assert!(error.contains("users"), "unexpected boot error: {error}");
+    assert!(error.contains("reserved"), "unexpected boot error: {error}");
 }
 
 #[test]

@@ -9,7 +9,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use sha2::Digest;
-use shamir_db::{ShamirDb, SystemStoreConfig};
+use shamir_db::{is_reserved_db_name, DbError, ShamirDb, SystemStoreConfig};
 use shamir_server_security::user_directory::FjallUserDirectory;
 use shamir_sync::format_stamp::{inspect, StampState};
 use std::io::Read;
@@ -30,6 +30,15 @@ use crate::engine::server::wait_stores_released;
 /// mirrored here): how long we poll for every fjall store under a directory
 /// to drop its lock before failing closed.
 const STORE_RELEASE_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn reject_reserved_name(name: &str) -> Result<(), LogicalImportError> {
+    if is_reserved_db_name(name) {
+        return Err(LogicalImportError::Engine(DbError::Validation(format!(
+            "database name '{name}' is reserved by the server"
+        ))));
+    }
+    Ok(())
+}
 
 /// Summary of a completed (or idempotently accepted) import.
 #[derive(Clone, Debug)]
@@ -55,12 +64,18 @@ pub async fn import(
     // Exclusive ownership BEFORE the target is inspected.
     let lock = ImportLock::acquire(&args.target)?;
     progress("lock acquired");
+    if let Some(name) = args.as_db.as_deref() {
+        reject_reserved_name(name)?;
+    }
     if let Some(report) = retry_existing(&args, &cancel).await? {
         drop(lock);
         return Ok(report);
     }
     prepare_target_name(&args.target)?;
     let preflight = Preflight::run(&args.input, &args, &cancel)?;
+    if args.as_db.is_none() {
+        reject_reserved_name(&preflight.database.name)?;
+    }
     progress(&format!(
         "preflight verified: {} identities, {} repositories, {} tables",
         preflight.identities.len(),
@@ -240,6 +255,7 @@ async fn retry_existing(
         .as_db
         .clone()
         .unwrap_or_else(|| preflight.database.name.clone());
+    reject_reserved_name(&db_name)?;
     if !receipt.matches(
         &artifact_sha256(&args.input, cancel)?,
         &preflight.database.name,

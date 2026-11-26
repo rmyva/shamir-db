@@ -10,3 +10,5 @@ mod fixture;
 mod online_tests;
 #[path = "pinned_properties.rs"]
 mod pinned_properties;
+#[path = "reserved_name_refusal_tests.rs"]
+mod reserved_name_refusal_tests;

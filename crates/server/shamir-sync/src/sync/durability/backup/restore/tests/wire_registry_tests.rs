@@ -23,13 +23,41 @@ fn reserved_store_components_match_shared_names_exactly() {
             wal: (format!("{name}/wal"), 0),
             v_star: 0,
         };
-        assert!(super::super::catalogue::reject_reserved_store_dir(&repo)
+        assert!(super::super::catalogue::reject_reserved_store_route(&repo)
             .unwrap_err()
             .to_string()
             .contains(name));
     }
 }
 
+#[test]
+fn wal_route_reserved_components_are_literal_and_case_sensitive() {
+    let repo = super::super::catalogue::CapturedRepo {
+        db: "ordinary_db".into(),
+        repo: "repo".into(),
+        store_dir: "ordinary_db/repo".into(),
+        wal: ("ordinary_db/wal".into(), 0),
+        v_star: 0,
+    };
+    // A normalized comparison would wrongly reject the case variant used by server-produced routes.
+    for name in shamir_db::RESERVED_DB_NAMES {
+        assert!(
+            super::super::catalogue::reject_reserved_wal_dir(Some(name), &repo)
+                .unwrap_err()
+                .to_string()
+                .contains(name)
+        );
+    }
+    let error = super::super::catalogue::reject_reserved_wal_dir(Some("users"), &repo).unwrap_err();
+    assert!(matches!(error, RestoreError::Consistency { .. }));
+    assert!(error
+        .to_string()
+        .contains("captured wal_dir claims reserved destination 'users'"));
+    assert!(super::super::catalogue::reject_reserved_wal_dir(Some("Users"), &repo).is_ok());
+    assert!(super::super::catalogue::reject_reserved_wal_dir(None, &repo).is_ok());
+}
+
+/// Bounded so a wedged `tokio::fs::read` cannot hang CI.
 const CALL_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Encode `map` as MessagePack bytes the way the boot decoder would

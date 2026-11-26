@@ -138,7 +138,7 @@ pub(super) async fn prepare_staged_catalogue(
     let mut routes: BTreeMap<(String, String), PathBuf> = BTreeMap::new();
     let mut wal_routes: Vec<(String, PathBuf)> = Vec::with_capacity(captured.len());
     for repo in captured {
-        reject_reserved_store_dir(repo)?;
+        reject_reserved_store_route(repo)?;
         let store_path = join_manifest_rel(stage, &repo.store_dir);
         require_fjall_store(&store_path, &repo.label())?;
         let store_canonical =
@@ -166,16 +166,7 @@ pub(super) async fn prepare_staged_catalogue(
             });
         }
         let wal_path = join_manifest_rel(stage, &repo.wal.0);
-        if let Some(first) = first_top_level(&wal_path, stage) {
-            // Restore matches literal server-produced components exactly,
-            // unlike normalized creation-side user-name validation.
-            if RESERVED_DB_NAMES.contains(&first.as_str()) {
-                return Err(RestoreError::Consistency {
-                    repo: repo.label(),
-                    reason: format!("captured wal_dir claims reserved destination '{first}'"),
-                });
-            }
-        }
+        reject_reserved_wal_dir(first_top_level(&wal_path, stage).as_deref(), repo)?;
         let wal_canonical = canonical(&wal_path, &repo.label(), "captured wal_dir")?;
         for (other_label, other_wal) in &wal_routes {
             if *other_wal == wal_canonical
@@ -461,7 +452,23 @@ fn first_top_level(path: &Path, stage: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
-pub(super) fn reject_reserved_store_dir(repo: &CapturedRepo) -> Result<(), RestoreError> {
+pub(super) fn reject_reserved_wal_dir(
+    first: Option<&str>,
+    repo: &CapturedRepo,
+) -> Result<(), RestoreError> {
+    // Restore matches literal server-produced components exactly, unlike normalized creation-side user-name validation.
+    if let Some(first) = first {
+        if RESERVED_DB_NAMES.contains(&first) {
+            return Err(RestoreError::Consistency {
+                repo: repo.label(),
+                reason: format!("captured wal_dir claims reserved destination '{first}'"),
+            });
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn reject_reserved_store_route(repo: &CapturedRepo) -> Result<(), RestoreError> {
     match repo
         .store_dir
         .split('/')

@@ -223,6 +223,31 @@ async fn rename_refuses_reserved_destination() {
     assert!(error.to_string().contains("reserved"));
 }
 #[tokio::test]
+async fn rename_refuses_normalized_reserved_destination_spellings() {
+    let db = ShamirDb::init_memory().await.unwrap();
+    db.create_db("ordinary").await.unwrap();
+    // Exact `__system__`-only checks would accept the normalized reserved spellings.
+    for name in ["Users", "USERS", "users.", "users ", "audit"] {
+        let error = db
+            .rename_db("ordinary", name)
+            .await
+            .expect_err("reserved destination must be refused");
+        assert!(matches!(error, crate::DbError::Validation(_)));
+        assert!(error.to_string().contains("reserved"));
+    }
+}
+
+#[tokio::test]
+async fn create_accepts_non_reserved_names() {
+    let db = ShamirDb::init_memory().await.unwrap();
+    // Prefix/substring matching would incorrectly reject these valid names.
+    for name in ["users2", "my_users", "audit_log"] {
+        db.create_db(name).await.unwrap();
+        assert!(db.has_db(name));
+    }
+}
+
+#[tokio::test]
 async fn rename_from_reserved_name_still_works() {
     let db = ShamirDb::init_memory().await.unwrap();
     let identity = DatabaseIdentity::new();

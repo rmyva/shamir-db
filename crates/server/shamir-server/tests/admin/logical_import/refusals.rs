@@ -11,6 +11,7 @@ use crate::logical_import::common::build_fixture;
 use crate::logical_import::common::export_args;
 use crate::logical_import::common::export_now;
 use crate::logical_import::common::handcrafted_bytes;
+use crate::logical_import::common::handcrafted_bytes_for_database;
 use crate::logical_import::common::import_args;
 use crate::logical_import::common::import_now;
 use crate::logical_import::common::runtime;
@@ -19,6 +20,26 @@ use crate::logical_import::common::write_bytes;
 /// An artifact whose database owner names an identity that is not exported
 /// fails the preflight coherence check; the target stays absent with no
 /// lock or stage left behind.
+#[test]
+fn reserved_artifact_database_is_refused_before_stage_and_keeps_typed_error() {
+    // Removing the preflight-name guard makes this artifact import proceed into the stage.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let artifact = write_bytes(
+        &root.join("reserved.mpack"),
+        &handcrafted_bytes_for_database("users", None, None),
+    );
+    let target = root.join("target");
+    let error = import_now(&import_args(&artifact, &target), CancellationToken::new()).unwrap_err();
+    assert!(matches!(
+        error,
+        LogicalImportError::Engine(shamir_db::DbError::Validation(_))
+    ));
+    assert!(error.to_string().contains("reserved"));
+    assert!(error.to_string().contains("users"));
+    assert_no_leftovers(&root, &target);
+}
+
 #[test]
 fn unresolved_owner_is_refused_with_nothing_published() {
     let dir = tempfile::tempdir().unwrap();
