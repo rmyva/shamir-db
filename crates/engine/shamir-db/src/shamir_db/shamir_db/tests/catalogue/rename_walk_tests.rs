@@ -207,6 +207,7 @@ fn reserved_database_names_apply_only_documented_normalization() {
     }
     // Catches broad prefix, case-insensitive, length, character-class, and suffix matching in the generated-shape rules.
     let hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let hash32 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     for name in [
         format!("seed-{}", &hash[..63]),
         format!("seed-{hash}a"),
@@ -216,11 +217,37 @@ fn reserved_database_names_apply_only_documented_normalization() {
         "seed-".to_owned(),
         format!("seed-{hash}-attempt-"),
         format!("seed-{hash}-attempt-x"),
-        format!("seed-{hash}-attempt-18446744073709551615"),
+        format!("seed-{hash}-attempt-01"),
+        format!("seed-{hash}-attempt-007"),
         format!("seed-{hash}-attempt-1-x"),
         "audit.log.0000000000000000001".to_owned(),
         "audit.log.x".to_owned(),
         "audit.log.0000000000000000000x".to_owned(),
+    ] {
+        assert!(!is_reserved_db_name(&name), "{name:?} should be accepted");
+    }
+    // Catches acceptance of forms that Rust integer parsing tolerates but the generator's Display output never emits.
+    for name in [
+        format!("seed-{hash}-attempt-01"),
+        format!("seed-{hash}-attempt-007"),
+        format!("seed-{hash}-attempt-+1"),
+        format!("seed-{hash}-attempt--1"),
+    ] {
+        assert!(!is_reserved_db_name(&name), "{name:?} should be accepted");
+    }
+    // Catches over-reserving the exclusive u64::MAX range boundary.
+    assert!(!is_reserved_db_name(&format!("seed-{hash}-attempt-18446744073709551615")));
+    // Catches failure to reserve canonical generated attempts, including attempt zero from the generator's 0..u64::MAX range.
+    assert!(is_reserved_db_name(&format!("seed-{hash}-attempt-0")));
+    assert!(is_reserved_db_name(&format!("seed-{hash}-attempt-1")));
+    // Catches missing/over-broad `.seed-` generated export staging shape rules.
+    assert!(is_reserved_db_name(&format!(".seed-{hash32}")));
+    for name in [
+        format!(".seed-{}", &hash32[..31]),
+        format!(".seed-{hash32}a"),
+        format!(".seed-{}g", &hash32[..31]),
+        format!(".seed-{}A", &hash32[..31]),
+        format!("seed-{hash32}"),
     ] {
         assert!(!is_reserved_db_name(&name), "{name:?} should be accepted");
     }

@@ -20,6 +20,7 @@ fn probe_target_stopped_read_only(data_dir: &Path) -> Result<(), RestoreError> {
         "server_meta/lock",
         "shamir_db_meta.redb/lock",
     ];
+    let mut held = Vec::new();
     for relative in LOCK_FILES {
         let path = data_dir.join(relative);
         let file = match File::open(&path) {
@@ -28,12 +29,13 @@ fn probe_target_stopped_read_only(data_dir: &Path) -> Result<(), RestoreError> {
             Err(error) => return Err(RestoreError::Io(error)),
         };
         match file.try_lock_shared() {
-            Ok(()) => drop(file),
+            Ok(()) => held.push(file),
             Err(std::fs::TryLockError::WouldBlock) => {
                 return Err(RestoreError::ServerRunning(data_dir.to_path_buf()))
             }
             Err(std::fs::TryLockError::Error(error)) => return Err(RestoreError::Io(error)),
         }
     }
+    drop(held);
     Ok(())
 }

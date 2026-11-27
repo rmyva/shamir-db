@@ -280,30 +280,41 @@ fn nameless_catalogue_database_row_is_typed_corruption() {
     ));
 }
 
-#[tokio::test]
-async fn staged_catalogue_name_scan_refuses_reserved_database_rows() {
+#[test]
+fn staged_catalogue_name_scan_refuses_reserved_database_rows() {
     // Catches removal of the pre-publication refusal while bypassing create_db's reserved-name admission guard.
     let stage = TempDir::new().expect("temp dir");
-    let store = shamir_db::shamir_db::system_store::SystemStore::init(
-        shamir_db::shamir_db::system_store::SystemStoreConfig::Fjall(
-            stage.path().join("shamir_db_meta.redb"),
-        ),
-    )
-    .await
-    .expect("initialize staged catalogue");
-    let mut record = shamir_types::types::common::new_map();
-    record.insert("name".to_string(), QueryValue::Str("users".to_string()));
-    store
-        .save_database(
-            "users",
-            &QueryValue::Map(record),
-            &shamir_db::access::ResourceMeta::default(),
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("catalogue creation runtime");
+    runtime.block_on(async {
+        let store = shamir_db::shamir_db::system_store::SystemStore::init(
+            shamir_db::shamir_db::system_store::SystemStoreConfig::Fjall(
+                stage.path().join("shamir_db_meta.redb"),
+            ),
         )
         .await
-        .expect("inject legacy reserved row");
-    drop(store);
-    let error = super::super::catalogue::validate_staged_db_names(stage.path())
-        .await
+        .expect("initialize staged catalogue");
+        let mut record = shamir_types::types::common::new_map();
+        record.insert("name".to_string(), QueryValue::Str("users".to_string()));
+        store
+            .save_database(
+                "users",
+                &QueryValue::Map(record),
+                &shamir_db::access::ResourceMeta::default(),
+            )
+            .await
+            .expect("inject legacy reserved row");
+        drop(store);
+    });
+    drop(runtime);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("catalogue scan runtime");
+    let error = runtime
+        .block_on(super::super::catalogue::validate_staged_db_names(stage.path()))
         .expect_err("reserved catalogue row must refuse");
     assert!(matches!(
         &error,
@@ -326,43 +337,54 @@ async fn staged_catalogue_file_is_refused_as_wrong_type() {
     assert!(matches!(error, RestoreError::Consistency { .. }));
 }
 
-#[tokio::test]
-async fn staged_catalogue_name_scan_accepts_internal_and_non_reserved_rows() {
+#[test]
+fn staged_catalogue_name_scan_accepts_internal_and_non_reserved_rows() {
     // Catches loss of the __system__ legacy-row exception or overbroad refusal of an ordinary database.
     let stage = TempDir::new().expect("temp dir");
-    let store = shamir_db::shamir_db::system_store::SystemStore::init(
-        shamir_db::shamir_db::system_store::SystemStoreConfig::Fjall(
-            stage.path().join("shamir_db_meta.redb"),
-        ),
-    )
-    .await
-    .expect("initialize staged catalogue");
-    for name in ["__system__", "users2"] {
-        let mut record = shamir_types::types::common::new_map();
-        record.insert("name".to_string(), QueryValue::Str(name.to_string()));
-        store
-            .save_database(
-                name,
-                &QueryValue::Map(record),
-                &shamir_db::access::ResourceMeta::default(),
-            )
-            .await
-            .expect("inject catalogue row");
-    }
-    let rows = store.load_databases().await.expect("load catalogue rows");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("catalogue creation runtime");
+    let rows = runtime.block_on(async {
+        let store = shamir_db::shamir_db::system_store::SystemStore::init(
+            shamir_db::shamir_db::system_store::SystemStoreConfig::Fjall(
+                stage.path().join("shamir_db_meta.redb"),
+            ),
+        )
+        .await
+        .expect("initialize staged catalogue");
+        for name in ["__system__", "users2"] {
+            let mut record = shamir_types::types::common::new_map();
+            record.insert("name".to_string(), QueryValue::Str(name.to_string()));
+            store
+                .save_database(
+                    name,
+                    &QueryValue::Map(record),
+                    &shamir_db::access::ResourceMeta::default(),
+                )
+                .await
+                .expect("inject catalogue row");
+        }
+        let rows = store.load_databases().await.expect("load catalogue rows");
+        drop(store);
+        rows
+    });
+    drop(runtime);
     assert!(rows
         .iter()
         .any(|row| row.get("name").and_then(QueryValue::as_str) == Some("__system__")));
     assert!(rows
         .iter()
         .any(|row| row.get("name").and_then(QueryValue::as_str) == Some("users2")));
-    drop(store);
     assert!(super::super::catalogue::validate_catalogue_db_name_records(&rows).is_ok());
-    assert!(
-        super::super::catalogue::validate_staged_db_names(stage.path())
-            .await
-            .is_ok()
-    );
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("catalogue scan runtime");
+    let result = runtime.block_on(super::super::catalogue::validate_staged_db_names(stage.path()));
+    if let Err(error) = result {
+        panic!("staged scan refused: {error:?}");
+    }
 }
 
 /// Bounded so a wedged `tokio::fs::read` cannot hang CI.

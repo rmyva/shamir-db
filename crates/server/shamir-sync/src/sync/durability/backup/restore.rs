@@ -242,8 +242,14 @@ pub struct RestoreReport {
 /// staging and propagates its typed error. Online restores use read-only
 /// lock probes instead. `force` skips liveness probes.
 ///
-/// Before publication, every refusal leaves the live target byte-identical.
-/// `SwapFailedRollbackSucceeded` and `SwapPartialFailure` are separate swap
+/// Before publication, refusals from the production read-only probe leave
+/// the live target byte-identical; a caller-supplied callback can itself
+/// write to `data_dir`, so that promise does not apply to a writing callback.
+/// The production probe checks the three lock artifacts (`.shamir.lock`,
+/// `server_meta/lock`, and `shamir_db_meta.redb/lock`) without opening or
+/// validating live `server_meta`, updating `last_started_at`, or backfilling
+/// a token key. `--force` skips liveness checks, but never skips the staged
+/// catalogue scan. `SwapFailedRollbackSucceeded` and `SwapPartialFailure` are separate swap
 /// failures; the latter may leave the live pathname absent. A target without
 /// an external sibling staging location is refused before source access.
 ///
@@ -292,7 +298,9 @@ where
     F: FnOnce(&Path) -> Result<(), RestoreError>,
     B: FnOnce(),
 {
-    if !has_external_staging_location(data_dir) {
+    let canonical_target = staged_listing::canonicalize_target(data_dir).map_err(RestoreError::Io)?;
+    let data_dir = canonical_target.as_path();
+    if !staged_listing::has_external_staging_location(data_dir) {
         return Err(RestoreError::DataDirHasNoStagingLocation(
             data_dir.to_path_buf(),
         ));
@@ -768,15 +776,6 @@ where
         );
     }
     Ok(report)
-}
-
-fn has_external_staging_location(data_dir: &Path) -> bool {
-    let text = data_dir.to_string_lossy();
-    let windows_drive_root = text.len() == 3
-        && text.as_bytes()[0].is_ascii_alphabetic()
-        && text.as_bytes()[1] == b':'
-        && matches!(text.as_bytes()[2], b'/' | b'\\');
-    !windows_drive_root && data_dir.parent().is_some_and(|parent| parent != data_dir)
 }
 
 const RESTORE_MARKER: &str = ".shamir_restore_epoch";

@@ -234,6 +234,20 @@ fn in_doubt_rename_reopens_as_exactly_one_catalogued_incarnation() {
 
 #[test]
 fn production_reserved_names_cover_real_data_root_entries() {
+    // Catches restart-side drift: the generator emits canonical attempts only, while export staging uses `.seed-` plus 32 lowercase hex digits.
+    let hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    assert!(is_reserved_db_name(&format!("seed-{hash}-attempt-0")));
+    assert!(is_reserved_db_name(&format!(".seed-{}", "b".repeat(32))));
+    for name in [
+        format!("seed-{hash}-attempt-01"),
+        format!("seed-{hash}-attempt-+1"),
+        format!("seed-{hash}-attempt--1"),
+        format!("seed-{hash}-attempt-18446744073709551615"),
+        format!(".seed-{}", "b".repeat(31)),
+        format!(".seed-{}", "B".repeat(32)),
+    ] {
+        assert!(!is_reserved_db_name(&name), "{name:?} is not emitted");
+    }
     // Catches removing a real fixed system-store name from production or adding a store without updating this fixed-inventory pin.
     const REAL_DATA_ROOT_ENTRIES: [&str; 20] = [
         "__system__",

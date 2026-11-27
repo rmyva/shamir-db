@@ -14,7 +14,7 @@
 //! the swap-failure message split and the earlier-step cleanup.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use tempfile::TempDir;
 
@@ -22,7 +22,7 @@ use shamir_sync::format_stamp::{decode, FormatStamp, STAMP_FILE_NAME};
 use shamir_test_diag::FlakeGuard;
 
 use crate::backup::backup;
-use crate::restore::{restore, restore_with_probe, RestoreError};
+use crate::restore::{restore, RestoreError};
 use crate::server_meta::ServerMetaStore;
 
 /// Build a well-formed `backup::backup` snapshot (with a valid manifest) at
@@ -38,6 +38,24 @@ fn make_snapshot(root: &Path) -> std::path::PathBuf {
     report.dest_dir
 }
 
+fn tree_bytes(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut entries = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(directory).expect("read tree") {
+            let entry = entry.expect("tree entry");
+            let path = entry.path();
+            if entry.file_type().expect("file type").is_dir() {
+                pending.push(path);
+            } else {
+                entries.push((path.strip_prefix(root).unwrap().to_path_buf(), fs::read(path).expect("read tree file")));
+            }
+        }
+    }
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    entries
+}
+
 /// Catches a production probe that opens server_meta: it could refuse through a different path and persist last_started_at; the read-only probe must refuse on a real lock and pass after release.
 #[test]
 fn production_restore_probe_refuses_real_server_meta_lock_then_allows_restore() {
@@ -48,6 +66,7 @@ fn production_restore_probe_refuses_real_server_meta_lock_then_allows_restore() 
     fs::write(data_dir.join("original.txt"), b"original").unwrap();
     let held_meta = ServerMetaStore::open_or_init(data_dir.join("server_meta"))
         .expect("hold target metadata lock");
+    let before_restore_meta_tree = tree_bytes(&data_dir.join("server_meta"));
 
     let error = restore(&snapshot, &data_dir, false).expect_err("held lock must refuse restore");
     assert!(matches!(error, RestoreError::ServerRunning(ref path) if path == &data_dir));
@@ -66,7 +85,14 @@ fn production_restore_probe_refuses_real_server_meta_lock_then_allows_restore() 
         }));
 
     drop(held_meta);
-    restore(&snapshot, &data_dir, false).expect("restore proceeds once the lock is released");
+    let report = restore(&snapshot, &data_dir, false)
+        .expect("restore proceeds once the lock is released");
+    let backup = report.pre_restore_backup.expect("existing target is preserved");
+    assert_eq!(
+        before_restore_meta_tree,
+        tree_bytes(&backup.join("server_meta")),
+        "production read-only probe must not write the moved-aside target's server_meta tree"
+    );
     assert_eq!(fs::read(data_dir.join("a.txt")).unwrap(), b"hello");
 }
 
