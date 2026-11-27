@@ -192,7 +192,7 @@ async fn run_phase(phase: &'static str, expect_checkpoint: bool) {
     let mut child = tokio::process::Command::new(exe)
         .args([
             "--exact",
-            "tx::recovery::clean_horizon::tests::crash_matrix_tests::child_entrypoint",
+            "tx::tests::clean_horizon_tests::crash_matrix_tests::child_entrypoint",
             "--nocapture",
         ])
         .env(CHILD, "1")

@@ -308,7 +308,7 @@ async fn subprocess_crashes_during_reconcile_reopen_twice() {
         let mut child = tokio::process::Command::new(executable)
             .args([
                 "--exact",
-                "tx::cold_reconcile_tests::reconcile_tests::reconcile_crash_child_entrypoint",
+                "tx::tests::cold_reconcile_tests::reconcile_tests::reconcile_crash_child_entrypoint",
                 "--nocapture",
             ])
             .env(CHILD, "1")

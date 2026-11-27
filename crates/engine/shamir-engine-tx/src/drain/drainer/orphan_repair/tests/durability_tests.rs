@@ -230,7 +230,7 @@ async fn run_child(mode: &str) -> (PathBuf, tempfile::TempDir, std::process::Exi
     let mut child = tokio::process::Command::new(std::env::current_exe().expect("test executable"))
         .args([
             "--exact",
-            "tx::drain::drainer::orphan_repair::tests::durability_tests::child_entrypoint",
+            "tx::tests::orphan_repair_tests::durability_tests::child_entrypoint",
             "--nocapture",
         ])
         .env(CHILD, "1")

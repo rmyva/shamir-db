@@ -19628,30 +19628,6 @@ to_item = "shamir-engine-tx::lib::commit::pipeline::admission::close_helpers::cl
 reason = "R4c: the tx layer becomes the crate shamir-engine-tx: moved with its module"
 owner = "<wave-R4c>"
 
-[[moved]]
-path = "crates/engine/shamir-engine/src/tx/recovery/clean_horizon/tests/checkpoint_seam_tests.rs"
-item = "shamir-engine::lib::tx::recovery::clean_horizon::tests::checkpoint_seam_tests::checkpoint_failure_prevents_unlink_then_retry_catches_up"
-to_path = "crates/engine/shamir-engine-tx/src/recovery/clean_horizon/tests/checkpoint_seam_tests.rs"
-to_item = "shamir-engine-tx::lib::recovery::clean_horizon::tests::checkpoint_seam_tests::checkpoint_failure_prevents_unlink_then_retry_catches_up"
-reason = "R4c: the tx layer becomes the crate shamir-engine-tx: moved with its module"
-owner = "<wave-R4c>"
-
-[[moved]]
-path = "crates/engine/shamir-engine/src/tx/recovery/cold_reconcile/lifecycle/tests/supervisor_tests.rs"
-item = "shamir-engine::lib::tx::recovery::cold_reconcile::lifecycle::tests::supervisor_tests::protected_local_resource_survives_timeout_until_worker_join"
-to_path = "crates/engine/shamir-engine-tx/src/recovery/cold_reconcile/lifecycle/tests/supervisor_tests.rs"
-to_item = "shamir-engine-tx::lib::recovery::cold_reconcile::lifecycle::tests::supervisor_tests::protected_local_resource_survives_timeout_until_worker_join"
-reason = "R4c: the tx layer becomes the crate shamir-engine-tx: moved with its module"
-owner = "<wave-R4c>"
-
-[[moved]]
-path = "crates/engine/shamir-engine/src/tx/recovery/cold_reconcile/tests/reconcile_tests.rs"
-item = "shamir-engine::lib::tx::recovery::cold_reconcile::tests::reconcile_tests::subprocess_crashes_during_reconcile_reopen_twice"
-to_path = "crates/engine/shamir-engine-tx/src/recovery/cold_reconcile/tests/reconcile_tests.rs"
-to_item = "shamir-engine-tx::lib::recovery::cold_reconcile::tests::reconcile_tests::subprocess_crashes_during_reconcile_reopen_twice"
-reason = "R4c: the tx layer becomes the crate shamir-engine-tx: moved with its module"
-owner = "<wave-R4c>"
-
 [[removed]]
 path = "crates/engine/shamir-engine/src/tx/commit/pipeline/admission/tests/mod.rs"
 item = "shamir-engine::lib::tx::commit::pipeline::admission::tests::close_helpers"
@@ -20442,4 +20418,128 @@ owner = "<wave-R4c>"
 path = "crates/engine/shamir-engine-tx/src/commit/pipeline/admission/close_helpers.rs"
 item = "close"
 reason = "R4c: the tx layer becomes the crate shamir-engine-tx: item crosses a module or layer boundary"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "crates/engine/shamir-engine/src/tx/recovery/clean_horizon/tests/checkpoint_seam_tests.rs"
+item = "shamir-engine::lib::tx::recovery::clean_horizon::tests::checkpoint_seam_tests::checkpoint_failure_prevents_unlink_then_retry_catches_up"
+to_path = "crates/engine/shamir-engine-tx/src/recovery/clean_horizon/tests/checkpoint_seam_tests.rs"
+to_item = "shamir-engine::lib::tx::tests::clean_horizon_tests::checkpoint_seam_tests::checkpoint_failure_prevents_unlink_then_retry_catches_up"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "crates/engine/shamir-engine/src/tx/recovery/cold_reconcile/lifecycle/tests/supervisor_tests.rs"
+item = "shamir-engine::lib::tx::recovery::cold_reconcile::lifecycle::tests::supervisor_tests::protected_local_resource_survives_timeout_until_worker_join"
+to_path = "crates/engine/shamir-engine-tx/src/recovery/cold_reconcile/lifecycle/tests/supervisor_tests.rs"
+to_item = "shamir-engine::lib::tx::tests::cold_reconcile_lifecycle_tests::supervisor_tests::protected_local_resource_survives_timeout_until_worker_join"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "crates/engine/shamir-engine/src/tx/recovery/cold_reconcile/tests/reconcile_tests.rs"
+item = "shamir-engine::lib::tx::recovery::cold_reconcile::tests::reconcile_tests::subprocess_crashes_during_reconcile_reopen_twice"
+to_path = "crates/engine/shamir-engine-tx/src/recovery/cold_reconcile/tests/reconcile_tests.rs"
+to_item = "shamir-engine::lib::tx::tests::cold_reconcile_tests::reconcile_tests::subprocess_crashes_during_reconcile_reopen_twice"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: moved with its module"
+owner = "<wave-R4c>"
+
+[[changed]]
+path = "crates/engine/shamir-engine-tx/src/replication/follower_durability/receipt/tests/checkpoint_uncertain_tests.rs"
+item = "shamir-engine::lib::tx::tests::follower_receipt_tests::checkpoint_uncertain_tests::materialization_batch_failure_preserves_prepared_receipt_and_retry_allocation"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: imports, bounds or signature follow the move"
+owner = "<wave-R4c>"
+
+[[changed]]
+path = "crates/engine/shamir-engine-tx/src/replication/follower_durability/receipt/tests/checkpoint_uncertain_tests.rs"
+item = "shamir-engine::lib::tx::tests::follower_receipt_tests::checkpoint_uncertain_tests::multichunk_materialization_failure_resumes_same_receipt_without_extra_allocations"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: imports, bounds or signature follow the move"
+owner = "<wave-R4c>"
+
+[[changed]]
+path = "crates/engine/shamir-engine-tx/src/replication/follower_durability/receipt/tests/checkpoint_uncertain_tests.rs"
+item = "shamir-engine::lib::tx::tests::follower_receipt_tests::checkpoint_uncertain_tests::post_checkpoint_flush_failure_with_open_gap_is_done"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: imports, bounds or signature follow the move"
+owner = "<wave-R4c>"
+
+[[changed]]
+path = "crates/engine/shamir-engine-tx/src/replication/follower_durability/receipt/tests/receipt_apply_tests.rs"
+item = "shamir-engine::lib::tx::tests::follower_receipt_tests::receipt_apply_tests::upstream_bookmark_does_not_skip_unpublished_local_chunk"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: imports, bounds or signature follow the move"
+owner = "<wave-R4c>"
+
+[[changed]]
+path = "crates/engine/shamir-engine-tx/src/replication/follower_durability/receipt/tests/receipt_apply_tests.rs"
+item = "shamir-engine::lib::tx::tests::follower_receipt_tests::receipt_apply_tests::post_checkpoint_flush_failure_fresh_chunk_is_done"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: imports, bounds or signature follow the move"
+owner = "<wave-R4c>"
+
+[[changed]]
+path = "crates/engine/shamir-engine-tx/src/replication/follower_durability/receipt/tests/receipt_apply_tests.rs"
+item = "shamir-engine::lib::tx::tests::follower_receipt_tests::receipt_apply_tests::post_checkpoint_flush_failure_resumed_chunk_is_done"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: imports, bounds or signature follow the move"
+owner = "<wave-R4c>"
+
+[[changed]]
+path = "crates/engine/shamir-engine-tx/src/tests/drain/startup_seed_tests.rs"
+item = "shamir-engine::lib::tx::tests::drain::startup_seed_tests::startup_seed_waits_and_filters_delayed_snapshot"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: imports, bounds or signature follow the move"
+owner = "<wave-R4c>"
+
+[[changed]]
+path = "crates/engine/shamir-engine-tx/src/tests/drain/truncation_pin/wiring_tests.rs"
+item = "shamir-engine::lib::tx::tests::drain::truncation_pin_wiring_tests::drainer_retains_zero_floor_then_resumes_without_new_commits"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: imports, bounds or signature follow the move"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "crates/engine/shamir-engine/src/tx/commit/pipeline/admission/gate.rs"
+item = "shamir-engine::lib::tx::commit::pipeline::admission::gate::LEADER_REOPEN_WAIT_CAP"
+to_path = "crates/engine/shamir-engine-tx/src/commit/pipeline/admission/gate.rs"
+to_item = "shamir-engine-tx::lib::commit::pipeline::admission::gate::LEADER_REOPEN_WAIT_CAP"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: : moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "crates/engine/shamir-engine/src/tx/commit/pipeline/phase/commit/entry.rs"
+item = "shamir-engine::lib::tx::commit::pipeline::phase::commit::entry::maybe_crash"
+to_path = "crates/engine/shamir-engine-tx/src/commit/pipeline/phase/commit/entry.rs"
+to_item = "shamir-engine-tx::lib::commit::pipeline::phase::commit::entry::maybe_crash"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: : moved with its module"
+owner = "<wave-R4c>"
+
+[[removed]]
+path = "crates/engine/shamir-engine/src/tx/replication/follower_durability/receipt/checkpoint.rs"
+item = "shamir-engine::lib::tx::replication::apply_replicated::follower_durability::receipt::checkpoint::staged_checkpoint_outcome"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: : item left its module"
+owner = "<wave-R4c>"
+
+[[added]]
+path = "crates/engine/shamir-engine-tx/src/replication/follower_durability/receipt/checkpoint.rs"
+item = "shamir-engine-tx::lib::replication::apply_replicated::follower_durability::receipt::checkpoint::staged_checkpoint_outcome"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: : new item of the wave"
+owner = "<wave-R4c>"
+
+[[changed]]
+path = "crates/engine/shamir-engine-tx/src/drain/drainer/orphan_repair/tests/durability_tests.rs"
+item = "shamir-engine::lib::tx::tests::orphan_repair_tests::durability_tests::run_child"
+reason = "R4c: a subprocess test filter names the test at its new path in the facade tree"
+owner = "<wave-R4c>"
+
+[[changed]]
+path = "crates/engine/shamir-engine-tx/src/recovery/clean_horizon/tests/crash_matrix_tests.rs"
+item = "shamir-engine::lib::tx::tests::clean_horizon_tests::crash_matrix_tests::run_phase"
+reason = "R4c: a subprocess test filter names the test at its new path in the facade tree"
+owner = "<wave-R4c>"
+
+[[changed]]
+path = "crates/engine/shamir-engine-tx/src/recovery/cold_reconcile/tests/reconcile_tests.rs"
+item = "shamir-engine::lib::tx::tests::cold_reconcile_tests::reconcile_tests::subprocess_crashes_during_reconcile_reopen_twice"
+reason = "R4c: a subprocess test filter names the test at its new path in the facade tree"
+owner = "<wave-R4c>"
+
+[[changed]]
+path = "crates/engine/shamir-engine-tx/src/replication/follower_durability/receipt/tests/crash_subprocess_tests.rs"
+item = "shamir-engine::lib::tx::tests::follower_receipt_tests::crash_subprocess_tests::CHILD_TEST"
+reason = "R4c: a subprocess test filter names the test at its new path in the facade tree"
 owner = "<wave-R4c>"

@@ -35,7 +35,8 @@ use crate::tx::apply_replicated::follower_durability::test_seam::{self, Phase};
 use crate::tx::{ApplyPolicy, ReplicatedEvent};
 
 /// Full libtest path of the child scenario test in this binary.
-const CHILD_TEST: &str = "tx::replication::apply_replicated::follower_durability::receipt::tests::crash_subprocess_tests::receipt_crash_child_scenario";
+const CHILD_TEST: &str =
+    "tx::tests::follower_receipt_tests::crash_subprocess_tests::receipt_crash_child_scenario";
 
 // ---------------------------------------------------------------- helpers
 

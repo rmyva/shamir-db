@@ -339,8 +339,8 @@ owner = "<wave-R4c>"
 [[moved]]
 path = "shamir-engine"
 item = "tx::recovery::clean_horizon::tests::checkpoint_seam_tests::checkpoint_failure_prevents_unlink_then_retry_catches_up"
-to_path = "shamir-engine-tx"
-to_item = "recovery::clean_horizon::tests::checkpoint_seam_tests::checkpoint_failure_prevents_unlink_then_retry_catches_up"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::checkpoint_seam_tests::checkpoint_failure_prevents_unlink_then_retry_catches_up"
 reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
 owner = "<wave-R4c>"
 
@@ -835,8 +835,8 @@ owner = "<wave-R4c>"
 [[moved]]
 path = "shamir-engine"
 item = "tx::recovery::cold_reconcile::lifecycle::tests::supervisor_tests::protected_local_resource_survives_timeout_until_worker_join"
-to_path = "shamir-engine-tx"
-to_item = "recovery::cold_reconcile::lifecycle::tests::supervisor_tests::protected_local_resource_survives_timeout_until_worker_join"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::supervisor_tests::protected_local_resource_survives_timeout_until_worker_join"
 reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
 owner = "<wave-R4c>"
 
@@ -1019,8 +1019,8 @@ owner = "<wave-R4c>"
 [[moved]]
 path = "shamir-engine"
 item = "tx::recovery::cold_reconcile::tests::reconcile_tests::subprocess_crashes_during_reconcile_reopen_twice"
-to_path = "shamir-engine-tx"
-to_item = "recovery::cold_reconcile::tests::reconcile_tests::subprocess_crashes_during_reconcile_reopen_twice"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_tests::reconcile_tests::subprocess_crashes_during_reconcile_reopen_twice"
 reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
 owner = "<wave-R4c>"
 
