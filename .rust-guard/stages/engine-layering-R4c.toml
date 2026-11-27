@@ -20567,3 +20567,69 @@ path = "crates/engine/shamir-engine-tx/src/recovery/cold_reconcile/lifecycle/tes
 item = "shamir-engine::lib::tx::tests::cold_reconcile_lifecycle_tests::supervisor_tests::protected_local_resource_survives_timeout_until_worker_join"
 reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test body follows the move"
 owner = "<wave-R4c>"
+
+[[added]]
+path = "crates/engine/shamir-engine-tx/src/commit/pipeline/admission/gate.rs"
+item = "shamir-engine-tx::lib::commit::pipeline::admission::gate::_"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: new item of the wave"
+owner = "<wave-R4c>"
+
+[[changed]]
+path = "crates/engine/shamir-engine-tx/src/commit/core/durability_access.rs"
+item = "shamir-engine-tx::lib::commit::core::durability_access::RepoCore::note_unclean_open_bump"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: imports, bounds or signature follow the move"
+owner = "<wave-R4c>"
+
+[[changed]]
+path = "crates/engine/shamir-engine-tx/src/commit/pipeline/admission/gate.rs"
+item = "shamir-engine-tx::lib::commit::pipeline::admission::gate::LEADER_REOPEN_WAIT_CAP"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: imports, bounds or signature follow the move"
+owner = "<wave-R4c>"
+
+[[changed]]
+path = "crates/engine/shamir-engine-tx/src/commit/pipeline/phase/commit/entry.rs"
+item = "shamir-engine-tx::lib::commit::pipeline::phase::commit::entry::effective_max_tx_lifetime"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: imports, bounds or signature follow the move"
+owner = "<wave-R4c>"
+
+[[changed]]
+path = "crates/engine/shamir-engine-tx/src/commit/pipeline/phase/commit/entry.rs"
+item = "shamir-engine-tx::lib::commit::pipeline::phase::commit::entry::fire_post_validate_pre_publish_test_hook"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: imports, bounds or signature follow the move"
+owner = "<wave-R4c>"
+
+[[changed]]
+path = "crates/engine/shamir-engine-tx/src/commit/pipeline/phase/commit/entry.rs"
+item = "shamir-engine-tx::lib::commit::pipeline::phase::commit::entry::fire_async_index_tail_test_hook"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: imports, bounds or signature follow the move"
+owner = "<wave-R4c>"
+
+[[changed]]
+path = "crates/engine/shamir-engine-tx/src/commit/pipeline/phase/commit/entry/durability_completion.rs"
+item = "shamir-engine-tx::lib::commit::pipeline::phase::commit::entry::durability_completion::commit_wal_durability"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: imports, bounds or signature follow the move"
+owner = "<wave-R4c>"
+
+[[changed]]
+path = "crates/engine/shamir-engine-tx/src/commit/pipeline/phase/publish_journaled.rs"
+item = "shamir-engine-tx::lib::commit::pipeline::phase::publish_journaled::publish_journaled"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: imports, bounds or signature follow the move"
+owner = "<wave-R4c>"
+
+[[changed]]
+path = "crates/engine/shamir-engine-tx/src/preparation/pre_commit/claims.rs"
+item = "shamir-engine-tx::lib::preparation::pre_commit::claims::fire_post_prelock_pre_materialize_test_hook"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: imports, bounds or signature follow the move"
+owner = "<wave-R4c>"
+
+[[changed]]
+path = "crates/engine/shamir-engine-tx/src/recovery/cold_reconcile/follower.rs"
+item = "shamir-engine-tx::lib::recovery::cold_reconcile::follower::follower_certified_through"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: imports, bounds or signature follow the move"
+owner = "<wave-R4c>"
+
+[[changed]]
+path = "crates/engine/shamir-engine-tx/src/commit/pipeline/admission/gate.rs"
+item = "shamir-engine-tx::lib::commit::pipeline::admission::gate::LEADER_REOPEN_WAIT_CAP"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: imports, bounds or signature follow the move"
+owner = "<wave-R4c>"
