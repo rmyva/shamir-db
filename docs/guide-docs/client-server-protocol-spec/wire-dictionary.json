@@ -2942,9 +2942,7 @@
      "name": "Buffered",
      "wire": "buffered",
      "shape": "unit",
-     "serde": [
-      "default"
-     ]
+     "serde": []
     },
     {
      "name": "Synced",
@@ -2970,9 +2968,7 @@
      "name": "RefuseWrites",
      "wire": "refuse_writes",
      "shape": "unit",
-     "serde": [
-      "default"
-     ]
+     "serde": []
     },
     {
      "name": "DeclareGap",
@@ -2998,9 +2994,7 @@
      "name": "Durable",
      "wire": "durable",
      "shape": "unit",
-     "serde": [
-      "default"
-     ]
+     "serde": []
     },
     {
      "name": "CompletedReseed",
@@ -3017,7 +3011,7 @@
    "kind": "struct",
    "impl": "hand_written",
    "verdict": "named",
-   "reason": "hand-written serde impl: accepts str | [repo, table] seq | {repo, table} map (deserialize_any multi-shape)",
+   "reason": "hand-written multi-shape Deserialize (deserialize_any visitor accepts str | [repo, table] seq | {repo, table} map, table_ref.rs:71-109); Serialize emits ONLY a string (default repo) OR a 2-element tuple (repo, table) (table_ref.rs:42-50) - it NEVER emits the accepted {repo, table} map form, so the map arm is deserialize-only.",
    "serde": [],
    "fields": [
     {
@@ -3065,1314 +3059,2060 @@
    "kind": "enum",
    "impl": "hand_written",
    "verdict": "named",
-   "reason": "hand-written serde impl: Serialize forwards the WHOLE payload map verbatim (op.serialize(serializer), batch_op.rs:263-330) — payloads do NOT sit under an op-name key; Deserialize buffers the whole map and picks the operation by its DISCRIMINATOR FIELDS (op_kind.rs:17-110): from, insert_into, update, set, delete_from, create_table, drop_table, call, for_each, batch, subscribe, unsubscribe, cancel_request, cancel_tx, ... (abbreviated; ~93 ops in full)",
+   "reason": "hand-written serde impl: Serialize forwards the WHOLE payload map verbatim (op.serialize(serializer), batch_op.rs:263-330) - payloads do NOT sit under an op-name key; Deserialize buffers the whole map and picks the operation by its DISCRIMINATOR FIELD (op_kind.rs define_op_kinds!, see the ops array for the exact per-op key set). A FEW ops have special serializers: ApplicationSchema emits a 3-entry map (application_schema:true marker, \"operation\", \"payload\"; the marker is stripped before the typed op deserializes), and the Cancel* ops (CancelRequest/CancelTx/CancelCursorAdmin) are hand-written single-key maps (batch_op.rs:370-384). ApplicationSchema's activity op-name varies by inner SchemaMigrationAdminOp tag: admin:application_schema_status / admin:application_schema_plan / admin:apply_application_schema_migration. Update and Set share overlapping keys and are merged to Update when both discriminators are present.",
    "serde": [],
    "variants": [
     {
      "name": "Read",
-     "wire": "Read",
+     "wire": "from",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "ReadQuery",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "Insert",
-     "wire": "Insert",
+     "wire": "insert_into",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "InsertOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "Update",
-     "wire": "Update",
+     "wire": "update",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "UpdateOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "Set",
-     "wire": "Set",
+     "wire": "set",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "SetOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "Delete",
-     "wire": "Delete",
+     "wire": "delete_from",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "DeleteOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "CreateDb",
-     "wire": "CreateDb",
+     "wire": "create_db",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "CreateDbOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "DropDb",
-     "wire": "DropDb",
+     "wire": "drop_db",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "DropDbOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "CreateRepo",
-     "wire": "CreateRepo",
+     "wire": "create_repo",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "CreateRepoOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "DropRepo",
-     "wire": "DropRepo",
+     "wire": "drop_repo",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "DropRepoOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "RenameRepo",
-     "wire": "RenameRepo",
+     "wire": "rename_repo",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "RenameRepoOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "AlterRepo",
-     "wire": "AlterRepo",
+     "wire": "alter_repo",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "AlterRepoOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "RenameDb",
-     "wire": "RenameDb",
+     "wire": "rename_db",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "RenameDbOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "CreateTable",
-     "wire": "CreateTable",
+     "wire": "create_table",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "CreateTableOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "DropTable",
-     "wire": "DropTable",
+     "wire": "drop_table",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "DropTableOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "RenameTable",
-     "wire": "RenameTable",
+     "wire": "rename_table",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "RenameTableOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "CreateIndex",
-     "wire": "CreateIndex",
+     "wire": "create_index",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "CreateIndexOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "DropIndex",
-     "wire": "DropIndex",
+     "wire": "drop_index",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "DropIndexOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "RenameIndex",
-     "wire": "RenameIndex",
+     "wire": "rename_index",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "RenameIndexOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "SetBufferConfig",
-     "wire": "SetBufferConfig",
+     "wire": "set_buffer_config",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "SetBufferConfigOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "GetBufferConfig",
-     "wire": "GetBufferConfig",
+     "wire": "get_buffer_config",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "GetBufferConfigOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "AlterBufferConfig",
-     "wire": "AlterBufferConfig",
+     "wire": "alter_buffer_config",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "AlterBufferConfigOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "List",
-     "wire": "List",
+     "wire": "list",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "ListOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "StartMigration",
-     "wire": "StartMigration",
+     "wire": "start_migration",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "StartMigrationOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "CommitMigration",
-     "wire": "CommitMigration",
+     "wire": "commit_migration",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "CommitMigrationOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "RollbackMigration",
-     "wire": "RollbackMigration",
+     "wire": "rollback_migration",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "RollbackMigrationOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "MigrationStatus",
-     "wire": "MigrationStatus",
+     "wire": "migration_status",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "MigrationStatusOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "CreateUser",
-     "wire": "CreateUser",
+     "wire": "create_user",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "CreateUserOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "DropUser",
-     "wire": "DropUser",
+     "wire": "drop_user",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "DropUserOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "GrantRole",
-     "wire": "GrantRole",
+     "wire": "grant_role",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "GrantRoleOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "RevokeRole",
-     "wire": "RevokeRole",
+     "wire": "revoke_role",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "RevokeRoleOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "Chmod",
-     "wire": "Chmod",
+     "wire": "chmod",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "ChmodOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "Chown",
-     "wire": "Chown",
+     "wire": "chown",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "ChownOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "Chgrp",
-     "wire": "Chgrp",
+     "wire": "chgrp",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "ChgrpOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "CreateGroup",
-     "wire": "CreateGroup",
+     "wire": "create_group",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "CreateGroupOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "DropGroup",
-     "wire": "DropGroup",
+     "wire": "drop_group",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "DropGroupOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "RenameGroup",
-     "wire": "RenameGroup",
+     "wire": "rename_group",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "RenameGroupOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "AddGroupMember",
-     "wire": "AddGroupMember",
+     "wire": "add_group_member",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "AddGroupMemberOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "RemoveGroupMember",
-     "wire": "RemoveGroupMember",
+     "wire": "remove_group_member",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "RemoveGroupMemberOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "AccessTree",
-     "wire": "AccessTree",
+     "wire": "access_tree",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "AccessTreeOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "CreateFunction",
-     "wire": "CreateFunction",
+     "wire": "create_function",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "CreateFunctionOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "DropFunction",
-     "wire": "DropFunction",
+     "wire": "drop_function",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "DropFunctionOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "RenameFunction",
-     "wire": "RenameFunction",
+     "wire": "rename_function",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "RenameFunctionOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "DescribeFunction",
-     "wire": "DescribeFunction",
+     "wire": "describe_function",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "DescribeFunctionOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "ExportFunction",
-     "wire": "ExportFunction",
+     "wire": "export_function",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "ExportFunctionOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "CheckFunction",
-     "wire": "CheckFunction",
+     "wire": "check_function",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "CheckFunctionOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "AlterFunction",
-     "wire": "AlterFunction",
+     "wire": "alter_function",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "AlterFunctionOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "CreateValidator",
-     "wire": "CreateValidator",
+     "wire": "create_validator",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "CreateValidatorOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "DropValidator",
-     "wire": "DropValidator",
+     "wire": "drop_validator",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "DropValidatorOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "RenameValidator",
-     "wire": "RenameValidator",
+     "wire": "rename_validator",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "RenameValidatorOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "BindValidator",
-     "wire": "BindValidator",
+     "wire": "bind_validator",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "BindValidatorOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "UnbindValidator",
-     "wire": "UnbindValidator",
+     "wire": "unbind_validator",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "UnbindValidatorOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "ListValidators",
-     "wire": "ListValidators",
+     "wire": "list_validators",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "ListValidatorsOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "SetTableSchema",
-     "wire": "SetTableSchema",
+     "wire": "set_table_schema",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "SetTableSchemaOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "AddSchemaRule",
-     "wire": "AddSchemaRule",
+     "wire": "add_schema_rule",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "AddSchemaRuleOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "RemoveSchemaRule",
-     "wire": "RemoveSchemaRule",
+     "wire": "remove_schema_rule",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "RemoveSchemaRuleOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "GetTableSchema",
-     "wire": "GetTableSchema",
+     "wire": "get_table_schema",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "GetTableSchemaOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "DescribeTable",
-     "wire": "DescribeTable",
+     "wire": "describe_table",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "DescribeTableOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "DescribeRepo",
-     "wire": "DescribeRepo",
+     "wire": "describe_repo",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "DescribeRepoOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "CreateFunctionFolder",
-     "wire": "CreateFunctionFolder",
+     "wire": "create_function_folder",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "CreateFunctionFolderOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "RenameFunctionFolder",
-     "wire": "RenameFunctionFolder",
+     "wire": "rename_function_folder",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "RenameFunctionFolderOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "InternerDump",
-     "wire": "InternerDump",
+     "wire": "interner_dump",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "InternerDumpOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "InternerTouch",
-     "wire": "InternerTouch",
+     "wire": "interner_touch",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "InternerTouchOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "PurgeHistory",
-     "wire": "PurgeHistory",
+     "wire": "purge_history",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "PurgeHistoryOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "SetRetention",
-     "wire": "SetRetention",
+     "wire": "set_retention",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "SetRetentionOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "ChangesSince",
-     "wire": "ChangesSince",
+     "wire": "changes_since",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "ChangesSinceOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "Call",
-     "wire": "Call",
+     "wire": "call",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "CallOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "Batch",
-     "wire": "Batch",
+     "wire": "batch",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "SubBatchOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "ForEach",
-     "wire": "ForEach",
+     "wire": "for_each",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "ForEachOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "Subscribe",
-     "wire": "Subscribe",
+     "wire": "subscribe",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "SubscribeOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "Unsubscribe",
-     "wire": "Unsubscribe",
+     "wire": "unsubscribe",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "UnsubscribeOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "CreateReplicationProfile",
-     "wire": "CreateReplicationProfile",
+     "wire": "create_replication_profile",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "CreateReplicationProfileOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "DropReplicationProfile",
-     "wire": "DropReplicationProfile",
+     "wire": "drop_replication_profile",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "DropReplicationProfileOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "CreatePublication",
-     "wire": "CreatePublication",
+     "wire": "create_publication",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "CreatePublicationOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "DropPublication",
-     "wire": "DropPublication",
+     "wire": "drop_publication",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "DropPublicationOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "CreateSubscription",
-     "wire": "CreateSubscription",
+     "wire": "create_subscription",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "CreateSubscriptionOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "DropSubscription",
-     "wire": "DropSubscription",
+     "wire": "drop_subscription",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "DropSubscriptionOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "AlterSubscription",
-     "wire": "AlterSubscription",
+     "wire": "alter_subscription",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "AlterSubscriptionOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "ListPublications",
-     "wire": "ListPublications",
+     "wire": "list_publications",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "ListPublicationsOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "ListSubscriptions",
-     "wire": "ListSubscriptions",
+     "wire": "list_subscriptions",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "ListSubscriptionsOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "ReplicationStatus",
-     "wire": "ReplicationStatus",
+     "wire": "replication_status",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "ReplicationStatusOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "ApplicationSchema",
-     "wire": "ApplicationSchema",
+     "wire": "application_schema",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "SchemaMigrationAdminOp",
        "serde": []
       }
      ],
-     "note": "serialize emits {application_schema: true, operation, payload}"
+     "note": "serialize emits {application_schema: true, operation, payload}",
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "StartBackup",
-     "wire": "StartBackup",
+     "wire": "start_backup",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "StartBackupOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "BackupStatus",
-     "wire": "BackupStatus",
+     "wire": "backup_status",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "BackupStatusOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "CancelBackup",
-     "wire": "CancelBackup",
+     "wire": "cancel_backup",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "CancelBackupOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "ListActivity",
-     "wire": "ListActivity",
+     "wire": "list_activity",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "ListActivityReq",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "StartExport",
-     "wire": "StartExport",
+     "wire": "start_export",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "StartExportOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "ExportStatus",
-     "wire": "ExportStatus",
+     "wire": "export_status",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "ExportStatusOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "CancelExport",
-     "wire": "CancelExport",
+     "wire": "cancel_export",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "CancelExportOp",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "CancelRequest",
-     "wire": "CancelRequest",
+     "wire": "cancel_request",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "RequestExecId",
        "serde": []
       }
      ],
-     "note": "wire map is {cancel_request: RequestExecId} via CancelRequestWire"
+     "note": "wire map is {cancel_request: RequestExecId} via CancelRequestWire",
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "CancelTx",
-     "wire": "CancelTx",
+     "wire": "cancel_tx",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "u64",
        "serde": []
       }
      ],
-     "note": "wire map is {cancel_tx: u64} via CancelTxWire"
+     "note": "wire map is {cancel_tx: u64} via CancelTxWire",
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "CancelCursorAdmin",
-     "wire": "CancelCursorAdmin",
+     "wire": "cancel_cursor_admin",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "CursorId",
        "serde": []
       }
      ],
-     "note": "wire map is {cancel_cursor_admin: CursorId} via CancelCursorAdminWire"
+     "note": "wire map is {cancel_cursor_admin: CursorId} via CancelCursorAdminWire",
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "ListShapeStats",
-     "wire": "ListShapeStats",
+     "wire": "list_shape_stats",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "ListShapeStatsReq",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
     },
     {
      "name": "ResetShapeStats",
-     "wire": "ResetShapeStats",
+     "wire": "reset_shape_stats",
      "shape": "newtype",
      "serde": [],
      "fields": [
       {
        "name": "0",
-       "wire": "0",
        "type": "ResetShapeStatsReq",
        "serde": []
       }
-     ]
+     ],
+     "wire_note": "single-key map; payload map carries no op-name key"
+    }
+   ],
+   "ops": [
+    {
+     "variant": "Read",
+     "operation": "read",
+     "keys": [
+      "from"
+     ],
+     "payload": "ReadQuery"
+    },
+    {
+     "variant": "Insert",
+     "operation": "write",
+     "keys": [
+      "insert_into"
+     ],
+     "payload": "InsertOp"
+    },
+    {
+     "variant": "Update",
+     "operation": "write",
+     "keys": [
+      "update"
+     ],
+     "payload": "UpdateOp"
+    },
+    {
+     "variant": "Set",
+     "operation": "write",
+     "keys": [
+      "set"
+     ],
+     "payload": "SetOp"
+    },
+    {
+     "variant": "Delete",
+     "operation": "write",
+     "keys": [
+      "delete_from"
+     ],
+     "payload": "DeleteOp"
+    },
+    {
+     "variant": "CreateDb",
+     "operation": "admin:create_db",
+     "keys": [
+      "create_db"
+     ],
+     "payload": "CreateDbOp"
+    },
+    {
+     "variant": "DropDb",
+     "operation": "admin:drop_db",
+     "keys": [
+      "drop_db"
+     ],
+     "payload": "DropDbOp"
+    },
+    {
+     "variant": "CreateRepo",
+     "operation": "admin:create_repo",
+     "keys": [
+      "create_repo"
+     ],
+     "payload": "CreateRepoOp"
+    },
+    {
+     "variant": "DropRepo",
+     "operation": "admin:drop_repo",
+     "keys": [
+      "drop_repo"
+     ],
+     "payload": "DropRepoOp"
+    },
+    {
+     "variant": "RenameRepo",
+     "operation": "admin:rename_repo",
+     "keys": [
+      "rename_repo"
+     ],
+     "payload": "RenameRepoOp"
+    },
+    {
+     "variant": "AlterRepo",
+     "operation": "admin:alter_repo",
+     "keys": [
+      "alter_repo"
+     ],
+     "payload": "AlterRepoOp"
+    },
+    {
+     "variant": "RenameDb",
+     "operation": "admin:rename_db",
+     "keys": [
+      "rename_db"
+     ],
+     "payload": "RenameDbOp"
+    },
+    {
+     "variant": "CreateTable",
+     "operation": "admin:create_table",
+     "keys": [
+      "create_table"
+     ],
+     "payload": "CreateTableOp"
+    },
+    {
+     "variant": "DropTable",
+     "operation": "admin:drop_table",
+     "keys": [
+      "drop_table"
+     ],
+     "payload": "DropTableOp"
+    },
+    {
+     "variant": "RenameTable",
+     "operation": "admin:rename_table",
+     "keys": [
+      "rename_table"
+     ],
+     "payload": "RenameTableOp"
+    },
+    {
+     "variant": "CreateIndex",
+     "operation": "admin:create_index",
+     "keys": [
+      "create_index"
+     ],
+     "payload": "CreateIndexOp"
+    },
+    {
+     "variant": "DropIndex",
+     "operation": "admin:drop_index",
+     "keys": [
+      "drop_index"
+     ],
+     "payload": "DropIndexOp"
+    },
+    {
+     "variant": "RenameIndex",
+     "operation": "admin:rename_index",
+     "keys": [
+      "rename_index"
+     ],
+     "payload": "RenameIndexOp"
+    },
+    {
+     "variant": "SetBufferConfig",
+     "operation": "admin:set_buffer_config",
+     "keys": [
+      "set_buffer_config"
+     ],
+     "payload": "SetBufferConfigOp"
+    },
+    {
+     "variant": "GetBufferConfig",
+     "operation": "admin:get_buffer_config",
+     "keys": [
+      "get_buffer_config"
+     ],
+     "payload": "GetBufferConfigOp"
+    },
+    {
+     "variant": "AlterBufferConfig",
+     "operation": "admin:alter_buffer_config",
+     "keys": [
+      "alter_buffer_config"
+     ],
+     "payload": "AlterBufferConfigOp"
+    },
+    {
+     "variant": "List",
+     "operation": "admin:list",
+     "keys": [
+      "list"
+     ],
+     "payload": "ListOp"
+    },
+    {
+     "variant": "StartMigration",
+     "operation": "admin:start_migration",
+     "keys": [
+      "start_migration"
+     ],
+     "payload": "StartMigrationOp"
+    },
+    {
+     "variant": "CommitMigration",
+     "operation": "admin:commit_migration",
+     "keys": [
+      "commit_migration"
+     ],
+     "payload": "CommitMigrationOp"
+    },
+    {
+     "variant": "RollbackMigration",
+     "operation": "admin:rollback_migration",
+     "keys": [
+      "rollback_migration"
+     ],
+     "payload": "RollbackMigrationOp"
+    },
+    {
+     "variant": "MigrationStatus",
+     "operation": "admin:migration_status",
+     "keys": [
+      "migration_status"
+     ],
+     "payload": "MigrationStatusOp"
+    },
+    {
+     "variant": "CreateUser",
+     "operation": "admin:create_user",
+     "keys": [
+      "create_user"
+     ],
+     "payload": "CreateUserOp"
+    },
+    {
+     "variant": "DropUser",
+     "operation": "admin:drop_user",
+     "keys": [
+      "drop_user"
+     ],
+     "payload": "DropUserOp"
+    },
+    {
+     "variant": "GrantRole",
+     "operation": "admin:grant_role",
+     "keys": [
+      "grant_role"
+     ],
+     "payload": "GrantRoleOp"
+    },
+    {
+     "variant": "RevokeRole",
+     "operation": "admin:revoke_role",
+     "keys": [
+      "revoke_role"
+     ],
+     "payload": "RevokeRoleOp"
+    },
+    {
+     "variant": "Chmod",
+     "operation": "admin:chmod",
+     "keys": [
+      "chmod"
+     ],
+     "payload": "ChmodOp"
+    },
+    {
+     "variant": "Chown",
+     "operation": "admin:chown",
+     "keys": [
+      "chown"
+     ],
+     "payload": "ChownOp"
+    },
+    {
+     "variant": "Chgrp",
+     "operation": "admin:chgrp",
+     "keys": [
+      "chgrp"
+     ],
+     "payload": "ChgrpOp"
+    },
+    {
+     "variant": "CreateGroup",
+     "operation": "admin:create_group",
+     "keys": [
+      "create_group"
+     ],
+     "payload": "CreateGroupOp"
+    },
+    {
+     "variant": "DropGroup",
+     "operation": "admin:drop_group",
+     "keys": [
+      "drop_group"
+     ],
+     "payload": "DropGroupOp"
+    },
+    {
+     "variant": "RenameGroup",
+     "operation": "admin:rename_group",
+     "keys": [
+      "rename_group"
+     ],
+     "payload": "RenameGroupOp"
+    },
+    {
+     "variant": "AddGroupMember",
+     "operation": "admin:add_group_member",
+     "keys": [
+      "add_group_member"
+     ],
+     "payload": "AddGroupMemberOp"
+    },
+    {
+     "variant": "RemoveGroupMember",
+     "operation": "admin:remove_group_member",
+     "keys": [
+      "remove_group_member"
+     ],
+     "payload": "RemoveGroupMemberOp"
+    },
+    {
+     "variant": "AccessTree",
+     "operation": "admin:access_tree",
+     "keys": [
+      "access_tree"
+     ],
+     "payload": "AccessTreeOp"
+    },
+    {
+     "variant": "CreateFunction",
+     "operation": "admin:create_function",
+     "keys": [
+      "create_function"
+     ],
+     "payload": "CreateFunctionOp"
+    },
+    {
+     "variant": "DropFunction",
+     "operation": "admin:drop_function",
+     "keys": [
+      "drop_function"
+     ],
+     "payload": "DropFunctionOp"
+    },
+    {
+     "variant": "RenameFunction",
+     "operation": "admin:rename_function",
+     "keys": [
+      "rename_function"
+     ],
+     "payload": "RenameFunctionOp"
+    },
+    {
+     "variant": "DescribeFunction",
+     "operation": "admin:describe_function",
+     "keys": [
+      "describe_function"
+     ],
+     "payload": "DescribeFunctionOp"
+    },
+    {
+     "variant": "ExportFunction",
+     "operation": "admin:export_function",
+     "keys": [
+      "export_function"
+     ],
+     "payload": "ExportFunctionOp"
+    },
+    {
+     "variant": "CheckFunction",
+     "operation": "admin:check_function",
+     "keys": [
+      "check_function"
+     ],
+     "payload": "CheckFunctionOp"
+    },
+    {
+     "variant": "AlterFunction",
+     "operation": "admin:alter_function",
+     "keys": [
+      "alter_function"
+     ],
+     "payload": "AlterFunctionOp"
+    },
+    {
+     "variant": "CreateValidator",
+     "operation": "admin:create_validator",
+     "keys": [
+      "create_validator"
+     ],
+     "payload": "CreateValidatorOp"
+    },
+    {
+     "variant": "DropValidator",
+     "operation": "admin:drop_validator",
+     "keys": [
+      "drop_validator"
+     ],
+     "payload": "DropValidatorOp"
+    },
+    {
+     "variant": "RenameValidator",
+     "operation": "admin:rename_validator",
+     "keys": [
+      "rename_validator"
+     ],
+     "payload": "RenameValidatorOp"
+    },
+    {
+     "variant": "BindValidator",
+     "operation": "admin:bind_validator",
+     "keys": [
+      "bind_validator"
+     ],
+     "payload": "BindValidatorOp"
+    },
+    {
+     "variant": "UnbindValidator",
+     "operation": "admin:unbind_validator",
+     "keys": [
+      "unbind_validator"
+     ],
+     "payload": "UnbindValidatorOp"
+    },
+    {
+     "variant": "ListValidators",
+     "operation": "admin:list_validators",
+     "keys": [
+      "list_validators"
+     ],
+     "payload": "ListValidatorsOp"
+    },
+    {
+     "variant": "SetTableSchema",
+     "operation": "admin:set_table_schema",
+     "keys": [
+      "set_table_schema"
+     ],
+     "payload": "SetTableSchemaOp"
+    },
+    {
+     "variant": "AddSchemaRule",
+     "operation": "admin:add_schema_rule",
+     "keys": [
+      "add_schema_rule"
+     ],
+     "payload": "AddSchemaRuleOp"
+    },
+    {
+     "variant": "RemoveSchemaRule",
+     "operation": "admin:remove_schema_rule",
+     "keys": [
+      "remove_schema_rule"
+     ],
+     "payload": "RemoveSchemaRuleOp"
+    },
+    {
+     "variant": "GetTableSchema",
+     "operation": "admin:get_table_schema",
+     "keys": [
+      "get_table_schema"
+     ],
+     "payload": "GetTableSchemaOp"
+    },
+    {
+     "variant": "DescribeTable",
+     "operation": "admin:describe_table",
+     "keys": [
+      "describe_table"
+     ],
+     "payload": "DescribeTableOp"
+    },
+    {
+     "variant": "DescribeRepo",
+     "operation": "admin:describe_repo",
+     "keys": [
+      "describe_repo"
+     ],
+     "payload": "DescribeRepoOp"
+    },
+    {
+     "variant": "CreateFunctionFolder",
+     "operation": "admin:create_function_folder",
+     "keys": [
+      "create_function_folder"
+     ],
+     "payload": "CreateFunctionFolderOp"
+    },
+    {
+     "variant": "RenameFunctionFolder",
+     "operation": "admin:rename_function_folder",
+     "keys": [
+      "rename_function_folder"
+     ],
+     "payload": "RenameFunctionFolderOp"
+    },
+    {
+     "variant": "InternerDump",
+     "operation": "admin:interner_dump",
+     "keys": [
+      "interner_dump"
+     ],
+     "payload": "InternerDumpOp"
+    },
+    {
+     "variant": "InternerTouch",
+     "operation": "admin:interner_touch",
+     "keys": [
+      "interner_touch"
+     ],
+     "payload": "InternerTouchOp"
+    },
+    {
+     "variant": "PurgeHistory",
+     "operation": "admin:purge_history",
+     "keys": [
+      "purge_history"
+     ],
+     "payload": "PurgeHistoryOp"
+    },
+    {
+     "variant": "SetRetention",
+     "operation": "admin:set_retention",
+     "keys": [
+      "set_retention"
+     ],
+     "payload": "SetRetentionOp"
+    },
+    {
+     "variant": "ChangesSince",
+     "operation": "admin:changes_since",
+     "keys": [
+      "changes_since"
+     ],
+     "payload": "ChangesSinceOp"
+    },
+    {
+     "variant": "Call",
+     "operation": "write",
+     "keys": [
+      "call"
+     ],
+     "payload": "CallOp"
+    },
+    {
+     "variant": "Batch",
+     "operation": "write",
+     "keys": [
+      "batch"
+     ],
+     "payload": "SubBatchOp"
+    },
+    {
+     "variant": "ForEach",
+     "operation": "write",
+     "keys": [
+      "for_each"
+     ],
+     "payload": "ForEachOp"
+    },
+    {
+     "variant": "Subscribe",
+     "operation": "write",
+     "keys": [
+      "subscribe"
+     ],
+     "payload": "SubscribeOp"
+    },
+    {
+     "variant": "Unsubscribe",
+     "operation": "write",
+     "keys": [
+      "unsubscribe"
+     ],
+     "payload": "UnsubscribeOp"
+    },
+    {
+     "variant": "CreateReplicationProfile",
+     "operation": "admin:create_replication_profile",
+     "keys": [
+      "create_replication_profile"
+     ],
+     "payload": "CreateReplicationProfileOp"
+    },
+    {
+     "variant": "DropReplicationProfile",
+     "operation": "admin:drop_replication_profile",
+     "keys": [
+      "drop_replication_profile"
+     ],
+     "payload": "DropReplicationProfileOp"
+    },
+    {
+     "variant": "CreatePublication",
+     "operation": "admin:create_publication",
+     "keys": [
+      "create_publication"
+     ],
+     "payload": "CreatePublicationOp"
+    },
+    {
+     "variant": "DropPublication",
+     "operation": "admin:drop_publication",
+     "keys": [
+      "drop_publication"
+     ],
+     "payload": "DropPublicationOp"
+    },
+    {
+     "variant": "CreateSubscription",
+     "operation": "admin:create_subscription",
+     "keys": [
+      "create_subscription"
+     ],
+     "payload": "CreateSubscriptionOp"
+    },
+    {
+     "variant": "DropSubscription",
+     "operation": "admin:drop_subscription",
+     "keys": [
+      "drop_subscription"
+     ],
+     "payload": "DropSubscriptionOp"
+    },
+    {
+     "variant": "AlterSubscription",
+     "operation": "admin:alter_subscription",
+     "keys": [
+      "alter_subscription"
+     ],
+     "payload": "AlterSubscriptionOp"
+    },
+    {
+     "variant": "ListPublications",
+     "operation": "admin:list_publications",
+     "keys": [
+      "list_publications"
+     ],
+     "payload": "ListPublicationsOp"
+    },
+    {
+     "variant": "ListSubscriptions",
+     "operation": "admin:list_subscriptions",
+     "keys": [
+      "list_subscriptions"
+     ],
+     "payload": "ListSubscriptionsOp"
+    },
+    {
+     "variant": "ReplicationStatus",
+     "operation": "admin:replication_status",
+     "keys": [
+      "replication_status"
+     ],
+     "payload": "ReplicationStatusOp"
+    },
+    {
+     "variant": "ApplicationSchema",
+     "operation": "admin:application_schema_status",
+     "keys": [
+      "application_schema"
+     ],
+     "payload": "SchemaMigrationAdminOp"
+    },
+    {
+     "variant": "StartBackup",
+     "operation": "admin:start_backup",
+     "keys": [
+      "start_backup"
+     ],
+     "payload": "StartBackupOp"
+    },
+    {
+     "variant": "BackupStatus",
+     "operation": "admin:backup_status",
+     "keys": [
+      "backup_status"
+     ],
+     "payload": "BackupStatusOp"
+    },
+    {
+     "variant": "CancelBackup",
+     "operation": "admin:cancel_backup",
+     "keys": [
+      "cancel_backup"
+     ],
+     "payload": "CancelBackupOp"
+    },
+    {
+     "variant": "ListActivity",
+     "operation": "admin:list_activity",
+     "keys": [
+      "list_activity"
+     ],
+     "payload": "ListActivityReq"
+    },
+    {
+     "variant": "StartExport",
+     "operation": "admin:start_export",
+     "keys": [
+      "start_export"
+     ],
+     "payload": "StartExportOp"
+    },
+    {
+     "variant": "ExportStatus",
+     "operation": "admin:export_status",
+     "keys": [
+      "export_status"
+     ],
+     "payload": "ExportStatusOp"
+    },
+    {
+     "variant": "CancelExport",
+     "operation": "admin:cancel_export",
+     "keys": [
+      "cancel_export"
+     ],
+     "payload": "CancelExportOp"
+    },
+    {
+     "variant": "CancelRequest",
+     "operation": "admin:cancel_request",
+     "keys": [
+      "cancel_request"
+     ],
+     "payload": "RequestExecId"
+    },
+    {
+     "variant": "CancelTx",
+     "operation": "admin:cancel_tx",
+     "keys": [
+      "cancel_tx"
+     ],
+     "payload": "u64"
+    },
+    {
+     "variant": "CancelCursorAdmin",
+     "operation": "admin:cancel_cursor_admin",
+     "keys": [
+      "cancel_cursor_admin"
+     ],
+     "payload": "CursorId"
+    },
+    {
+     "variant": "ListShapeStats",
+     "operation": "admin:list_shape_stats",
+     "keys": [
+      "list_shape_stats"
+     ],
+     "payload": "ListShapeStatsReq"
+    },
+    {
+     "variant": "ResetShapeStats",
+     "operation": "admin:reset_shape_stats",
+     "keys": [
+      "reset_shape_stats"
+     ],
+     "payload": "ResetShapeStatsReq"
     }
    ]
   },
@@ -4790,9 +5530,7 @@
      "name": "Name",
      "wire": "name",
      "shape": "unit",
-     "serde": [
-      "default"
-     ]
+     "serde": []
     },
     {
      "name": "Id",
@@ -4902,9 +5640,7 @@
      "name": "Sync",
      "wire": "sync",
      "shape": "unit",
-     "serde": [
-      "default"
-     ]
+     "serde": []
     },
     {
      "name": "Async",
@@ -4964,9 +5700,7 @@
      "name": "Buffered",
      "wire": "buffered",
      "shape": "unit",
-     "serde": [
-      "default"
-     ]
+     "serde": []
     },
     {
      "name": "Synced",
@@ -5067,9 +5801,7 @@
      "name": "Strict",
      "wire": "strict",
      "shape": "unit",
-     "serde": [
-      "default"
-     ]
+     "serde": []
     },
     {
      "name": "Bounded",
@@ -5167,9 +5899,7 @@
      "name": "Changed",
      "wire": "changed",
      "shape": "unit",
-     "serde": [
-      "default"
-     ]
+     "serde": []
     },
     {
      "name": "Unchanged",
@@ -5452,7 +6182,8 @@
      "type": "u64",
      "serde": []
     }
-   ]
+   ],
+   "unreachable_reason": "unvisited: write-op response payload (BatchOp::Insert/Update/Delete/Set result); not typed into BatchResponse or any other DbResponse-reachable type"
   },
   "CallOp": {
    "crate": "shamir-query-types",
@@ -5558,9 +6289,7 @@
      "name": "All",
      "wire": "all",
      "shape": "unit",
-     "serde": [
-      "default"
-     ]
+     "serde": []
     },
     {
      "name": "Put",
@@ -6417,9 +7146,7 @@
      "name": "None",
      "wire": "None",
      "shape": "unit",
-     "serde": [
-      "default"
-     ]
+     "serde": []
     }
    ]
   },
@@ -6552,9 +7279,7 @@
      "name": "Asc",
      "wire": "asc",
      "shape": "unit",
-     "serde": [
-      "default"
-     ]
+     "serde": []
     },
     {
      "name": "Desc",
@@ -6647,9 +7372,7 @@
      "name": "Latest",
      "wire": "latest",
      "shape": "unit",
-     "serde": [
-      "default"
-     ]
+     "serde": []
     },
     {
      "name": "AsOf",
@@ -6716,7 +7439,7 @@
    "kind": "enum",
    "impl": "hand_written",
    "verdict": "named",
-   "reason": "hand-written serde impl (also shared with QueryValue bridge): serializes as the inner payload (QueryValue / InsertedRecord / bin bytes); deserialize_any routes bytes to IdBytes",
+   "reason": "hand-written serde impl (also shared with QueryValue bridge): serializes as the inner payload (QueryValue / InsertedRecord / bin bytes); deserialize_any routes bytes to IdBytes Per-variant \"wire\" labels repeat the variant name for reference only: NO variant-name key is emitted on the wire - the impl is self-describing (raw scalars/sequences/maps or inner payload), not an externally tagged enum.",
    "serde": [],
    "variants": [
     {
@@ -8966,9 +9689,7 @@
      "name": "NoAction",
      "wire": "no_action",
      "shape": "unit",
-     "serde": [
-      "default"
-     ]
+     "serde": []
     },
     {
      "name": "Restrict",
@@ -10971,7 +11692,8 @@
      "shape": "unit",
      "serde": []
     }
-   ]
+   ],
+   "unreachable_reason": "unvisited: response-only export status sub-enum; no reachable field type names it"
   },
   "ExportFailure": {
    "crate": "shamir-query-types",
@@ -11014,7 +11736,8 @@
      "shape": "unit",
      "serde": []
     }
-   ]
+   ],
+   "unreachable_reason": "unvisited: response-only export payload; no reachable field type names it"
   },
   "ExportStartReceipt": {
    "crate": "shamir-query-types",
@@ -11033,7 +11756,8 @@
      "type": "String",
      "serde": []
     }
-   ]
+   ],
+   "unreachable_reason": "unvisited: response-only payload of BatchOp::StartExport; no reachable field type names it"
   },
   "ExportStatusReceipt": {
    "crate": "shamir-query-types",
@@ -11094,7 +11818,8 @@
       "skip_serializing_if = \"Option::is_none\""
      ]
     }
-   ]
+   ],
+   "unreachable_reason": "unvisited: response-only payload of BatchOp::ExportStatus; no reachable field type names it"
   },
   "ExportCancelReceipt": {
    "crate": "shamir-query-types",
@@ -11113,7 +11838,8 @@
      "type": "bool",
      "serde": []
     }
-   ]
+   ],
+   "unreachable_reason": "unvisited: response-only payload of BatchOp::CancelExport; no reachable field type names it"
   },
   "CreateValidatorOp": {
    "crate": "shamir-query-types",
@@ -11404,9 +12130,7 @@
      "name": "Pull",
      "wire": "pull",
      "shape": "unit",
-     "serde": [
-      "default"
-     ]
+     "serde": []
     },
     {
      "name": "Push",
@@ -11437,9 +12161,7 @@
      "name": "ReadOnly",
      "wire": "read_only",
      "shape": "unit",
-     "serde": [
-      "default"
-     ]
+     "serde": []
     },
     {
      "name": "ReadWrite",
@@ -11897,7 +12619,8 @@
      "type": "Option<String>",
      "serde": []
     }
-   ]
+   ],
+   "unreachable_reason": "unvisited: op-only payload; no reachable field type names it"
   },
   "ChangesSinceResponse": {
    "crate": "shamir-query-types",
@@ -11941,7 +12664,8 @@
       "skip_serializing_if = \"Option::is_none\""
      ]
     }
-   ]
+   ],
+   "unreachable_reason": "unvisited: response-only payload; no reachable field type names it"
   },
   "ChangesSinceEvent": {
    "crate": "shamir-query-types",
@@ -11994,7 +12718,8 @@
      "type": "Vec<ChangesSinceRecordChange>",
      "serde": []
     }
-   ]
+   ],
+   "unreachable_reason": "unvisited: response-only payload (changes-since journal read); no reachable field type names it"
   },
   "ChangesSinceRecordChange": {
    "crate": "shamir-query-types",
@@ -12033,7 +12758,8 @@
       "with = \"opt_bytes_as_bin\""
      ]
     }
-   ]
+   ],
+   "unreachable_reason": "unvisited: response-only payload nested in ChangesSinceEvent; no reachable field type names it"
   },
   "ChangeOpKind": {
    "crate": "shamir-query-types",
@@ -12056,7 +12782,8 @@
      "shape": "unit",
      "serde": []
     }
-   ]
+   ],
+   "unreachable_reason": "unvisited: op-only payload of a change feed producer; no reachable field type names it"
   },
   "SchemaMigrationAdminOp": {
    "crate": "shamir-query-types",
@@ -12224,7 +12951,8 @@
       "skip_serializing_if = \"Option::is_none\""
      ]
     }
-   ]
+   ],
+   "unreachable_reason": "unvisited: response-only payload of the application-schema apply arm; no reachable field type names it"
   },
   "SchemaMigrationErrorCode": {
    "crate": "shamir-query-types",
@@ -12291,7 +13019,8 @@
      "shape": "unit",
      "serde": []
     }
-   ]
+   ],
+   "unreachable_reason": "unvisited: response-only error enum (referenced as super::SchemaMigrationErrorCode by SchemaMigrationStatusResult, itself unvisited)"
   },
   "SchemaMigrationWarning": {
    "crate": "shamir-query-types",
@@ -12334,7 +13063,8 @@
      "shape": "unit",
      "serde": []
     }
-   ]
+   ],
+   "unreachable_reason": "unvisited: response-only warning DTO referenced only by other unvisited schema-migration types"
   },
   "SchemaMigrationPlanRequest": {
    "crate": "shamir-query-types",
@@ -12427,7 +13157,8 @@
       "skip_serializing_if = \"Vec::is_empty\""
      ]
     }
-   ]
+   ],
+   "unreachable_reason": "unvisited: schema-migration plan DTO referenced only by other unvisited types"
   },
   "SchemaMigrationPlanResult": {
    "crate": "shamir-query-types",
@@ -12504,7 +13235,8 @@
       "skip_serializing_if = \"Option::is_none\""
      ]
     }
-   ]
+   ],
+   "unreachable_reason": "unvisited: response-only payload of the application-schema plan arm; no reachable field type names it"
   },
   "SchemaMigrationTarget": {
    "crate": "shamir-query-types",
@@ -12642,7 +13374,8 @@
      "shape": "unit",
      "serde": []
     }
-   ]
+   ],
+   "unreachable_reason": "unvisited: response-only sub-enum of SchemaMigrationStatusResult (itself unvisited)"
   },
   "SchemaMigrationInFlight": {
    "crate": "shamir-query-types",
@@ -12685,7 +13418,8 @@
      "type": "String",
      "serde": []
     }
-   ]
+   ],
+   "unreachable_reason": "unvisited: response-only payload of SchemaMigrationStatusResult (itself unvisited)"
   },
   "SchemaMigrationStatusRequest": {
    "crate": "shamir-query-types",
@@ -12739,7 +13473,8 @@
      "type": "[u8; 32]",
      "serde": []
     }
-   ]
+   ],
+   "unreachable_reason": "unvisited: response-only payload inside SchemaMigrationStatusResult (itself unvisited)"
   },
   "SchemaMigrationStatusResult": {
    "crate": "shamir-query-types",
@@ -12827,7 +13562,8 @@
       "skip_serializing_if = \"Vec::is_empty\""
      ]
     }
-   ]
+   ],
+   "unreachable_reason": "unvisited: response-only payload of the application-schema status arm; no reachable field type names it"
   },
   "SchemaMigrationMetadata": {
    "crate": "shamir-query-types",
@@ -12898,7 +13634,8 @@
      "type": "Vec<SchemaMigrationOp>",
      "serde": []
     }
-   ]
+   ],
+   "unreachable_reason": "unvisited: schema-migration DTO referenced only by other unvisited schema-migration types"
   },
   "SchemaMigrationFunctionDependencies": {
    "crate": "shamir-query-types",
@@ -13402,7 +14139,6 @@
   },
   "RecordId": {
    "crate": "shamir-types",
-   "path": "src/types/ids/record_id.rs",
    "kind": "newtype",
    "impl": "hand_written",
    "verdict": "named",
@@ -13416,11 +14152,10 @@
      "serde": []
     }
    ],
-   "note": "external-crate type: LISTED in the dictionary but its internal shape is NOT machine-verified — the scanner sees only shamir-query-types source"
+   "note": "external-crate type: LISTED in the dictionary but its internal shape is NOT machine-verified \u2014 the scanner sees only shamir-query-types source"
   },
   "SecretString": {
    "crate": "shamir-types",
-   "path": "src/entries/secret.rs",
    "kind": "newtype",
    "impl": "hand_written",
    "verdict": "named",
@@ -13436,15 +14171,14 @@
      ]
     }
    ],
-   "note": "external-crate type: LISTED in the dictionary but its internal shape is NOT machine-verified — the scanner sees only shamir-query-types source"
+   "note": "external-crate type: LISTED in the dictionary but its internal shape is NOT machine-verified \u2014 the scanner sees only shamir-query-types source"
   },
   "QueryValue": {
    "crate": "shamir-types",
-   "path": "src/types/value.rs",
    "kind": "enum",
    "impl": "hand_written",
    "verdict": "named",
-   "reason": "shared with QueryValue bridge; type alias of Value<String> with a hand-written serde impl — NOT a tagged enum on the wire: it serializes raw scalars, sequences and maps. It is a TERMINAL for dictionary KEYS (self-describing shapes; user data keys stay strings), so the completeness closure deliberately stops here",
+   "reason": "shared with QueryValue bridge; type alias of Value<String> with a hand-written serde impl \u2014 NOT a tagged enum on the wire: it serializes raw scalars, sequences and maps. It is a TERMINAL for dictionary KEYS (self-describing shapes; user data keys stay strings), so the completeness closure deliberately stops here Per-variant \"wire\" labels repeat the variant name for reference only: NO variant-name key is emitted on the wire - the impl is self-describing (raw scalars/sequences/maps or inner payload), not an externally tagged enum.",
    "serde": [],
    "variants": [
     {
@@ -13599,50 +14333,49 @@
      "note": "serialized as map with dynamic (user-data) keys"
     }
    ],
-   "note": "external-crate type: LISTED in the dictionary but its internal shape is NOT machine-verified — the scanner sees only shamir-query-types source"
+   "note": "external-crate type: LISTED in the dictionary but its internal shape is NOT machine-verified \u2014 the scanner sees only shamir-query-types source"
   },
   "TMap": {
    "crate": "shamir-collections",
-   "path": "src/lib.rs",
    "kind": "map",
    "impl": "derived",
    "verdict": "indexed",
    "reason": "generic type alias TMap<K, V> = IndexMap<K, V, THasher>; wire instantiations: TMap<String, QueryEntry>, TMap<String, u64>, TMap<String, QueryResult>, TMap<String, TMap<String, EdgeKind>>, TMap<String, InternerDelta>, TMap<String, FilterValue>; insertion-order map with string keys",
    "serde": [],
    "fields": [],
-   "note": "external-crate type: LISTED in the dictionary but its internal shape is NOT machine-verified — the scanner sees only shamir-query-types source"
+   "note": "external-crate type: LISTED in the dictionary but its internal shape is NOT machine-verified \u2014 the scanner sees only shamir-query-types source"
   },
   "TSet": {
    "crate": "shamir-collections",
-   "path": "src/lib.rs",
    "kind": "map",
    "impl": "derived",
    "verdict": "indexed",
    "reason": "generic type alias TSet<V> = IndexSet<V, THasher>; serializes as a sequence; appears only inside QueryValue::Set",
    "serde": [],
    "fields": [],
-   "note": "external-crate type: LISTED in the dictionary but its internal shape is NOT machine-verified — the scanner sees only shamir-query-types source"
+   "note": "external-crate type: LISTED in the dictionary but its internal shape is NOT machine-verified \u2014 the scanner sees only shamir-query-types source"
   },
   "ByteBuf": {
    "crate": "serde_bytes",
-   "kind": "newtype",
-   "impl": "derived",
+   "kind": "struct",
+   "impl": "hand_written",
    "verdict": "indexed",
-   "reason": "external crate newtype over Vec<u8>; serializes as msgpack bin (no keys)",
+   "reason": "RUST shape is a named-field struct (serde_bytes-0.11.19 bytebuf.rs:45-48: { bytes: Vec<u8> }) with MANUAL serde impls (serialize -> serializer.serialize_bytes, bytebuf.rs:193-199; deserialize -> deserialize_byte_buf, bytebuf.rs:254-260) - NOT a derived tuple newtype. WIRE shape is msgpack bin (no keys), so verdict stays indexed.",
    "serde": [],
    "fields": [
     {
-     "name": "0",
-     "wire": "0",
+     "name": "bytes",
+     "wire": "bytes",
      "type": "Vec<u8>",
-     "serde": []
+     "serde": [
+      "manual impl: no field keys on the wire"
+     ]
     }
    ],
-   "note": "external-crate type: LISTED in the dictionary but its internal shape is NOT machine-verified — the scanner sees only shamir-query-types source"
+   "note": "external-crate type: LISTED in the dictionary but its internal shape is NOT machine-verified - the scanner sees only shamir-query-types source"
   },
   "Actor": {
    "crate": "shamir-types",
-   "path": "src/entries/access/identity.rs",
    "kind": "enum",
    "impl": "derived",
    "verdict": "indexed",
@@ -13653,9 +14386,7 @@
      "name": "System",
      "wire": "System",
      "shape": "unit",
-     "serde": [
-      "default"
-     ]
+     "serde": []
     },
     {
      "name": "Admin",
@@ -13686,7 +14417,8 @@
      ]
     }
    ],
-   "note": "external-crate type: LISTED in the dictionary but its internal shape is NOT machine-verified — the scanner sees only shamir-query-types source"
+   "note": "external-crate type: LISTED in the dictionary but its internal shape is NOT machine-verified \u2014 the scanner sees only shamir-query-types source",
+   "unreachable_reason": "unvisited by traversal: not a field/variant payload type of any DbRequest/DbResponse-reachable type (internal access-control identity, not carried on the query wire)"
   },
   "ApiTokenMode": {
    "crate": "shamir-query-types",
@@ -14019,7 +14751,243 @@
       "default"
      ]
     }
-   ]
+   ],
+   "unreachable_reason": "unvisited: schema-migration plan payload referenced only by other unvisited schema-migration types"
+  },
+  "CancelRequestWire": {
+   "crate": "shamir-query-types",
+   "path": "src/ops/batch/ops/batch_op.rs",
+   "kind": "struct",
+   "impl": "derived",
+   "verdict": "named",
+   "reason": "private decode-target struct for BatchOp::CancelRequest (batch_op.rs:245-249): #[derive(Deserialize)] #[serde(deny_unknown_fields)]; single field maps 1:1 to the cancel_request discriminator key. Deserialize-only: the Serialize path for this op is a hand-written single-key map (batch_op.rs:370-374).",
+   "serde": [
+    "deny_unknown_fields"
+   ],
+   "fields": [
+    {
+     "name": "cancel_request",
+     "wire": "cancel_request",
+     "type": "RequestExecId",
+     "serde": []
+    }
+   ],
+   "unreachable_reason": "decode-only helper: consumed by BatchOp's hand-written Deserialize (batch_op.rs:649-656), never typed into a reachable field; traversal from DbRequest/DbResponse does not visit it"
+  },
+  "CancelTxWire": {
+   "crate": "shamir-query-types",
+   "path": "src/ops/batch/ops/batch_op.rs",
+   "kind": "struct",
+   "impl": "derived",
+   "verdict": "named",
+   "reason": "private decode-target struct for BatchOp::CancelTx (batch_op.rs:251-255): #[derive(Deserialize)] #[serde(deny_unknown_fields)]; single field maps 1:1 to the cancel_tx discriminator key. Deserialize-only; Serialize is a hand-written single-key map (batch_op.rs:375-379).",
+   "serde": [
+    "deny_unknown_fields"
+   ],
+   "fields": [
+    {
+     "name": "cancel_tx",
+     "wire": "cancel_tx",
+     "type": "u64",
+     "serde": []
+    }
+   ],
+   "unreachable_reason": "decode-only helper: consumed by BatchOp's hand-written Deserialize (batch_op.rs:649-656), never typed into a reachable field"
+  },
+  "CancelCursorAdminWire": {
+   "crate": "shamir-query-types",
+   "path": "src/ops/batch/ops/batch_op.rs",
+   "kind": "struct",
+   "impl": "derived",
+   "verdict": "named",
+   "reason": "private decode-target struct for BatchOp::CancelCursorAdmin (batch_op.rs:257-261): #[derive(Deserialize)] #[serde(deny_unknown_fields)]; single field maps 1:1 to the cancel_cursor_admin discriminator key. Deserialize-only; Serialize is a hand-written single-key map (batch_op.rs:380-384).",
+   "serde": [
+    "deny_unknown_fields"
+   ],
+   "fields": [
+    {
+     "name": "cancel_cursor_admin",
+     "wire": "cancel_cursor_admin",
+     "type": "CursorId",
+     "serde": []
+    }
+   ],
+   "unreachable_reason": "decode-only helper: consumed by BatchOp's hand-written Deserialize (batch_op.rs:649-656), never typed into a reachable field"
+  },
+  "Fields": {
+   "crate": "shamir-query-types",
+   "path": "src/ops/batch/req/transaction_info.rs",
+   "kind": "struct",
+   "impl": "derived",
+   "verdict": "named",
+   "reason": "function-local decode-target struct inside TransactionInfo's hand-written Deserialize (transaction_info.rs:183-212): fields are decoded as this derived struct, then the cross-field v3 invariant is validated before constructing TransactionInfo. AMBIGUITY RISK: the name `Fields` is generic - it is currently the only `struct Fields` in the crates (transaction_info.rs:187), but any future local struct with the same name would collide in a name-keyed registry; the path field disambiguates.",
+   "serde": [
+    "deny_unknown_fields not set; plain derived Deserialize"
+   ],
+   "fields": [
+    {
+     "name": "tx_id",
+     "wire": "tx_id",
+     "type": "u64",
+     "serde": []
+    },
+    {
+     "name": "status",
+     "wire": "status",
+     "type": "String",
+     "serde": []
+    },
+    {
+     "name": "reason",
+     "wire": "reason",
+     "type": "Option<String>",
+     "serde": []
+    },
+    {
+     "name": "abort_code",
+     "wire": "abort_code",
+     "type": "Option<String>",
+     "serde": [
+      "default"
+     ]
+    },
+    {
+     "name": "error",
+     "wire": "error",
+     "type": "Option<String>",
+     "serde": []
+    },
+    {
+     "name": "snapshot_version",
+     "wire": "snapshot_version",
+     "type": "Option<u64>",
+     "serde": []
+    },
+    {
+     "name": "commit_version",
+     "wire": "commit_version",
+     "type": "Option<u64>",
+     "serde": []
+    },
+    {
+     "name": "materialized",
+     "wire": "materialized",
+     "type": "bool",
+     "serde": [
+      "default = \"default_materialized\""
+     ]
+    },
+    {
+     "name": "visibility",
+     "wire": "visibility",
+     "type": "Option<VisibilityState>",
+     "serde": []
+    }
+   ],
+   "unreachable_reason": "function-local helper: defined inside TransactionInfo::deserialize, never named in any reachable field type"
+  },
+  "serde_bytes::ByteArray<16>": {
+   "crate": "serde_bytes",
+   "kind": "newtype",
+   "impl": "hand_written",
+   "verdict": "indexed",
+   "reason": "SCALAR-EXCEPTION-style external entry: DbMessage::GetRecord.key (db_message.rs:383-390) decodes RecordId through the private record_id_wire adapter (#[serde(with = \"record_id_wire\")]) which uses serde_bytes::ByteArray::<16>: serialize emits the 16 bytes as msgpack bin; deserialize requires EXACTLY 16 bytes (fixed-size bounded visitor, accepts borrowed bytes and owned byte_buf) and is a typed decode error otherwise. The adapter exists because RecordId's own Deserialize binds &[u8] and fails under buffering msgpack decode. Fixed-length bin has no keys, hence indexed.",
+   "serde": [
+    "with = \"record_id_wire\" (adapter over serde_bytes::ByteArray<16>)"
+   ],
+   "fields": [
+    {
+     "name": "0",
+     "wire": "bin(16)",
+     "type": "[u8; 16]",
+     "serde": []
+    }
+   ],
+   "unreachable_reason": "adapter-level decode target: reached only through DbMessage::GetRecord's serde(with) hook, not typed as a named field type"
+  },
+  "StringOrSeq": {
+   "crate": "shamir-query-types",
+   "path": "src/read/filter/filter_enum.rs",
+   "kind": "enum",
+   "impl": "derived",
+   "verdict": "named",
+   "reason": "function-local untagged helper enum inside de_field_path (filter_enum.rs:415-428): decodes a FieldPath from either a single string or an array of string segments; serialization always emits the canonical array form. IDENTIFIER-FREE scalar/sequence buffering - registered as the explicit scalar exception the design doc requires for Filter's deserialize_with hook.",
+   "serde": [
+    "untagged"
+   ],
+   "variants": [
+    {
+     "name": "One",
+     "wire": "string",
+     "shape": "newtype",
+     "serde": [],
+     "fields": [
+      {
+       "name": "0",
+       "wire": "0",
+       "type": "String",
+       "serde": []
+      }
+     ]
+    },
+    {
+     "name": "Many",
+     "wire": "array",
+     "shape": "newtype",
+     "serde": [],
+     "fields": [
+      {
+       "name": "0",
+       "wire": "0",
+       "type": "Vec<String>",
+       "serde": []
+      }
+     ]
+    }
+   ],
+   "unreachable_reason": "function-local helper inside the de_field_path deserialize_with hook; never named in a reachable field type"
+  },
+  "nonzero_u64_wire::Wire": {
+   "crate": "shamir-query-types",
+   "path": "src/durability/durability_override.rs",
+   "kind": "enum",
+   "impl": "derived",
+   "verdict": "named",
+   "reason": "function-local untagged helper enum inside the nonzero_u64_wire serde(with) module (durability_override.rs:13-45): decodes DurabilityOverride.wal_retention_max_bytes from either a decimal string (NonZeroU64 serialized as string so values above i64::MAX survive signed-only msgpack consumers) or a legacy u64. IDENTIFIER-FREE scalar buffering - registered as the explicit scalar exception for the durability helper.",
+   "serde": [
+    "untagged"
+   ],
+   "variants": [
+    {
+     "name": "Decimal",
+     "wire": "string",
+     "shape": "newtype",
+     "serde": [],
+     "fields": [
+      {
+       "name": "0",
+       "wire": "0",
+       "type": "String",
+       "serde": []
+      }
+     ]
+    },
+    {
+     "name": "Number",
+     "wire": "u64",
+     "shape": "newtype",
+     "serde": [],
+     "fields": [
+      {
+       "name": "0",
+       "wire": "0",
+       "type": "u64",
+       "serde": []
+      }
+     ]
+    }
+   ],
+   "unreachable_reason": "function-local helper inside the nonzero_u64_wire serde(with) hook; never named in a reachable field type"
   }
  }
 }

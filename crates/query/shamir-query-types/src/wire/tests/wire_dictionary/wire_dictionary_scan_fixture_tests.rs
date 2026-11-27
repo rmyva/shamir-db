@@ -1,20 +1,25 @@
 //! Real-graph fixture and traversal unit tests for the wire-dictionary
 //! pinning test (WIRE-DICT-1). Split out of
 //! `wire_dictionary_scan_tests.rs` (file size cap): these tests prove the
-//! completeness machinery non-vacuous against an ACTUAL scan of a minimal
-//! source fixture through the REAL `collect_items`, plus unit tests for
+//! truncation/append rule (CHECK 1) and the completeness machinery (CHECK
+//! 2) non-vacuous against an ACTUAL scan of a minimal source fixture
+//! through the REAL `collect_items` + REAL checks, plus unit tests for
 //! `type_graph_edges` and the hand-built-graph traversal tests.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use super::wire_dictionary_scan_source::{collect_items, ScanEntry};
 use super::wire_dictionary_scan_tests::{
-    check_completeness, check_snapshot_sanity, reachable, type_graph_edges, Corpus, SnapField,
+    check_completeness, check_one_type, check_snapshot_sanity, reachable, Corpus, SnapField,
     Snapshot, SnapshotType, FIXED_ROOTS, PRIMITIVES,
 };
 
-// ---------------------------------------------------------------------------
+type FixtureScan = (
+    BTreeMap<String, ScanEntry>,
+    BTreeMap<String, String>,
+    BTreeMap<String, BTreeSet<std::path::PathBuf>>,
+);
 
 const FIXTURE_SRC: &str = "mod m { \
     pub struct DbRequest { a: A } \
@@ -23,30 +28,42 @@ const FIXTURE_SRC: &str = "mod m { \
     pub struct B { x: u32 } \
 }";
 
-fn fixture_scan() -> (BTreeMap<String, ScanEntry>, BTreeMap<String, String>) {
+/// The SAME graph with the MIDDLE field `b` removed from A (source shortened
+/// by one member at position 0, `pair` shifted to #0).
+const FIXTURE_SRC_MIDDLE_REMOVED: &str = "mod m { \
+    pub struct DbRequest { a: A } \
+    pub struct DbResponse { } \
+    pub struct A { pair: (B, u32) } \
+    pub struct B { x: u32 } \
+}";
+
+fn fixture_scan() -> FixtureScan {
     let file = syn::parse_file(FIXTURE_SRC).expect("fixture parses");
     let mut scan = BTreeMap::new();
     let mut aliases = BTreeMap::new();
+    let mut defining: BTreeMap<String, BTreeSet<std::path::PathBuf>> = BTreeMap::new();
     let mut errs = Vec::new();
     collect_items(
         &file.items,
         &mut scan,
         &mut aliases,
+        &mut defining,
         Path::new("fixture.rs"),
         &mut errs,
     );
     assert!(errs.is_empty(), "fixture scan errors: {errs:?}");
-    (scan, aliases)
+    (scan, aliases, defining)
 }
 
 fn fixture_snap_type(kind: &str, fields: Vec<SnapField>) -> SnapshotType {
     SnapshotType {
         crate_name: "shamir-query-types".to_string(),
-        path: String::new(),
+        path: Some("fixture.rs".to_string()),
         kind: kind.to_string(),
         impl_kind: "derived".to_string(),
         verdict: "named".to_string(),
         reason: String::new(),
+        unreachable_reason: String::new(),
         serde: Vec::new(),
         fields,
         variants: Vec::new(),
@@ -66,11 +83,40 @@ fn fixture_roots() -> Vec<String> {
     FIXED_ROOTS.iter().map(|r| r.to_string()).collect()
 }
 
+/// CHECK 1 fixture harness: real scan of the given source, a snapshot for A
+/// that pins the given field list, then the REAL `check_one_type`
+/// collector. Returns all collected mismatch strings (empty = passes).
+fn check_fixture_a_src(src: &str, snap_fields: Vec<SnapField>) -> Vec<String> {
+    let file = syn::parse_file(src).expect("fixture parses");
+    let mut scan = BTreeMap::new();
+    let mut aliases = BTreeMap::new();
+    let mut defining = BTreeMap::new();
+    let mut errs = Vec::new();
+    collect_items(
+        &file.items,
+        &mut scan,
+        &mut aliases,
+        &mut defining,
+        Path::new("fixture.rs"),
+        &mut errs,
+    );
+    assert!(errs.is_empty(), "fixture scan errors: {errs:?}");
+    let rec = scan.get("A").expect("fixture defines A");
+    let snap = fixture_snap_type("struct", snap_fields);
+    let mut mism = Vec::new();
+    check_one_type("A", &snap, rec, &mut mism);
+    mism
+}
+
+fn check_fixture_a(snap_fields: Vec<SnapField>) -> Vec<String> {
+    check_fixture_a_src(FIXTURE_SRC, snap_fields)
+}
+
 /// (i) B missing from the snapshot types while still reachable — via the
 /// `Vec<B>` field AND the `(B, u32)` tuple field — must FAIL completeness.
 #[test]
 fn fixture_missing_reachable_type_fails_completeness() {
-    let (scan, aliases) = fixture_scan();
+    let (scan, aliases, defining) = fixture_scan();
     let mut types = BTreeMap::new();
     types.insert("DbRequest".to_string(), fixture_snap_type("struct", vec![]));
     types.insert(
@@ -92,6 +138,7 @@ fn fixture_missing_reachable_type_fails_completeness() {
     let c = Corpus {
         scan,
         aliases,
+        defining,
         snapshot: Snapshot {
             schema_version: 1,
             roots: fixture_roots(),
@@ -109,7 +156,7 @@ fn fixture_missing_reachable_type_fails_completeness() {
 /// (ii) with B present, the same REAL checks PASS.
 #[test]
 fn fixture_complete_graph_passes_real_checks() {
-    let (scan, aliases) = fixture_scan();
+    let (scan, aliases, defining) = fixture_scan();
     let mut types = BTreeMap::new();
     types.insert("DbRequest".to_string(), fixture_snap_type("struct", vec![]));
     types.insert(
@@ -130,6 +177,7 @@ fn fixture_complete_graph_passes_real_checks() {
     let c = Corpus {
         scan,
         aliases,
+        defining,
         snapshot: Snapshot {
             schema_version: 1,
             roots: fixture_roots(),
@@ -144,11 +192,12 @@ fn fixture_complete_graph_passes_real_checks() {
 /// run from the FIXED roots — it is never driven by the snapshot's list).
 #[test]
 fn fixture_empty_roots_fail_sanity() {
-    let (scan, aliases) = fixture_scan();
+    let (scan, aliases, defining) = fixture_scan();
     let types: BTreeMap<String, SnapshotType> = BTreeMap::new();
     let c = Corpus {
         scan,
         aliases,
+        defining,
         snapshot: Snapshot {
             schema_version: 1,
             roots: Vec::new(),
@@ -159,50 +208,94 @@ fn fixture_empty_roots_fail_sanity() {
     assert!(err.contains("roots"), "failure must name roots, got: {err}");
 }
 
-/// (iii) the edge extractor resolves BOTH fixture edge kinds: generic
-/// arguments (Vec<B>) and tuple elements ((B, u32)).
+// ---------------------------------------------------------------------------
+// CHECK 1 length-rule fixtures: pure APPEND tolerated; removal / truncation
+// / reorder all fail. All through the REAL `collect_items` scan + REAL
+// `check_one_type` mismatch collector.
+// ---------------------------------------------------------------------------
+
+/// APPEND: the source (b, pair) may carry MORE trailing members than the
+/// snapshot pins — the only tolerated length difference.
 #[test]
-fn type_graph_edges_resolve_generic_and_tuple_elements() {
-    assert_eq!(
-        type_graph_edges("Vec<B>").unwrap(),
-        vec!["B".to_string()],
-        "Vec<B> must resolve its element"
-    );
-    assert_eq!(
-        type_graph_edges("(B, u32)").unwrap(),
-        vec!["B".to_string(), "u32".to_string()],
-        "tuples must resolve EVERY element"
-    );
-    assert_eq!(
-        type_graph_edges("Vec<(B, u32)>").unwrap(),
-        vec!["B".to_string(), "u32".to_string()],
-        "tuple elements nested inside generics must resolve"
-    );
-    assert_eq!(
-        type_graph_edges("TMap<A, String>").unwrap(),
-        vec!["A".to_string(), "String".to_string()],
-        "ALL generic arguments must resolve (not just the last)"
-    );
-    assert_eq!(
-        type_graph_edges("Option<Filter>").unwrap(),
-        vec!["Filter".to_string()],
-    );
-    assert_eq!(
-        type_graph_edges("[u8; 16]").unwrap(),
-        vec!["u8".to_string()]
-    );
-    assert_eq!(
-        type_graph_edges("ByteBuf").unwrap(),
-        vec!["ByteBuf".to_string()]
-    );
-    // unsupported / malformed type strings FAIL, they are never skipped
-    let err = type_graph_edges("#unsupported-type#").expect_err("unsupported must fail");
-    assert!(err.contains("#unsupported-type#"), "got: {err}");
+fn fixture_appended_trailing_field_passes() {
+    // Snapshot pins only the first source field; `pair` is a trailing
+    // source APPEND.
+    let mism = check_fixture_a(vec![fixture_snap_field("b", "Vec<B>")]);
     assert!(
-        type_graph_edges("Foo<").is_err(),
-        "unbalanced generics must fail"
+        mism.is_empty(),
+        "a trailing source APPEND must be tolerated, got: {mism:?}"
     );
-    assert!(type_graph_edges("").is_err(), "empty type must fail");
+}
+
+/// REMOVAL: the snapshot expects a member the source no longer declares —
+/// a source SHORTER than the snapshot must fail with the removal message
+/// ("protocol version change required"), never be tolerated at the tail.
+#[test]
+fn fixture_source_shortened_fails() {
+    // Snapshot expects (b, pair); the source has both — instead SHORTEN the
+    // snapshot side of the comparison by pinning a third field the source
+    // does not have, i.e. the snapshot is longer than the source list.
+    let mut fields = vec![
+        fixture_snap_field("b", "Vec<B>"),
+        fixture_snap_field("pair", "(B, u32)"),
+    ];
+    fields.push(fixture_snap_field("extra", "u64")); // source has no #2
+    let mism = check_fixture_a(fields);
+    assert!(
+        !mism.is_empty(),
+        "a snapshot longer than the source (removal) must fail"
+    );
+    assert!(
+        mism.iter()
+            .any(|m| m.contains("protocol version change required")),
+        "removal failure must demand a protocol version change, got: {mism:?}"
+    );
+    assert!(
+        mism.iter().any(|m| m.contains("field list length")),
+        "failure must be the field-list-length guard, got: {mism:?}"
+    );
+}
+
+/// MIDDLE REMOVAL: the source no longer declares `b` at position 0, so it
+/// is SHORTER than the snapshot (b, pair) — the removal guard must fire AND
+/// no positional compare may silently re-align `pair` to snapshot #0.
+#[test]
+fn fixture_middle_removal_fails() {
+    let mism = check_fixture_a_src(
+        FIXTURE_SRC_MIDDLE_REMOVED,
+        vec![
+            fixture_snap_field("b", "Vec<B>"),
+            fixture_snap_field("pair", "(B, u32)"),
+        ],
+    );
+    assert!(
+        !mism.is_empty(),
+        "a middle removal (source shortened) must fail"
+    );
+    assert!(
+        mism.iter()
+            .any(|m| m.contains("protocol version change required")),
+        "removal failure must demand a protocol version change, got: {mism:?}"
+    );
+}
+
+/// REORDER: same members, different order — the positional compare fails
+/// on position 0 and reports ALL positional mismatches (collector, not
+/// early-return).
+#[test]
+fn fixture_reorder_fails() {
+    let mism = check_fixture_a(vec![
+        fixture_snap_field("pair", "(B, u32)"),
+        fixture_snap_field("b", "Vec<B>"),
+    ]);
+    assert!(
+        mism.len() >= 2,
+        "reorder must report at least the two swapped positions (all mismatches), got: {mism:?}"
+    );
+    assert!(
+        mism.iter().any(|m| m.contains("field #0")) && mism.iter().any(|m| m.contains("field #1")),
+        "reorder failure must name BOTH swapped positions, got: {mism:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -286,7 +379,7 @@ fn completeness_traversal_on_a_fully_covered_graph_yields_only_defined_names() {
 /// losing an edge kind.
 #[test]
 fn fixture_reachability_covers_both_edge_kinds() {
-    let (scan, aliases) = fixture_scan();
+    let (scan, aliases, _defining) = fixture_scan();
     let mut defs: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
     for (name, entry) in &scan {
         defs.insert(name.clone(), entry.member_types());

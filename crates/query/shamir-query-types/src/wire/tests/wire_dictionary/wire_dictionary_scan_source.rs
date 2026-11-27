@@ -13,7 +13,6 @@ use std::path::{Path, PathBuf};
 
 use syn::ext::IdentExt;
 use syn::Item;
-
 // ---------------------------------------------------------------------------
 // Normalized serde attribute model (no raw strings cross the comparisons)
 // ---------------------------------------------------------------------------
@@ -21,64 +20,143 @@ use syn::Item;
 /// Normalized serde attributes that change wire shape or index mapping.
 /// Strings are kept wherever a path/value matters (`default = "f"`,
 /// `skip_serializing_if = "Option::is_none"`, `with = "serde_bytes"`, ...).
+/// Where a `#[serde(...)]` attribute sits. serde accepts different keys at
+/// different positions, and the dictionary model additionally treats
+/// variant-level `default` as MALFORMED: it is not a real serde attribute
+/// (the Rust-native `#[default]` derive attr is a different thing entirely
+/// and is never read by this scanner).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum SerdePos {
+    /// struct/enum container
+    Container,
+    /// struct field, variant payload field, or unnamed field
+    Field,
+    /// enum variant
+    Variant,
+}
+
+/// Serde keys that CANNOT affect the wire, deliberately consumed and
+/// ignored (each with its one-line reason). ANY OTHER serde key that is
+/// neither pinned by `SerdeFlags` nor listed here FAILS the scan.
+pub(super) const HARMLESS_SERDE_KEYS: &[&str] = &[
+    // `bound = "..."` / `bounds(..)`: adds trait bounds on generated impls;
+    // pure compile-time, no wire effect.
+    "bound",
+    // `crate = "..."`: the path serde_derive uses to refer to the serde
+    // crate; codegen plumbing only.
+    "crate",
+    // `no_default`: deserializer fallback plumbing (use the visitor's
+    // missing-field error instead of Field::default); no wire name/shape.
+    "no_default",
+];
+
+/// Serde keys the scanner PINS (they change wire names or wire shape).
+pub(super) const PINNED_SERDE_KEYS: &[&str] = &[
+    "default",
+    "flatten",
+    "skip_serializing",
+    "skip_deserializing",
+    "deny_unknown_fields",
+    "untagged",
+    "transparent",
+    "tag",
+    "content",
+    "rename_all",
+    "rename_all_fields",
+    "skip_serializing_if",
+    "with",
+    "serialize_with",
+    "deserialize_with",
+    "skip",
+    "other",
+    "rename",
+    "alias",
+    "from",
+    "try_from",
+    "into",
+    "remote",
+];
+
+/// Shape-changing serde attributes the dictionary model cannot represent.
+const SHAPE_CHANGING_KEYS: &[&str] = &["field_identifier", "variant_identifier"];
+
 #[derive(Default, Debug, Clone)]
-pub(crate) struct SerdeFlags {
+pub(super) struct SerdeFlags {
     /// `#[serde(default)]` = Some(""), `#[serde(default = "path")]` = Some(path)
-    pub(crate) default: Option<String>,
-    pub(crate) flatten: bool,
-    pub(crate) skip_serializing: bool,
-    pub(crate) skip_deserializing: bool,
-    pub(crate) deny_unknown_fields: bool,
-    pub(crate) untagged: bool,
-    pub(crate) transparent: bool,
+    pub(super) default: Option<String>,
+    pub(super) flatten: bool,
+    pub(super) skip_serializing: bool,
+    pub(super) skip_deserializing: bool,
+    pub(super) deny_unknown_fields: bool,
+    pub(super) untagged: bool,
+    pub(super) transparent: bool,
     /// container `tag = "..."`
-    pub(crate) tag: Option<String>,
+    pub(super) tag: Option<String>,
     /// container `content = "..."`
-    pub(crate) content: Option<String>,
+    pub(super) content: Option<String>,
     /// container/variant `rename_all = "..."`
-    pub(crate) rename_all: Option<String>,
+    pub(super) rename_all: Option<String>,
     /// `skip_serializing_if = "..."`
-    pub(crate) skip_serializing_if: Option<String>,
+    pub(super) skip_serializing_if: Option<String>,
     /// `with = "..."`
-    pub(crate) with: Option<String>,
+    pub(super) with: Option<String>,
     /// `serialize_with = "..."`
-    pub(crate) serialize_with: Option<String>,
+    pub(super) serialize_with: Option<String>,
     /// `deserialize_with = "..."`
-    pub(crate) deserialize_with: Option<String>,
+    pub(super) deserialize_with: Option<String>,
     /// every `rename = "..."` value
-    pub(crate) renames: Vec<String>,
+    pub(super) renames: Vec<String>,
     /// every `alias = "..."` value
-    pub(crate) aliases: Vec<String>,
+    pub(super) aliases: Vec<String>,
     /// `from = "T"` conversion target (serde deserializes T, converts)
-    pub(crate) from: Option<String>,
-    pub(crate) try_from: Option<String>,
-    pub(crate) into: Option<String>,
-    pub(crate) remote: Option<String>,
+    pub(super) from: Option<String>,
+    pub(super) try_from: Option<String>,
+    pub(super) into: Option<String>,
+    pub(super) remote: Option<String>,
     /// container `rename_all_fields = "..."` (enum variant FIELD names)
-    pub(crate) rename_all_fields: Option<String>,
+    pub(super) rename_all_fields: Option<String>,
     /// `#[serde(skip)]` = skip_serializing + skip_deserializing; recorded as
     /// the `skip` attribute string itself so the JSON can pin it exactly.
-    pub(crate) skip: bool,
+    pub(super) skip: bool,
     /// variant-level `#[serde(other)]`
-    pub(crate) other: bool,
+    pub(super) other: bool,
     /// `rename(serialize = "a")` values
-    pub(crate) renames_serialize: Vec<String>,
+    pub(super) renames_serialize: Vec<String>,
     /// `rename(deserialize = "b")` values — the DESERIALIZE value is the
     /// identifier serde's field/variant visitor matches on, so it is the
     /// effective wire name when no plain `rename` is present.
-    pub(crate) renames_deserialize: Vec<String>,
+    pub(super) renames_deserialize: Vec<String>,
+    /// directional `rename_all(serialize = "...")` (container/variant level)
+    pub(super) rename_all_serialize: Option<String>,
+    /// directional `rename_all(deserialize = "...")` — the effective rule
+    /// for wire names when no plain `rename_all` is present.
+    pub(super) rename_all_deserialize: Option<String>,
+    /// directional `rename_all_fields(serialize = "...")` (container level)
+    pub(super) rename_all_fields_serialize: Option<String>,
+    /// directional `rename_all_fields(deserialize = "...")`
+    pub(super) rename_all_fields_deserialize: Option<String>,
+    /// The literal cfg predicate text when this member is cfg-gated AND
+    /// carries serde (or a cfg_attr expanding to serde). Pinned by the
+    /// snapshot as `cfg = "<predicate>"`; a gated member without that pin
+    /// fails the comparison.
+    pub(super) cfg: Option<String>,
 }
-
 impl SerdeFlags {
-    pub(crate) fn has_rename(&self, name: &str) -> bool {
+    /// The rule governing DESERIALIZE wire names: the directional
+    /// deserialize value wins, else the plain rule.
+    pub(super) fn rule_deserialize(&self) -> Option<&str> {
+        self.rename_all_deserialize
+            .as_deref()
+            .or(self.rename_all.as_deref())
+    }
+
+    pub(super) fn has_rename(&self, name: &str) -> bool {
         self.renames.iter().any(|r| r == name) || self.aliases.iter().any(|a| a == name)
     }
 
-    /// The first `rename = "..."` value, if any (the effective wire name).
-    /// A directional `rename(serialize = "a", deserialize = "b")` yields
-    /// its DESERIALIZE value: that is the identifier the serde visitor
-    /// matches on while decoding, which is what this dictionary pins.
-    pub(crate) fn rename(&self) -> Option<&str> {
+    /// The effective DESERIALIZE wire name: plain/directional rename,
+    /// preferring the deserialize value of a directional rename.
+    pub(super) fn rename(&self) -> Option<&str> {
         self.renames
             .first()
             .or_else(|| self.renames_deserialize.first())
@@ -87,8 +165,11 @@ impl SerdeFlags {
 
     /// The canonical attribute strings this scanner pins, as a set. This is
     /// the single source of truth for what CHECK 1 compares.
-    pub(crate) fn canonical(&self) -> BTreeSet<String> {
+    pub(super) fn canonical(&self) -> BTreeSet<String> {
         let mut set = BTreeSet::new();
+        if let Some(pred) = &self.cfg {
+            set.insert(format!("cfg = \"{pred}\""));
+        }
         if let Some(d) = &self.default {
             if d.is_empty() {
                 set.insert("default".to_string());
@@ -112,7 +193,17 @@ impl SerdeFlags {
             (&self.tag, "tag"),
             (&self.content, "content"),
             (&self.rename_all, "rename_all"),
+            (&self.rename_all_serialize, "rename_all_serialize"),
+            (&self.rename_all_deserialize, "rename_all_deserialize"),
             (&self.rename_all_fields, "rename_all_fields"),
+            (
+                &self.rename_all_fields_serialize,
+                "rename_all_fields_serialize",
+            ),
+            (
+                &self.rename_all_fields_deserialize,
+                "rename_all_fields_deserialize",
+            ),
             (&self.from, "from"),
             (&self.try_from, "try_from"),
             (&self.into, "into"),
@@ -146,16 +237,25 @@ impl SerdeFlags {
         set
     }
 
-    /// Parse `#[serde(...)]` attributes into flags. Attribute FILTER is
-    /// airtight: only `#[serde(...)]` attrs are read (`attr.path().is_ident("serde")`),
-    /// so Rust-native `#[default]` attrs never contaminate the flags.
+    /// Parse `#[serde(...)]` attributes into flags at a given position.
+    /// Attribute FILTER is airtight: only `#[serde(...)]` attrs are read
+    /// (`attr.path().is_ident("serde")`), so Rust-native `#[default]` attrs
+    /// never contaminate the flags.
     ///
-    /// `parse_nested_meta` ERRORS ARE COLLECTED in `errs`, never discarded:
-    /// a malformed serde attribute must fail the scan (the caller prefixes
-    /// the current file path and item name). Unknown serde keys are
-    /// consumed (value literal, if any) but not pinned.
-    pub(crate) fn from_attrs(attrs: &[syn::Attribute], errs: &mut Vec<String>) -> SerdeFlags {
-        let mut flags = SerdeFlags::default();
+    /// ERRORS ARE COLLECTED in `errs`, never discarded: a malformed serde
+    /// attribute (including variant-level `default`, shape-changing
+    /// identifier attrs, and unclassified keys) must fail the scan. Values
+    /// of directional forms are parsed with syn nested metas — quoted
+    /// commas inside a name are never split by string cutting.
+    pub(super) fn from_attrs(
+        attrs: &[syn::Attribute],
+        pos: SerdePos,
+        errs: &mut Vec<String>,
+    ) -> SerdeFlags {
+        let mut flags = SerdeFlags {
+            cfg: cfg_gate(attrs, errs),
+            ..SerdeFlags::default()
+        };
         for attr in attrs {
             if !attr.path().is_ident("serde") {
                 continue;
@@ -171,14 +271,52 @@ impl SerdeFlags {
                     let lit: syn::LitStr = meta.value()?.parse()?;
                     Ok(lit.value())
                 };
+                // Directional nested form: `key(serialize = "a",
+                // deserialize = "b")`. syn's parse_nested_meta handles the
+                // quoting; no string splitting of names ever happens.
+                let nested_directional = |flags: &mut SerdeFlags,
+                                          sink_ser: &mut dyn FnMut(&mut SerdeFlags, String),
+                                          sink_de: &mut dyn FnMut(&mut SerdeFlags, String)|
+                 -> syn::Result<()> {
+                    meta.parse_nested_meta(|m| {
+                        let key = m
+                            .path
+                            .get_ident()
+                            .map(|i| i.to_string())
+                            .unwrap_or_default();
+                        let v: syn::LitStr = m.value()?.parse()?;
+                        match key.as_str() {
+                            "serialize" => {
+                                sink_ser(flags, v.value());
+                                Ok(())
+                            }
+                            "deserialize" => {
+                                sink_de(flags, v.value());
+                                Ok(())
+                            }
+                            _ => Err(
+                                m.error(format!("unsupported nested key `{key}` in `{name}(...)`"))
+                            ),
+                        }
+                    })
+                };
                 let result = match name.as_str() {
                     "default" => {
-                        if meta.input.peek(syn::Token![=]) {
+                        if pos == SerdePos::Variant {
+                            // NOT a real serde attribute: serde_derive never
+                            // accepts `default` on a variant (the Rust-native
+                            // `#[default]` derive attr is a different thing).
+                            Err(meta.error(
+                                "variant-level serde `default` is not a serde attribute — \
+                                 remove it from the source or the snapshot",
+                            ))
+                        } else if meta.input.peek(syn::Token![=]) {
                             flags.default = Some(value_lit()?);
+                            Ok(())
                         } else {
                             flags.default = Some(String::new());
+                            Ok(())
                         }
-                        Ok(())
                     }
                     "flatten" => {
                         flags.flatten = true;
@@ -213,8 +351,16 @@ impl SerdeFlags {
                         Ok(())
                     }
                     "rename_all" => {
-                        flags.rename_all = Some(value_lit()?);
-                        Ok(())
+                        if meta.input.peek(syn::token::Paren) {
+                            nested_directional(
+                                &mut flags,
+                                &mut |f, v| f.rename_all_serialize = Some(v),
+                                &mut |f, v| f.rename_all_deserialize = Some(v),
+                            )
+                        } else {
+                            flags.rename_all = Some(value_lit()?);
+                            Ok(())
+                        }
                     }
                     "skip_serializing_if" => {
                         flags.skip_serializing_if = Some(value_lit()?);
@@ -241,50 +387,25 @@ impl SerdeFlags {
                         Ok(())
                     }
                     "rename_all_fields" => {
-                        flags.rename_all_fields = Some(value_lit()?);
-                        Ok(())
-                    }
-                    "from" => {
-                        flags.from = Some(value_lit()?);
-                        Ok(())
-                    }
-                    "try_from" => {
-                        flags.try_from = Some(value_lit()?);
-                        Ok(())
-                    }
-                    "into" => {
-                        flags.into = Some(value_lit()?);
-                        Ok(())
-                    }
-                    "remote" => {
-                        flags.remote = Some(value_lit()?);
-                        Ok(())
+                        if meta.input.peek(syn::token::Paren) {
+                            nested_directional(
+                                &mut flags,
+                                &mut |f, v| f.rename_all_fields_serialize = Some(v),
+                                &mut |f, v| f.rename_all_fields_deserialize = Some(v),
+                            )
+                        } else {
+                            flags.rename_all_fields = Some(value_lit()?);
+                            Ok(())
+                        }
                     }
                     "rename" => {
                         // directional form: rename(serialize = "a", deserialize = "b")
                         if meta.input.peek(syn::token::Paren) {
-                            meta.parse_nested_meta(|m| {
-                                let key = m
-                                    .path
-                                    .get_ident()
-                                    .map(|i| i.to_string())
-                                    .unwrap_or_default();
-                                let v: syn::LitStr = m.value()?.parse()?;
-                                match key.as_str() {
-                                    "serialize" => {
-                                        flags.renames_serialize.push(v.value());
-                                        Ok(())
-                                    }
-                                    "deserialize" => {
-                                        flags.renames_deserialize.push(v.value());
-                                        Ok(())
-                                    }
-                                    _ => Err(
-                                        m.error(format!("unsupported nested rename key `{key}`"))
-                                    ),
-                                }
-                            })?;
-                            Ok(())
+                            nested_directional(
+                                &mut flags,
+                                &mut |f, v| f.renames_serialize.push(v),
+                                &mut |f, v| f.renames_deserialize.push(v),
+                            )
                         } else {
                             flags.renames.push(value_lit()?);
                             Ok(())
@@ -294,13 +415,39 @@ impl SerdeFlags {
                         flags.aliases.push(value_lit()?);
                         Ok(())
                     }
-                    // bound / crate: pinned-irrelevant, consumed and ignored.
-                    _ => {
+                    // shape-changing identifier attributes: they rewrite the
+                    // DESERIALIZE shape itself (field/variant identifiers are
+                    // matched by index), which the dictionary model cannot
+                    // represent — fail explicitly, never silently ignore.
+                    k if SHAPE_CHANGING_KEYS.contains(&k) => Err(meta.error(format!(
+                        "`{k}` is a shape-changing serde attribute not supported by the \
+                         dictionary model"
+                    ))),
+                    // pinned, recorded (conversion targets / mirror path)
+                    "from" | "try_from" | "into" | "remote" => {
+                        let v = value_lit()?;
+                        match name.as_str() {
+                            "from" => flags.from = Some(v),
+                            "try_from" => flags.try_from = Some(v),
+                            "into" => flags.into = Some(v),
+                            _ => flags.remote = Some(v),
+                        }
+                        Ok(())
+                    }
+                    k if HARMLESS_SERDE_KEYS.contains(&k) => {
+                        // pinned-irrelevant: consume an attached value, if any
                         if meta.input.peek(syn::Token![=]) {
                             let _: syn::Lit = meta.value()?.parse()?;
                         }
                         Ok(())
                     }
+                    // UNCLASSIFIED serde key: fail the scan naming the key so
+                    // a serde version upgrade cannot change the wire silently.
+                    k => Err(meta.error(format!(
+                        "unclassified serde attribute `{k}` — not pinned (pinned set: \
+                         {PINNED_SERDE_KEYS:?}) and not on the harmless allowlist \
+                         {HARMLESS_SERDE_KEYS:?}"
+                    ))),
                 };
                 result
             }) {
@@ -311,29 +458,89 @@ impl SerdeFlags {
     }
 }
 
+/// cfg / cfg_attr gating (ITEM 3): a member that is cfg-gated AND carries
+/// serde — or carries a cfg_attr expanding to a serde callee — must have
+/// its predicate PINNED by the snapshot (`cfg = "<predicate>"`); a gated
+/// member without that pin fails the comparison. cfg_attr with a non-serde
+/// callee and no serde attr on the member is harmless.
+pub(super) fn cfg_gate(attrs: &[syn::Attribute], errs: &mut Vec<String>) -> Option<String> {
+    let has_serde = attrs.iter().any(|a| a.path().is_ident("serde"));
+    let mut gated = None;
+    for attr in attrs {
+        let path = attr.path();
+        if path.is_ident("cfg") {
+            // `#[cfg(PRED)]` with a serde attr on the same member: the
+            // member's presence depends on build config, so the snapshot
+            // must pin the predicate text.
+            if has_serde {
+                gated = Some(
+                    attr.meta
+                        .require_list()
+                        .map(|l| l.tokens.to_string())
+                        .unwrap_or_else(|e| {
+                            errs.push(format!("malformed cfg attribute: {e}"));
+                            String::new()
+                        }),
+                );
+            }
+        } else if path.is_ident("cfg_attr") {
+            // `#[cfg_attr(PRED, serde(...))]`: gated if a callee is `serde`;
+            // non-serde callees are harmless. Predicate = tokens up to the
+            // first top-level comma (token-text matching only — cfg
+            // predicates are plain paths/feature names).
+            if let Ok(list) = attr.meta.require_list() {
+                let text = list.tokens.to_string();
+                let serde_callee = text
+                    .split_once(',')
+                    .map(|(_, rest)| {
+                        rest.split(',').any(|callee| {
+                            callee
+                                .trim()
+                                .trim_start_matches('(')
+                                .trim_end_matches(')')
+                                .split_whitespace()
+                                .next()
+                                .map(|p| {
+                                    p.rsplit("::").next().unwrap_or(p) == "serde"
+                                        && !p.contains('!')
+                                })
+                                .unwrap_or(false)
+                        })
+                    })
+                    .unwrap_or(false);
+                if serde_callee {
+                    let pred = text.split_once(',').map(|(p, _)| p.trim().to_string());
+                    gated = pred;
+                }
+            }
+        }
+    }
+    gated
+}
+
 /// One struct field (or one unnamed field, name = its index as string).
 #[derive(Debug, Clone)]
-pub(crate) struct Member {
+pub(super) struct Member {
     /// Rust identifier as written (`r#where` normalizes to `where`),
     /// or the index for unnamed fields.
-    pub(crate) name: String,
+    pub(super) name: String,
     /// EFFECTIVE WIRE NAME: `rename` if present, else the identifier under
     /// the container's `rename_all` rule.
-    pub(crate) wire: String,
-    /// The member type as written in source (whitespace-normalized only).
-    pub(crate) ty: String,
-    pub(crate) flags: SerdeFlags,
+    pub(super) wire: String,
+    /// Member type as written; STRING not syn::Type (corpus must stay Send+Sync).
+    pub(super) ty: String,
+    pub(super) flags: SerdeFlags,
 }
 
 /// One enum variant, with its shape and (for struct/tuple shapes) fields.
 #[derive(Debug, Clone)]
-pub(crate) struct VariantRec {
-    pub(crate) name: String,
+pub(super) struct VariantRec {
+    pub(super) name: String,
     /// effective wire name (rename / container rename_all)
-    pub(crate) wire: String,
-    pub(crate) shape: &'static str, // "unit" | "newtype" | "tuple" | "struct"
-    pub(crate) flags: SerdeFlags,
-    pub(crate) fields: Vec<Member>,
+    pub(super) wire: String,
+    pub(super) shape: &'static str, // "unit" | "newtype" | "tuple" | "struct"
+    pub(super) flags: SerdeFlags,
+    pub(super) fields: Vec<Member>,
 }
 
 /// One scanned struct or enum, keyed by its base type name (before `<`).
@@ -341,18 +548,18 @@ pub(crate) struct VariantRec {
 /// named fields → "struct", exactly one unnamed field → "newtype",
 /// several unnamed fields → "tuple", no fields → "unit".
 #[derive(Debug, Clone)]
-pub(crate) struct ScanEntry {
-    pub(crate) kind: &'static str, // "struct" | "enum" | "newtype" | "tuple" | "unit"
-    pub(crate) container: SerdeFlags,
-    pub(crate) fields: Vec<Member>,
-    pub(crate) variants: Vec<VariantRec>,
+pub(super) struct ScanEntry {
+    pub(super) kind: &'static str, // "struct" | "enum" | "newtype" | "tuple" | "unit"
+    pub(super) container: SerdeFlags,
+    pub(super) fields: Vec<Member>,
+    pub(super) variants: Vec<VariantRec>,
 }
 
 impl ScanEntry {
     /// Member type strings with a FIELD LABEL ("field name" or
     /// "Variant::field"), used as the reachability-graph edges so a
     /// malformed/unsupported type string can be reported naming the field.
-    pub(crate) fn member_types(&self) -> Vec<(String, String)> {
+    pub(super) fn member_types(&self) -> Vec<(String, String)> {
         let mut out = Vec::new();
         for f in &self.fields {
             out.push((format!("field {}", f.name), f.ty.clone()));
@@ -366,65 +573,138 @@ impl ScanEntry {
     }
 }
 
-/// serde's RenameRule applied the way serde_derive does it: a `_` is
-/// inserted before every uppercase character at a non-zero index (snake /
-/// kebab / screaming), plus the plain case rewrites. An unknown rule value
-/// keeps the identifier as-is, which then mismatches loudly in CHECK 1.
-pub(crate) fn apply_rename_rule(name: &str, rule: Option<&str>) -> String {
-    let mut out = String::with_capacity(name.len() + 4);
+/// serde's `RenameRule`, implemented EXACTLY as serde_derive-1.0.229
+/// `src/internals/case.rs:56-108` does it. FIELD and VARIANT application
+/// differ (fields keep `_` separators for Lower/Snake, variants split on
+/// uppercase boundaries) — serde applies `apply_to_field` to struct fields
+/// and `apply_to_variant` to variant names, and so do we.
+///
+/// Every spelling serde supports is modeled:
+/// `lowercase`, `UPPERCASE`, `PascalCase`, `camelCase`, `snake_case`,
+/// `SCREAMING_SNAKE_CASE`, `kebab-case`, `SCREAMING-KEBAB-CASE`.
+const RENAME_RULES: &[&str] = &[
+    "lowercase",
+    "UPPERCASE",
+    "PascalCase",
+    "camelCase",
+    "snake_case",
+    "SCREAMING_SNAKE_CASE",
+    "kebab-case",
+    "SCREAMING-KEBAB-CASE",
+];
+
+/// Validate a `rename_all` value against serde's exact rule table; an
+/// unknown value is a scan ERROR (serde_derive rejects it at compile time,
+/// so it can never legitimately reach the wire).
+pub(super) fn check_rename_rule(rule: Option<&str>, errs: &mut Vec<String>) {
+    if let Some(r) = rule {
+        if !RENAME_RULES.contains(&r) {
+            errs.push(format!(
+                "unknown rename_all rule `{r}` — serde supports {RENAME_RULES:?}"
+            ));
+        }
+    }
+}
+
+/// case.rs `RenameRule::apply_to_field`.
+pub(super) fn apply_to_field(field: &str, rule: &str) -> String {
     match rule {
-        None => name.to_string(),
-        Some("lowercase") => name.to_lowercase(),
-        Some("UPPERCASE") => name.to_uppercase(),
-        Some("camelCase") => {
-            let mut c = name.chars();
+        // None | LowerCase | SnakeCase → unchanged
+        "lowercase" | "snake_case" => field.to_string(),
+        "UPPERCASE" => field.to_ascii_uppercase(),
+        "SCREAMING_SNAKE_CASE" => field.to_ascii_uppercase(),
+        "PascalCase" => {
+            let mut pascal = String::new();
+            let mut capitalize = true;
+            for ch in field.chars() {
+                if ch == '_' {
+                    capitalize = true;
+                } else if capitalize {
+                    pascal.push(ch.to_ascii_uppercase());
+                    capitalize = false;
+                } else {
+                    pascal.push(ch);
+                }
+            }
+            pascal
+        }
+        "camelCase" => {
+            let pascal = apply_to_field(field, "PascalCase");
+            let mut c = pascal.chars();
             match c.next() {
                 Some(f) => f.to_lowercase().collect::<String>() + c.as_str(),
                 None => String::new(),
             }
         }
-        Some("PascalCase") => {
-            let mut c = name.chars();
+        "kebab-case" => field.replace('_', "-"),
+        // ScreamingSnakeCase.apply_to_field(f).replace('_', "-")
+        "SCREAMING-KEBAB-CASE" => field.to_ascii_uppercase().replace('_', "-"),
+        _ => field.to_string(), // unknown: check_rename_rule already errors
+    }
+}
+
+/// case.rs `RenameRule::apply_to_variant`.
+pub(super) fn apply_to_variant(variant: &str, rule: &str) -> String {
+    match rule {
+        // None | PascalCase → unchanged
+        "PascalCase" => variant.to_string(),
+        "lowercase" => variant.to_ascii_lowercase(),
+        "UPPERCASE" => variant.to_ascii_uppercase(),
+        "camelCase" => {
+            let mut c = variant.chars();
             match c.next() {
-                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                Some(f) => f.to_lowercase().collect::<String>() + c.as_str(),
                 None => String::new(),
             }
         }
-        Some(rule @ ("snake_case" | "kebab-case" | "SCREAMING_SNAKE_CASE")) => {
-            let sep = if rule == "kebab-case" { '-' } else { '_' };
-            for (i, ch) in name.chars().enumerate() {
-                if ch.is_uppercase() && i != 0 {
-                    out.push(sep);
+        "snake_case" => {
+            let mut snake = String::new();
+            for (i, ch) in variant.char_indices() {
+                if i > 0 && ch.is_uppercase() {
+                    snake.push('_');
                 }
-                if rule == "SCREAMING_SNAKE_CASE" {
-                    out.push(ch.to_ascii_uppercase());
-                } else {
-                    out.push(ch.to_ascii_lowercase());
-                }
+                snake.push(ch.to_ascii_lowercase());
             }
-            out
+            snake
         }
-        // unknown rename_all value: keep the identifier; CHECK 1 mismatches loudly
-        Some(_) => name.to_string(),
+        "SCREAMING_SNAKE_CASE" => apply_to_variant(variant, "snake_case").to_ascii_uppercase(),
+        "kebab-case" => apply_to_variant(variant, "snake_case").replace('_', "-"),
+        "SCREAMING-KEBAB-CASE" => {
+            apply_to_variant(variant, "SCREAMING_SNAKE_CASE").replace('_', "-")
+        }
+        _ => variant.to_string(), // unknown: check_rename_rule already errors
     }
 }
 
-pub(crate) fn effective_wire(
-    ident: &str,
-    rename: Option<&str>,
-    rename_all: Option<&str>,
-) -> String {
+/// Wire name for a FIELD: `rename` (or the deserialize value of a
+/// directional rename) wins, else the FIELD rename rule.
+pub(super) fn field_wire(name: &str, rename: Option<&str>, rule: Option<&str>) -> String {
     match rename {
         Some(r) => r.to_string(),
-        None => apply_rename_rule(ident, rename_all),
+        None => match rule {
+            Some(r) => apply_to_field(name, r),
+            None => name.to_string(),
+        },
     }
 }
 
-pub(crate) fn fields_to_members(
+/// Wire name for a VARIANT: same precedence, VARIANT rename rule.
+pub(super) fn variant_wire(name: &str, rename: Option<&str>, rule: Option<&str>) -> String {
+    match rename {
+        Some(r) => r.to_string(),
+        None => match rule {
+            Some(r) => apply_to_variant(name, r),
+            None => name.to_string(),
+        },
+    }
+}
+
+pub(super) fn fields_to_members(
     fields: &syn::Fields,
     rename_all: Option<&str>,
     errs: &mut Vec<String>,
 ) -> Vec<Member> {
+    check_rename_rule(rename_all, errs);
     match fields {
         syn::Fields::Named(named) => named
             .named
@@ -432,8 +712,8 @@ pub(crate) fn fields_to_members(
             .map(|f| {
                 // unraw: `r#where` / `r#type` travel as `where` / `type`
                 let name = f.ident.as_ref().unwrap().unraw().to_string();
-                let flags = SerdeFlags::from_attrs(&f.attrs, errs);
-                let wire = effective_wire(&name, flags.rename(), rename_all);
+                let flags = SerdeFlags::from_attrs(&f.attrs, SerdePos::Field, errs);
+                let wire = field_wire(&name, flags.rename(), rename_all);
                 Member {
                     name,
                     wire,
@@ -447,7 +727,7 @@ pub(crate) fn fields_to_members(
             .iter()
             .enumerate()
             .map(|(i, f)| {
-                let flags = SerdeFlags::from_attrs(&f.attrs, errs);
+                let flags = SerdeFlags::from_attrs(&f.attrs, SerdePos::Field, errs);
                 Member {
                     name: i.to_string(),
                     wire: i.to_string(),
@@ -463,7 +743,7 @@ pub(crate) fn fields_to_members(
 /// Structural kind, shared by structs and enum variants: named fields →
 /// "struct", exactly one unnamed field → "newtype", several unnamed →
 /// "tuple", unit → "unit".
-pub(crate) fn shape_of_fields(fields: &syn::Fields) -> &'static str {
+pub(super) fn shape_of_fields(fields: &syn::Fields) -> &'static str {
     match fields {
         syn::Fields::Unit => "unit",
         syn::Fields::Unnamed(u) if u.unnamed.len() == 1 => "newtype",
@@ -472,10 +752,13 @@ pub(crate) fn shape_of_fields(fields: &syn::Fields) -> &'static str {
     }
 }
 
-pub(crate) fn collect_items(
+pub(super) fn collect_items(
     items: &[Item],
     out: &mut BTreeMap<String, ScanEntry>,
     aliases: &mut BTreeMap<String, String>,
+    // Defining file per type name, for ambiguity detection (the same base
+    // name defined by two different files/paths makes that name AMBIGUOUS).
+    defining: &mut BTreeMap<String, BTreeSet<PathBuf>>,
     file: &Path,
     errs: &mut Vec<String>,
 ) {
@@ -492,13 +775,19 @@ pub(crate) fn collect_items(
             Item::Struct(s) => {
                 let name = s.ident.unraw().to_string();
                 let base = errs.len();
-                let container = SerdeFlags::from_attrs(&s.attrs, errs);
+                let container = SerdeFlags::from_attrs(&s.attrs, SerdePos::Container, errs);
                 // serde_derive ast.rs:96-99 — struct fields take the
-                // container's rename_all rule (rename_all_fields is
-                // enum-only in serde: it is REJECTED on structs).
-                let members = fields_to_members(&s.fields, container.rename_all.as_deref(), errs);
+                // container's rename_all rule (deserialize direction wins);
+                // rename_all_fields is enum-only in serde (REJECTED on
+                // structs).
+                check_rename_rule(container.rule_deserialize(), errs);
+                let members = fields_to_members(&s.fields, container.rule_deserialize(), errs);
                 contextualize(errs, base, file, &format!("struct {name}"));
                 let kind = shape_of_fields(&s.fields);
+                defining
+                    .entry(name.clone())
+                    .or_default()
+                    .insert(file.to_path_buf());
                 out.entry(name).or_insert(ScanEntry {
                     kind,
                     container,
@@ -509,26 +798,31 @@ pub(crate) fn collect_items(
             Item::Enum(e) => {
                 let name = e.ident.unraw().to_string();
                 let base = errs.len();
-                let container = SerdeFlags::from_attrs(&e.attrs, errs);
-                let rule = container.rename_all.as_deref();
+                let container = SerdeFlags::from_attrs(&e.attrs, SerdePos::Container, errs);
+                check_rename_rule(container.rule_deserialize(), errs);
+                // VARIANT names use the container rename_all (deserialize
+                // direction wins)
+                let rule = container.rule_deserialize();
                 let variants = e
                     .variants
                     .iter()
                     .map(|v| {
-                        let flags = SerdeFlags::from_attrs(&v.attrs, errs);
+                        let flags = SerdeFlags::from_attrs(&v.attrs, SerdePos::Variant, errs);
+                        check_rename_rule(flags.rule_deserialize(), errs);
                         // serde_derive ast.rs:92-96 — a variant's FIELD
-                        // names use the VARIANT-level rename_all if
-                        // present, else the container's rename_all_fields
-                        // (NOT the container rename_all, which governs
-                        // VARIANT NAMES only).
+                        // names use the VARIANT-level rename_all (deserialize
+                        // direction wins) if present, else the container's
+                        // rename_all_fields (deserialize direction wins; NOT
+                        // the container rename_all, which governs VARIANT
+                        // NAMES only).
                         let field_rule = flags
-                            .rename_all
-                            .as_deref()
+                            .rule_deserialize()
+                            .or(container.rename_all_fields_deserialize.as_deref())
                             .or(container.rename_all_fields.as_deref());
                         let vname = v.ident.unraw().to_string();
                         VariantRec {
                             name: vname.clone(),
-                            wire: effective_wire(&vname, flags.rename(), rule),
+                            wire: variant_wire(&vname, flags.rename(), rule),
                             shape: shape_of_fields(&v.fields),
                             fields: fields_to_members(&v.fields, field_rule, errs),
                             flags,
@@ -536,6 +830,10 @@ pub(crate) fn collect_items(
                     })
                     .collect();
                 contextualize(errs, base, file, &format!("enum {name}"));
+                defining
+                    .entry(name.clone())
+                    .or_default()
+                    .insert(file.to_path_buf());
                 out.entry(name).or_insert(ScanEntry {
                     kind: "enum",
                     container,
@@ -553,7 +851,7 @@ pub(crate) fn collect_items(
             // Inline modules: recurse so no type definition is missed.
             Item::Mod(m) => {
                 if let Some((_, inner)) = &m.content {
-                    collect_items(inner, out, aliases, file, errs);
+                    collect_items(inner, out, aliases, defining, file, errs);
                 }
             }
             _ => {}
@@ -565,7 +863,7 @@ pub(crate) fn collect_items(
 /// `quote` is not a dev-dependency). Paths are kept as written; only
 /// insignificant whitespace is normalized. Unknown variants yield a marker
 /// string — never a panic.
-pub(crate) fn ty_to_string(ty: &syn::Type) -> String {
+pub(super) fn ty_to_string(ty: &syn::Type) -> String {
     match ty {
         syn::Type::Array(a) => format!("[{}; {}]", ty_to_string(&a.elem), expr_to_string(&a.len)),
         syn::Type::Slice(s) => format!("[{}]", ty_to_string(&s.elem)),
@@ -610,7 +908,7 @@ pub(crate) fn ty_to_string(ty: &syn::Type) -> String {
     }
 }
 
-pub(crate) fn bound_to_string(b: &syn::TypeParamBound) -> String {
+pub(super) fn bound_to_string(b: &syn::TypeParamBound) -> String {
     match b {
         syn::TypeParamBound::Trait(t) => path_to_string(&None, &t.path),
         syn::TypeParamBound::Lifetime(l) => l.to_string(),
@@ -618,7 +916,7 @@ pub(crate) fn bound_to_string(b: &syn::TypeParamBound) -> String {
     }
 }
 
-pub(crate) fn path_to_string(qself: &Option<syn::QSelf>, path: &syn::Path) -> String {
+pub(super) fn path_to_string(qself: &Option<syn::QSelf>, path: &syn::Path) -> String {
     if qself.is_some() {
         return "#unsupported-qself#".to_string();
     }
@@ -655,7 +953,7 @@ pub(crate) fn path_to_string(qself: &Option<syn::QSelf>, path: &syn::Path) -> St
     out
 }
 
-pub(crate) fn expr_to_string(expr: &syn::Expr) -> String {
+pub(super) fn expr_to_string(expr: &syn::Expr) -> String {
     match expr {
         syn::Expr::Lit(l) => match &l.lit {
             syn::Lit::Int(i) => i.to_string(),
@@ -669,15 +967,22 @@ pub(crate) fn expr_to_string(expr: &syn::Expr) -> String {
 }
 
 /// Recursively collect every `*.rs` file under `root`, skipping any
-/// directory named `tests` (test modules do not define wire types).
-/// Directory-read errors PROPAGATE with the offending path — nothing is
-/// skipped silently except `tests` dirs.
-pub(crate) fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+/// directory named `tests` (test modules do not define wire types), and
+/// sort the result so the scan is deterministic regardless of read_dir
+/// order (ambiguity detection depends on stable ordering). Directory-read
+/// and per-entry errors propagate; `file_type()` failures are errors too,
+/// never silent misclassification of a file as a directory.
+pub(super) fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
     let entries =
         fs::read_dir(dir).map_err(|e| format!("cannot read directory {}: {e}", dir.display()))?;
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("cannot read entry in {}: {e}", dir.display()))?;
         let path = entry.path();
-        if path.is_dir() {
+        let is_dir = entry
+            .file_type()
+            .map_err(|e| format!("cannot stat {}: {e}", path.display()))?
+            .is_dir();
+        if is_dir {
             if path.file_name().and_then(|n| n.to_str()) == Some("tests") {
                 continue;
             }

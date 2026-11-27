@@ -829,48 +829,62 @@ fn batch_request_accepts_in_range_single_integer_key() {
     assert_indexed_matches_named(&buf, &expected);
 }
 
-/// 4b. QueryEntry flattens BatchOp: integer keys are buffered and NEVER
-/// match the inner struct's fields (serde's FlatMapDeserializer
-/// pre-filters by string). QueryEntry itself has NO deny_unknown_fields,
-/// but its flattened BatchOp impl buffers entries with String keys, so an
-/// integer key is a typed decode error ("invalid type: integer"), not a
-/// silent skip — the assertion the source dictates.
-#[test]
-fn query_entry_integer_key_is_an_error_not_a_silent_skip() {
-    let mut buf = Vec::new();
-    write_map_len(&mut buf, 1).unwrap();
-    write_uint(&mut buf, 0).unwrap(); // an integer key where BatchOp expects a name
-    write_nil(&mut buf).unwrap();
-    let err = rmp_serde::from_slice::<QueryEntry>(&buf)
-        .expect_err("integer keys never match a flattened field");
-    // KIND: serde-generated error → Error::Syntax
-    // (rmp-serde-1.3.1/src/decode.rs:82-86 `de::Error::custom`).
-    let message = match &err {
-        rmp_serde::decode::Error::Syntax(message) => message.clone(),
-        other => panic!("expected Error::Syntax for the integer flat-map key, got {other:?}"),
-    };
-    // TEXT (single mechanism distinguisher): "invalid type" proves the
-    // String-key buffering of the flattened BatchOp rejected the integer KEY
-    // as a type error — not a missing-field error.
-    assert!(
-        message.contains("invalid type"),
-        "expected an invalid-type error for the integer key, got: {message}"
-    );
-}
-
-/// 4b positive control: the same single-entry shape with the STRING key
-/// decodes into a real QueryEntry (BatchOp::Insert payload named, at the
-/// TOP level of the entry map — QueryEntry flattens BatchOp). InsertOp
-/// indices (ops/write/types.rs:84-109): 0 insert_into, 1 values,
-/// 2 records_idmsgpack (default), 3 select (default).
-#[test]
-fn query_entry_named_key_decodes_insert_payload() {
+/// Shared frame builder binding the negative and its positive control BY
+/// CONSTRUCTION: both produce the identical two-entry QueryEntry map (the
+/// flattened BatchOp::Insert payload — InsertOp 0 insert_into, 1 values);
+/// the ONLY difference is entry #0's KEY, which is the STRING
+/// "insert_into" for the control and the INTEGER 0 for the negative.
+fn query_entry_insert_frame(named_key: bool) -> Vec<u8> {
     let mut buf = Vec::new();
     write_map_len(&mut buf, 2).unwrap();
-    write_str(&mut buf, "insert_into").unwrap(); // InsertOp 0
+    if named_key {
+        write_str(&mut buf, "insert_into").unwrap(); // InsertOp 0
+    } else {
+        write_uint(&mut buf, 0).unwrap(); // SAME position, integer key
+    }
     write_str(&mut buf, "users").unwrap(); // TableRef named = bare string
     write_str(&mut buf, "values").unwrap(); // InsertOp 1
     write_array_len(&mut buf, 0).unwrap(); // empty records list
+    buf
+}
+
+/// 4b. QueryEntry flattens BatchOp: integer keys are buffered and NEVER
+/// match the inner struct's fields. The frame is the positive control's
+/// bytes (see `query_entry_insert_frame`) with EXACTLY ONE element
+/// changed: the `insert_into` string key replaced by the integer 0. The
+/// mechanism that rejects it: serde's FlatMapDeserializer buffers entries
+/// as `Content`, and BatchOp's hand-written Deserialize reads every entry
+/// with `next_entry::<String, QueryValue>()` (ops/batch/ops/batch_op.rs),
+/// so an integer KEY fails the buffered-Content → String conversion — an
+/// error, not a silent skip.
+#[test]
+fn query_entry_integer_key_is_an_error_not_a_silent_skip() {
+    let buf = query_entry_insert_frame(false); // differs from the control in one element
+    let err = rmp_serde::from_slice::<QueryEntry>(&buf)
+        .expect_err("integer keys never match a flattened field");
+    // KIND (mechanism-specific, text-free): every serde-generated error
+    // (the invalid-type produced by Content → String above included)
+    // funnels through `impl de::Error for Error::custom`
+    // (rmp-serde-1.3.1/src/decode.rs:82-86) and lands in
+    // `Error::Syntax(String)`. The message TEXT is deliberately not
+    // asserted here: it is serde-version wording ("invalid type: integer");
+    // the KIND match already isolates the flatten mechanism from
+    // non-serde decode failures (length prefixes, EOF), and the positive
+    // control with the string key proves the frame is otherwise valid.
+    match &err {
+        rmp_serde::decode::Error::Syntax(_) => {}
+        other => panic!("expected Error::Syntax for the integer flat-map key, got {other:?}"),
+    }
+}
+
+/// 4b positive control: the SAME frame with the STRING key decodes into a
+/// real QueryEntry (BatchOp::Insert payload named, at the TOP level of the
+/// entry map — QueryEntry flattens BatchOp). InsertOp indices
+/// (ops/write/types.rs:84-109): 0 insert_into, 1 values, 2
+/// records_idmsgpack (default), 3 select (default).
+#[test]
+fn query_entry_named_key_decodes_insert_payload() {
+    let buf = query_entry_insert_frame(true); // identical except entry #0's key
     let expected = QueryEntry {
         op: BatchOp::Insert(InsertOp {
             insert_into: TableRef::new("users"),
