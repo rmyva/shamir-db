@@ -37,7 +37,7 @@ pub fn commit_tx_with_cancel(
     commit_tx_with_kind(tx, repo, wait, PendingKind::ExplicitTx, cancel)
 }
 
-/// Same pipeline as [`commit_tx_with_options`]; a Pending outcome is counted
+/// Same pipeline as `commit_tx_with_options`; a Pending outcome is counted
 /// under `kind`, the write family only the caller knows (the shared
 /// acknowledgement tail serves explicit and implicit commits alike).
 pub async fn commit_batch_tx(

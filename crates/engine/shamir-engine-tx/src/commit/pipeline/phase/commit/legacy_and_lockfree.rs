@@ -461,7 +461,7 @@ pub(super) async fn commit_tx_lockfree(
 /// Release every Level-3 pessimistic lock the tx holds, grouped by table.
 ///
 /// Called on BOTH the commit-success path and every abort path of
-/// [`crate::commit::commit_tx_inner`]. `locked_keys` is empty for Snapshot / Serializable
+/// `commit_tx_inner`. `locked_keys` is empty for Snapshot / Serializable
 /// txs (they never acquire locks), so this is a no-op for them — zero
 /// overhead on the non-Pessimistic commit paths. Each `(table_token, key)`
 /// is routed to the corresponding table's `MvccStore::release_locks`.
