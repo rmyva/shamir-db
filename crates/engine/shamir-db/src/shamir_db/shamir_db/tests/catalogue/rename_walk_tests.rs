@@ -160,7 +160,7 @@ async fn parent_update_and_delete_succeed_while_child_rename_in_doubt() {
 }
 #[test]
 fn reserved_database_names_apply_only_documented_normalization() {
-    // Catches a regression in ASCII case folding or trailing ASCII dot/space stripping.
+    // Catches a regression in fixed-name ASCII case folding/trailing-dot-space normalization and generated-shape exactness below.
     for name in [
         "users",
         "Users",
@@ -205,6 +205,33 @@ fn reserved_database_names_apply_only_documented_normalization() {
     ] {
         assert!(!is_reserved_db_name(name), "{name:?} should be accepted");
     }
+    // Catches broad prefix, case-insensitive, length, character-class, and suffix matching in the generated-shape rules.
+    let hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    for name in [
+        format!("seed-{}", &hash[..63]),
+        format!("seed-{hash}a"),
+        format!("seed-{}g", &hash[..63]),
+        format!("SEED-{hash}"),
+        format!("seed-{}A", &hash[..63]),
+        "seed-".to_owned(),
+        format!("seed-{hash}-attempt-"),
+        format!("seed-{hash}-attempt-x"),
+        format!("seed-{hash}-attempt-18446744073709551615"),
+        format!("seed-{hash}-attempt-1-x"),
+        "audit.log.0000000000000000001".to_owned(),
+        "audit.log.x".to_owned(),
+        "audit.log.0000000000000000000x".to_owned(),
+    ] {
+        assert!(!is_reserved_db_name(&name), "{name:?} should be accepted");
+    }
+    // Catches failure to reserve generated names and ensures attempt names use the same exact 64-lowercase-hex prefix.
+    assert!(is_reserved_db_name(&format!("seed-{hash}")));
+    assert!(is_reserved_db_name(&format!("seed-{hash}-attempt-7")));
+    // Catches the fixed-inventory normalization intentionally not extending to generated shapes.
+    assert!(!is_reserved_db_name(&format!("seed-{hash}.")));
+    assert!(!is_reserved_db_name(&format!("seed-{hash}-attempt-7.")));
+    // Catches failure to reserve exactly 20 ASCII digits as generated audit rotation archives.
+    assert!(is_reserved_db_name("audit.log.00000000000000000001"));
 }
 
 #[test]

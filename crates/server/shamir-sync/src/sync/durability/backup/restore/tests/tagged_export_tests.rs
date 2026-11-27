@@ -82,6 +82,131 @@ fn build_v1_tagged_export() -> TempDir {
     parent
 }
 
+fn build_v2_offline_export() -> TempDir {
+    let parent = TempDir::new().expect("v2 export parent temp dir");
+    let snapshot = parent.path().join(TIMESTAMPED_NAME);
+    fs::create_dir_all(snapshot.join("payload")).expect("snapshot payload dir");
+    fs::write(snapshot.join(LISTED_PAYLOAD), PAYLOAD_BYTES).expect("write payload");
+    let (sha256, size_bytes) = hash_file(&snapshot.join(LISTED_PAYLOAD)).expect("hash payload");
+    let manifest = crate::sync::durability::backup::online::manifest::ManifestV2 {
+        format_version: 2,
+        kind: BackupKind::Offline,
+        created_at_unix_ns: 1_700_000_000_000,
+        format_epoch: None,
+        binary_version: None,
+        consistency: None,
+        wal: None,
+        files: vec![ManifestFileEntry {
+            path: LISTED_PAYLOAD.to_string(),
+            sha256,
+            size_bytes,
+        }],
+        extra: Default::default(),
+    };
+    fs::write(
+        snapshot.join("manifest.json"),
+        crate::sync::durability::backup::online::manifest::encode(&manifest)
+            .expect("encode v2 offline manifest"),
+    )
+    .expect("write v2 offline manifest");
+    parent
+}
+
+fn refresh_manifest(snapshot: &Path, version: u32) {
+    fn walk(root: &Path, dir: &Path, files: &mut Vec<ManifestFileEntry>) {
+        for entry in fs::read_dir(dir).expect("list fixture") {
+            let path = entry.expect("fixture entry").path();
+            if path.is_dir() {
+                walk(root, &path, files);
+            } else if path.file_name().is_some_and(|name| name != "manifest.json") {
+                let rel = path.strip_prefix(root).expect("relative fixture path");
+                let (sha256, size_bytes) = hash_file(&path).expect("hash fixture file");
+                files.push(ManifestFileEntry {
+                    path: rel.to_string_lossy().replace('\\', "/"),
+                    sha256,
+                    size_bytes,
+                });
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(snapshot, snapshot, &mut files);
+    if version == 1 {
+        let manifest = Manifest {
+            format_version: 1,
+            created_at_unix_ns: 1_700_000_000_000,
+            files,
+        };
+        fs::write(
+            snapshot.join("manifest.json"),
+            serde_json::to_vec_pretty(&manifest).expect("encode refreshed v1 manifest"),
+        )
+        .expect("write refreshed v1 manifest");
+    } else {
+        let manifest = crate::sync::durability::backup::online::manifest::ManifestV2 {
+            format_version: 2,
+            kind: BackupKind::Offline,
+            created_at_unix_ns: 1_700_000_000_000,
+            format_epoch: None,
+            binary_version: None,
+            consistency: None,
+            wal: None,
+            files,
+            extra: Default::default(),
+        };
+        fs::write(
+            snapshot.join("manifest.json"),
+            crate::sync::durability::backup::online::manifest::encode(&manifest)
+                .expect("encode refreshed v2 manifest"),
+        )
+        .expect("write refreshed v2 manifest");
+    }
+}
+
+fn install_allowed_catalogue(snapshot: &Path) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("fixture runtime");
+    let store = runtime
+        .block_on(shamir_db::shamir_db::system_store::SystemStore::init(
+            shamir_db::shamir_db::system_store::SystemStoreConfig::Fjall(
+                snapshot.join("shamir_db_meta.redb"),
+            ),
+        ))
+        .expect("initialize allowed catalogue");
+    let mut record = shamir_types::types::common::new_map();
+    record.insert(
+        "name".to_string(),
+        shamir_types::types::value::QueryValue::Str("ordinary_db".to_string()),
+    );
+    runtime
+        .block_on(store.save_database(
+            "ordinary_db",
+            &shamir_types::types::value::QueryValue::Map(record),
+            &shamir_db::access::ResourceMeta::default(),
+        ))
+        .expect("save allowed database");
+    drop(store);
+    drop(runtime);
+}
+
+#[test]
+fn v2_offline_public_restore_publishes_allowed_snapshot() {
+    // Catches rejecting v2-offline manifests or misclassifying them as online snapshots.
+    let export = build_v2_offline_export();
+    let target_parent = TempDir::new().expect("target parent");
+    let data_dir = target_parent.path().join("data_dir");
+    let snapshot = export.path().join(TIMESTAMPED_NAME);
+    let report = restore_with_probe(&snapshot, &data_dir, false, |_| Ok(()))
+        .expect("valid v2-offline snapshot publishes");
+    assert_eq!(report.files_restored, 2, "manifest and payload");
+    assert_eq!(
+        fs::read(data_dir.join(LISTED_PAYLOAD)).expect("restored payload"),
+        PAYLOAD_BYTES
+    );
+}
+
 /// Unix-only RAII guard: hold a directory read-only (0o555) for the test
 /// body and restore the ORIGINAL mode on drop — BEFORE the enclosing
 /// `TempDir` drops, so temp cleanup never hits a read-only parent. The
@@ -249,6 +374,63 @@ fn recursive_listing(root: &Path) -> Vec<(String, bool, u64)> {
     walk(root, root, &mut listing);
     listing.sort();
     listing
+}
+
+#[test]
+fn public_restore_catalogue_presence_matrix_v1_and_v2_offline() {
+    // Catches publishing corrupt, wrong-type, or unapproved catalogues and preserves the live target on refusal.
+    for version in [1, 2] {
+        let export = if version == 1 {
+            build_v1_tagged_export()
+        } else {
+            build_v2_offline_export()
+        };
+        let snapshot = export.path().join(TIMESTAMPED_NAME);
+        install_allowed_catalogue(&snapshot);
+        refresh_manifest(&snapshot, version);
+        let target_parent = TempDir::new().expect("valid target parent");
+        let target = target_parent.path().join("live");
+        fs::create_dir_all(&target).expect("create live target");
+        fs::write(target.join("live.bin"), b"preserve me").expect("write live marker");
+        restore_with_probe(&snapshot, &target, false, |_| Ok(()))
+            .unwrap_or_else(|error| panic!("valid catalogue must publish for v{version}: {error}"));
+        assert!(target.join("shamir_db_meta.redb").is_dir());
+
+        for wrong_type in [false, true] {
+            let export = if version == 1 {
+                build_v1_tagged_export()
+            } else {
+                build_v2_offline_export()
+            };
+            let snapshot = export.path().join(TIMESTAMPED_NAME);
+            if wrong_type {
+                fs::write(snapshot.join("shamir_db_meta.redb"), b"not a directory")
+                    .expect("write wrong-type catalogue");
+            } else {
+                fs::create_dir(snapshot.join("shamir_db_meta.redb"))
+                    .expect("create invalid catalogue directory");
+                fs::write(
+                    snapshot.join("shamir_db_meta.redb/junk"),
+                    b"not a Fjall fingerprint",
+                )
+                .expect("write invalid fingerprint");
+                refresh_manifest(&snapshot, version);
+            }
+            let target_parent = TempDir::new().expect("refusal target parent");
+            let target = target_parent.path().join("live");
+            fs::create_dir_all(&target).expect("create live target");
+            fs::write(target.join("live.bin"), b"preserve me").expect("write live marker");
+            let before = recursive_listing(&target);
+            let error = restore_with_probe(&snapshot, &target, false, |_| Ok(()))
+                .expect_err("invalid catalogue must refuse");
+            assert!(matches!(
+                error,
+                RestoreError::Catalogue(_) | RestoreError::Consistency { .. }
+                    | RestoreError::ManifestVerification(_)
+            ));
+            assert_eq!(recursive_listing(&target), before, "v{version} refusal changed target");
+        }
+    }
 }
 
 #[test]

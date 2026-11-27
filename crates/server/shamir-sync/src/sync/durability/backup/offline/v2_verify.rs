@@ -16,6 +16,20 @@ use super::{
     MANIFEST_FILE_NAME,
 };
 
+/// Refuse a present fixed-name catalogue unless its snapshot entry is a directory.
+/// The recursive file inventory ignores wrong-type entries, so this fixed-name check must precede it.
+pub(super) fn require_snapshot_catalogue_directory(snapshot_dir: &Path) -> Result<(), BackupError> {
+    let catalogue_path = snapshot_dir.join("shamir_db_meta.redb");
+    match fs::symlink_metadata(&catalogue_path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(BackupError::Io(error)),
+        Ok(metadata) if !metadata.file_type().is_dir() => Err(BackupError::ManifestInvalid(
+            "shamir_db_meta.redb exists but is not a directory".into(),
+        )),
+        Ok(_) => Ok(()),
+    }
+}
+
 /// Full offline verify of a v2 snapshot. Returns the report AND the exact
 /// decoded [`online_manifest::ManifestV2`] so restore can consume the
 /// already-verified manifest without parsing `manifest.json` a second time

@@ -121,8 +121,16 @@ pub(super) struct PreparedStagedCatalogue {
 pub(super) async fn validate_staged_db_names(stage: &Path) -> Result<(), RestoreError> {
     // Opening the staged catalogue only (never user repositories) makes the check safe pre-publication.
     let meta_path = stage.join("shamir_db_meta.redb");
-    if !meta_path.exists() {
-        return Ok(());
+    match std::fs::symlink_metadata(&meta_path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(RestoreError::Io(error)),
+        Ok(metadata) if !metadata.file_type().is_dir() => {
+            return Err(RestoreError::Consistency {
+                repo: "(staged system catalogue)".into(),
+                reason: "staged system catalogue exists but is not a directory".into(),
+            });
+        }
+        Ok(_) => {}
     }
     require_fjall_store(&meta_path, "(staged system catalogue)")?;
     let store = Box::pin(SystemStore::init(SystemStoreConfig::Fjall(meta_path)))
@@ -140,9 +148,11 @@ pub(super) fn validate_catalogue_db_name_records(rows: &[QueryValue]) -> Result<
     // This mirrors shamir-db's crate-private validate_catalogue_db_names on
     // the shared predicate; the predicate remains the single source of truth.
     for row in rows {
-        let Some(name) = row.get("name").and_then(QueryValue::as_str) else {
-            continue;
-        };
+        let name = row.get("name").and_then(QueryValue::as_str).ok_or_else(|| {
+            RestoreError::Catalogue(shamir_db::DbError::Validation(
+                "database catalogue row is missing string name".into(),
+            ))
+        })?;
         if name == "__system__" {
             continue;
         }
@@ -489,24 +499,30 @@ fn first_top_level(path: &Path, stage: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
-fn allowed_default_main_route(db: &str, repo: &str, first: &str, wal: bool) -> bool {
-    db == "default"
-        && repo == "main"
-        && first
-            == if wal {
-                "shamir_db_default_main.redb.shamirwal"
-            } else {
-                "shamir_db_default_main.redb"
-            }
+fn allowed_default_main_route(db: &str, repo: &str, route: &str, wal: bool) -> bool {
+    let exact = if wal {
+        "shamir_db_default_main.redb.shamirwal"
+    } else {
+        "shamir_db_default_main.redb"
+    };
+    let protected = [
+        "shamir_db_default_main.redb",
+        "shamir_db_default_main.redb.shamirwal",
+    ];
+    if protected.iter().any(|name| route.eq_ignore_ascii_case(name)) {
+        return route == exact && db == "default" && repo == "main";
+    }
+    false
 }
 
 pub(super) fn reject_reserved_wal_dir(
     first: Option<&str>,
     repo: &CapturedRepo,
 ) -> Result<(), RestoreError> {
+    let route = repo.wal.0.as_str();
     if let Some(first) = first {
-        if RESERVED_DB_NAMES.contains(&first)
-            && !allowed_default_main_route(&repo.db, &repo.repo, first, true)
+        if (RESERVED_DB_NAMES.contains(&first) || is_protected_default_route(route))
+            && !allowed_default_main_route(&repo.db, &repo.repo, route, true)
         {
             return Err(RestoreError::Consistency {
                 repo: repo.label(),
@@ -528,8 +544,8 @@ pub(super) fn reject_reserved_store_route(repo: &CapturedRepo) -> Result<(), Res
             reason: "captured store_dir is empty".into(),
         }),
         Some(c)
-            if RESERVED_DB_NAMES.contains(&c)
-                && !allowed_default_main_route(&repo.db, &repo.repo, c, false) =>
+            if (RESERVED_DB_NAMES.contains(&c) || is_protected_default_route(&repo.store_dir))
+                && !allowed_default_main_route(&repo.db, &repo.repo, &repo.store_dir, false) =>
         {
             Err(RestoreError::Consistency {
                 repo: repo.label(),
@@ -538,4 +554,18 @@ pub(super) fn reject_reserved_store_route(repo: &CapturedRepo) -> Result<(), Res
         }
         Some(_) => Ok(()),
     }
+}
+
+fn is_protected_default_route(route: &str) -> bool {
+    [
+        "shamir_db_default_main.redb",
+        "shamir_db_default_main.redb.shamirwal",
+    ]
+    .iter()
+    .any(|name| {
+        route
+            .split('/')
+            .next()
+            .is_some_and(|component| component.eq_ignore_ascii_case(name))
+    })
 }

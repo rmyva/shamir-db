@@ -23,6 +23,7 @@ use shamir_test_diag::FlakeGuard;
 
 use crate::backup::backup;
 use crate::restore::{restore, restore_with_probe, RestoreError};
+use crate::server_meta::ServerMetaStore;
 
 /// Build a well-formed `backup::backup` snapshot (with a valid manifest) at
 /// a fresh temp dir, containing one small file — enough for `restore()`'s
@@ -37,6 +38,30 @@ fn make_snapshot(root: &Path) -> std::path::PathBuf {
     report.dest_dir
 }
 
+/// Catches a production probe that opens server_meta: it could refuse through a different path and persist last_started_at; the read-only probe must refuse on a real lock and pass after release.
+#[test]
+fn production_restore_probe_refuses_real_server_meta_lock_then_allows_restore() {
+    let root = TempDir::new().unwrap();
+    let snapshot = make_snapshot(root.path());
+    let data_dir = root.path().join("data_dir");
+    fs::create_dir_all(&data_dir).unwrap();
+    fs::write(data_dir.join("original.txt"), b"original").unwrap();
+    let held_meta = ServerMetaStore::open_or_init(data_dir.join("server_meta"))
+        .expect("hold target metadata lock");
+
+    let error = restore(&snapshot, &data_dir, false).expect_err("held lock must refuse restore");
+    assert!(matches!(error, RestoreError::ServerRunning(ref path) if path == &data_dir));
+    assert_eq!(fs::read(data_dir.join("original.txt")).unwrap(), b"original");
+    assert!(!fs::read_dir(root.path()).unwrap().filter_map(Result::ok).any(|entry| {
+        entry.file_name().to_string_lossy().contains(".restore_tmp_")
+    }));
+
+    drop(held_meta);
+    restore(&snapshot, &data_dir, false).expect("restore proceeds once the lock is released");
+    assert_eq!(fs::read(data_dir.join("a.txt")).unwrap(), b"hello");
+}
+
+/// Catches a manifest naming a reserved cache path instead of refusing before touching the target.
 #[test]
 fn restore_rejects_manifest_cache_paths_before_touching_data_dir() {
     let root = TempDir::new().unwrap();

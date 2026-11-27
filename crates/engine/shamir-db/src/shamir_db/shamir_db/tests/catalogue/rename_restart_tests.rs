@@ -234,8 +234,8 @@ fn in_doubt_rename_reopens_as_exactly_one_catalogued_incarnation() {
 
 #[test]
 fn production_reserved_names_cover_real_data_root_entries() {
-    // Catches removing a real system-store name from production or adding a store without updating this pin.
-    const REAL_DATA_ROOT_ENTRIES: [&str; 19] = [
+    // Catches removing a real fixed system-store name from production or adding a store without updating this fixed-inventory pin.
+    const REAL_DATA_ROOT_ENTRIES: [&str; 20] = [
         "__system__",
         "shamir_db_meta.redb",
         "shamir_db_default_main.redb",
@@ -255,6 +255,7 @@ fn production_reserved_names_cover_real_data_root_entries() {
         "format.stamp.tmp",
         "shamir_db_meta.redb.shamirwal",
         "shamir_db_default_main.redb.shamirwal",
+        ".shamir_restore_epoch",
     ];
 
     for name in REAL_DATA_ROOT_ENTRIES {
@@ -267,4 +268,9 @@ fn production_reserved_names_cover_real_data_root_entries() {
     for name in ["users2", "my_users", "audit_log", "cache_x"] {
         assert!(!is_reserved_db_name(name), "{name:?} is a near-miss");
     }
+    // Catches generated shapes leaking into the equality-pinned fixed inventory; shape admission is covered by the predicate test.
+    assert!(!RESERVED_DB_NAMES.contains(&
+        "seed-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ));
+    assert!(!RESERVED_DB_NAMES.contains(&"audit.log.00000000000000000001"));
 }

@@ -6,40 +6,13 @@
 //! of scope (beta roadmap).
 //!
 //! Procedure:
-//! 1. **Liveness probe** (LEGACY kind only, unless `force`; moved AFTER the
-//!    staged presence re-check of step 3b — finding 6, R2d-FIX-C review): the
-//!    supplied probe opens the server metadata store —
-//!    the same store opened at boot. fjall already takes an exclusive OS-level
-//!    advisory file lock per keyspace directory on open, so a lock-
-//!    contention error (`MetaError::Fjall(fjall::Error::Locked)`) means a
-//!    real server process is running against `data_dir` — refuse. ANY
-//!    other open error (corruption, etc.) also refuses by default
-//!    (fail-closed: a probe failure could equally mean genuine corruption,
-//!    not liveness). `--force` skips this probe entirely. The probe is the
-//!    ONLY supplied step that can MUTATE the target (`open_or_init`
-//!    persists `last_started_at`), so on the legacy path it now runs only
-//!    after verification, the stamp gate, the copy and the staged presence
-//!    re-check have ALL succeeded — a missing staged file refuses before the
-//!    probe can write anything, leaving the target untouched. A probe that
-//!    RUNS (all earlier checks passed) and then refuses has already persisted
-//!    `last_started_at` in the original `data_dir` (the swap never ran, so
-//!    no rename moved it away); the restore itself cleans the staged copy
-//!    and adds nothing to the target beyond that probe write.
-//!    ONLINE snapshots bypass this probe in favor of the READ-ONLY
-//!    `backup::probe_source_stopped` source-lock probes (early, after
-//!    verify, and final, just before the swap).
-//! 2. **Verify the SOURCE snapshot's manifest** (`backup::verify_manifest`)
-//!    BEFORE touching `data_dir` at all. A checksum mismatch or missing
-//!    manifest aborts the whole restore with no side effects.
-//! 3. **Copy to a TEMPORARY sibling directory** (same filesystem as
-//!    `data_dir`'s parent — required for the atomic rename in step 5). The
-//!    temp dir is created with `fs::create_dir` (W-5(b), #790: NOT
-//!    `create_dir_all` — a single atomic syscall that itself fails with
-//!    `AlreadyExists` if the target is already there, closing the
-//!    check-then-act TOCTOU a separate `exists()` probe used to leave open;
-//!    safe here because `parent` is guaranteed to already exist). A copy
-//!    failure here best-effort removes the staged temp dir
-//!    ([`cleanup_staged_temp_dir`]) before propagating the original error.
+//! 1. **Liveness probe**: legacy restore invokes the supplied callback at
+//!    step 3b', after staged presence verification; production supplies a
+//!    read-only lock probe. Online restore uses read-only lock probes.
+//!    `force` skips liveness probes.
+//! 2. **Verify source manifest and format stamp** before staging.
+//! 3. **Copy and verify staged files** in an external sibling directory. A
+//!    filesystem-root target without external staging is refused before source access.
 //!
 //! 3b. **Staged presence re-check** (staged_listing.rs): every file the
 //!    VERIFIED manifest lists must exist as a regular file under the staged
@@ -99,7 +72,6 @@ use super::offline::{
 use super::online::manifest::{BackupKind, ManifestV2};
 use super::snapshot_lease;
 use crate::format_stamp::{restore_snapshot_gate, EpochPolicy};
-use crate::meta_port::MetaError;
 use crate::user_directory::FjallUserDirectory;
 
 use classify::{classify_snapshot_kind, SnapshotKind};
@@ -117,16 +89,13 @@ mod wire_registry;
 pub enum RestoreError {
     #[error("restore io: {0}")]
     Io(#[from] std::io::Error),
+    #[error("restore target has no external sibling staging location: {0}")]
+    DataDirHasNoStagingLocation(PathBuf),
     #[error(
         "server appears to be running against this data_dir ({0}) — stop it first, \
          or pass --force if you are certain it is not"
     )]
     ServerRunning(PathBuf),
-    #[error(
-        "liveness probe of {0} failed (not a lock-contention error — could indicate \
-         corruption): {1}; pass --force to bypass this check"
-    )]
-    ProbeFailed(PathBuf, MetaError),
     #[error("snapshot manifest verification failed: {0}")]
     ManifestVerification(#[from] BackupError),
     #[error("snapshot format stamp refused: {0}")]
@@ -268,22 +237,18 @@ pub struct RestoreReport {
     pub excluded_repositories: Vec<String>,
 }
 
-/// Run the canonical restore procedure using the supplied liveness probe.
+/// Run the canonical restore procedure using the supplied liveness callback.
+/// Legacy restores call it after staged presence verification; a veto cleans
+/// staging and propagates its typed error. Online restores use read-only
+/// lock probes instead. `force` skips liveness probes.
 ///
-/// See the module doc for the full step-by-step procedure. `force` skips
-/// the supplied probe entirely — use only when certain no server process
-/// holds `data_dir`.
+/// Before publication, every refusal leaves the live target byte-identical.
+/// `SwapFailedRollbackSucceeded` and `SwapPartialFailure` are separate swap
+/// failures; the latter may leave the live pathname absent. A target without
+/// an external sibling staging location is refused before source access.
 ///
-/// Kind-aware (design `online-backup.md` §5): a v2 ONLINE manifest runs
-/// the online pipeline (staged replay + consistency, `restore/online.rs`)
-/// and BYPASSES the supplied probe in favor of the read-only
-/// `backup::probe_source_stopped` source-lock probe, because the caller's
-/// probe (the server's liveness wrapper) can MUTATE the target on refusal
-/// and must not touch `data_dir` for a valid online snapshot. For a v1 or
-/// v2-offline manifest the supplied probe still runs, but AFTER the staged
-/// presence re-check succeeds (finding 6: the probe's `open_or_init`
-/// persists `last_started_at` in the target, so a missing staged file must
-/// refuse before the probe can write anything).
+/// Kind-aware: online manifests bypass the callback and use the read-only
+/// source-lock probe; offline/v1 manifests invoke the callback at step 3b'.
 ///
 /// Operator prerequisites, holding for the WHOLE command: `data_dir`'s
 /// server stays STOPPED (no handler is ever started against the live
@@ -320,13 +285,19 @@ fn restore_impl<F, B>(
     from: &Path,
     data_dir: &Path,
     force: bool,
-    _probe: F,
+    probe: F,
     before_copy: B,
 ) -> Result<RestoreReport, RestoreError>
 where
     F: FnOnce(&Path) -> Result<(), RestoreError>,
     B: FnOnce(),
 {
+    if !has_external_staging_location(data_dir) {
+        return Err(RestoreError::DataDirHasNoStagingLocation(
+            data_dir.to_path_buf(),
+        ));
+    }
+
     // Shared cross-process read lease on a MANAGED-root snapshot (no-op for
     // an exported copy): held from before the first read of the snapshot
     // through its last source read, so scheduled retention skips it. The
@@ -595,16 +566,11 @@ where
         return Err(e);
     }
 
-    // ---- Step 3b' (LEGACY kind only, unless force): read-only liveness
-    // probe. Unlike the CLI probe, this cannot persist last_started_at into
-    // the live target; it preserves the guarantee that any refusal leaves
-    // the target byte-for-byte unchanged. ----
+    // ---- Step 3b' (LEGACY kind only, unless force): invoke the supplied
+    // liveness callback after staged presence verification. A veto cleans
+    // staging and propagates the callback's typed error before publication. ----
     let probe_result = if !online_classified && !force {
-        backup::probe_source_stopped(data_dir).map_err(|e| match e {
-            BackupError::SourceRunning(_) => RestoreError::ServerRunning(data_dir.to_path_buf()),
-            BackupError::Io(io) => RestoreError::Io(io),
-            other => RestoreError::ManifestVerification(other),
-        })
+        probe(data_dir)
     } else {
         Ok(())
     };
@@ -708,7 +674,9 @@ where
         }
     }
 
-    // ---- Step 5: atomic swap ----
+    // Pre-publication refusals leave the target byte-identical. The two
+    // swap-failure variants below are separate; SwapPartialFailure may leave
+    // the live pathname absent after rollback itself fails.
     let pre_restore_backup = if data_dir.exists() {
         let backup_sibling = parent.join(format!(
             "{}.pre_restore_backup_{stamp}",
@@ -802,9 +770,29 @@ where
     Ok(report)
 }
 
+#[cfg(test)]
+mod staging_location_tests {
+    /// Catches staging inside the live root, which makes pre-swap refusals write into the target.
+    #[test]
+    fn rejects_root_paths_but_allows_normal_targets() {
+        assert!(!super::has_external_staging_location(std::path::Path::new("C:/")));
+        assert!(!super::has_external_staging_location(std::path::Path::new("/")));
+        let normal_target = std::env::temp_dir().join("restore-target");
+        assert!(super::has_external_staging_location(&normal_target));
+    }
+}
+
+fn has_external_staging_location(data_dir: &Path) -> bool {
+    let text = data_dir.to_string_lossy();
+    let windows_drive_root = text.len() == 3
+        && text.as_bytes()[0].is_ascii_alphabetic()
+        && text.as_bytes()[1] == b':'
+        && matches!(text.as_bytes()[2], b'/' | b'\\');
+    !windows_drive_root && data_dir.parent().map_or(false, |parent| parent != data_dir)
+}
+
 const RESTORE_MARKER: &str = ".shamir_restore_epoch";
 const RESTORE_MAGIC: &[u8; 4] = b"SRE1";
-
 pub fn write_restore_marker(data_dir: &Path) -> Result<[u8; 16], RestoreError> {
     let operation = RepoIdentity::new_lineage_id()?;
     // Staging is exclusively owned by this offline restore. Truncation is

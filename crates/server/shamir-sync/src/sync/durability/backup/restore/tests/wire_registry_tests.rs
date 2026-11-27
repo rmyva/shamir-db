@@ -14,7 +14,7 @@ use crate::sync::durability::backup::restore::RestoreError;
 use shamir_types::types::value::QueryValue;
 use tempfile::TempDir;
 
-const REAL_DATA_ROOT_ENTRIES: [&str; 19] = [
+const REAL_DATA_ROOT_ENTRIES: [&str; 20] = [
     "__system__",
     "shamir_db_meta.redb",
     "users",
@@ -34,6 +34,7 @@ const REAL_DATA_ROOT_ENTRIES: [&str; 19] = [
     "format.stamp.tmp",
     "shamir_db_meta.redb.shamirwal",
     "shamir_db_default_main.redb.shamirwal",
+    ".shamir_restore_epoch",
 ];
 
 #[test]
@@ -106,7 +107,73 @@ fn store_route_accepts_ordinary_and_case_variant_components() {
 
 #[test]
 fn default_main_route_exception_is_exact() {
-    // Catches loosening the exception to a name-only or prefix-only allow; the tuple and route shape must match.
+    let exact_store = super::super::catalogue::CapturedRepo {
+        db: "default".into(),
+        repo: "main".into(),
+        store_dir: "shamir_db_default_main.redb".into(),
+        wal: ("shamir_db_default_main.redb.shamirwal".into(), 0),
+        v_star: 0,
+    };
+    assert!(super::super::catalogue::reject_reserved_store_route(&exact_store).is_ok());
+    assert!(super::super::catalogue::reject_reserved_wal_dir(
+        Some("shamir_db_default_main.redb.shamirwal"),
+        &exact_store
+    )
+    .is_ok());
+
+    // Catches the old first-component-only check, which admitted descendants of protected routes.
+    for (store_dir, wal_route, wal_first) in [
+        (
+            "shamir_db_default_main.redb/nested",
+            "ordinary/wal",
+            "shamir_db_default_main.redb.shamirwal",
+        ),
+        (
+            "ordinary/store",
+            "shamir_db_default_main.redb.shamirwal/inner",
+            "shamir_db_default_main.redb.shamirwal",
+        ),
+    ] {
+        let repo = super::super::catalogue::CapturedRepo {
+            store_dir: store_dir.into(),
+            wal: (wal_route.into(), 0),
+            ..exact_store.clone()
+        };
+        if store_dir.starts_with("shamir_db") {
+            assert!(super::super::catalogue::reject_reserved_store_route(&repo).is_err());
+        }
+        if wal_route.starts_with("shamir_db") {
+            assert!(super::super::catalogue::reject_reserved_wal_dir(Some(wal_first), &repo).is_err());
+        }
+    }
+
+    // Case-insensitive protected-shape detection refuses aliases that would collide on a case-insensitive volume.
+    for (db, repo_name, store_dir, wal_route) in [
+        ("default", "main", "SHAMIR_DB_DEFAULT_MAIN.REDB", "ordinary/wal"),
+        ("other", "else", "Shamir_Db_Default_Main.Redb", "ordinary/wal"),
+        ("default", "main", "ordinary/store", "Shamir_Db_Default_Main.Redb.shamirwal"),
+        ("other", "else", "ordinary/store", "Shamir_Db_Default_Main.Redb.shamirwal"),
+    ] {
+        let repo = super::super::catalogue::CapturedRepo {
+            db: db.into(),
+            repo: repo_name.into(),
+            store_dir: store_dir.into(),
+            wal: (wal_route.into(), 0),
+            v_star: 0,
+        };
+        if store_dir.eq_ignore_ascii_case("shamir_db_default_main.redb") {
+            assert!(super::super::catalogue::reject_reserved_store_route(&repo).is_err());
+        }
+        if wal_route.starts_with("Shamir") {
+            assert!(super::super::catalogue::reject_reserved_wal_dir(
+                Some("Shamir_Db_Default_Main.Redb.shamirwal"),
+                &repo
+            )
+            .is_err());
+        }
+    }
+
+    // Catches widening the exception to any tuple on either exact protected route.
     let store_mismatches = [("default", "other"), ("other", "main")];
     for (db, repo_name) in store_mismatches {
         let repo = super::super::catalogue::CapturedRepo {
@@ -138,7 +205,7 @@ fn default_main_route_exception_is_exact() {
             db: db.into(),
             repo: repo_name.into(),
             store_dir: "ordinary/store".into(),
-            wal: ("ordinary/wal".into(), 0),
+            wal: (wal_component.into(), 0),
             v_star: 0,
         };
         assert!(
@@ -177,6 +244,18 @@ fn wal_route_reserved_components_are_literal_and_case_sensitive() {
     assert!(super::super::catalogue::reject_reserved_wal_dir(None, &repo).is_ok());
 }
 
+#[test]
+fn nameless_catalogue_database_row_is_typed_corruption() {
+    // Catches silently skipping malformed decoded rows, which could hide corrupted catalogue state.
+    let mut row = shamir_types::types::common::new_map();
+    row.insert("other".to_string(), QueryValue::Str("value".to_string()));
+    let error = super::super::catalogue::validate_catalogue_db_name_records(&[
+        QueryValue::Map(row),
+    ])
+    .expect_err("nameless row is catalogue corruption");
+    assert!(matches!(error, RestoreError::Catalogue(shamir_db::DbError::Validation(_))));
+}
+
 #[tokio::test]
 async fn staged_catalogue_name_scan_refuses_reserved_database_rows() {
     // Catches removal of the pre-publication refusal while bypassing create_db's reserved-name admission guard.
@@ -209,6 +288,18 @@ async fn staged_catalogue_name_scan_refuses_reserved_database_rows() {
     assert!(error
         .to_string()
         .contains("database name 'users' is reserved by the server"));
+}
+
+#[tokio::test]
+async fn staged_catalogue_file_is_refused_as_wrong_type() {
+    // Catches treating a present non-directory catalogue as absent after a copy walk ignores its type.
+    let stage = TempDir::new().expect("temp dir");
+    std::fs::write(stage.path().join("shamir_db_meta.redb"), b"not a directory")
+        .expect("write wrong-type catalogue");
+    let error = super::super::catalogue::validate_staged_db_names(stage.path())
+        .await
+        .expect_err("wrong-type catalogue must refuse");
+    assert!(matches!(error, RestoreError::Consistency { .. }));
 }
 
 #[tokio::test]
