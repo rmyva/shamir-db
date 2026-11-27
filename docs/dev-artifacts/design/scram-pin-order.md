@@ -638,10 +638,13 @@ TypeScript применяют правило одинаково: Rust — явн
 **Общий фиксчур-вектор: правило генерации** (не рукописный hex): фиксированные
 входы — тот же фиксированный сценарий и тот же Ed25519-seed, что у
 `auth_message_default` и `identity_sig_default`: `{domain_tag="SHAMIR-CHALLENGE-ID-v1",
-ed25519_seed=0x01..0x20, client_nonce=0x00,0x11..0xFF,0x00,0x11..0xFF (32 байта),
-server_nonce=0x20..0x3F, salt=0x50..0x5F (16 байт), kdf={memory_kb=131072,
-time=4, parallelism=1}, argon2_version=0x13, transport=0x01, binding=0x01,
-exporter=0xAA,0xAB..0xC9 (32 байта, НЕ нули)}`. Вектор генерировал
+ed25519_seed=hex 0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20,
+client_nonce=hex 00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff
+(шаг 0x11, 16 значений, дважды: 32 байта), server_nonce=hex 202122..3f
+(0x20..0x3F подряд, 32 байта), salt=hex 505152..5f (0x50..0x5F подряд, 16 байт),
+kdf={memory_kb=131072, time=4, parallelism=1}, argon2_version=0x13,
+transport=0x01, binding=0x01, exporter=hex aaabac..c9 (0xAA..0xC9 подряд,
+32 байта, НЕ нули)}`; рецепт повторяет входы закоммиченного вектора побайтно. Вектор генерировал
 независимый reference (чистый Python по RFC 8032, предварительно сверенный
 побитно с `identity_sig_default`), а не Rust-код: он записал hex транскрипта
 (181 байт), SHA-256 ключа и подпись в
