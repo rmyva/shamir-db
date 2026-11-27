@@ -21,12 +21,39 @@ use super::keyset::{
 use crate::db_handler::cursor_support::{authorize_cursor_read, resolve_repo};
 use crate::db_handler::handler::{session_actor, DbResponse, ShamirDbHandler};
 use crate::db_handler::visibility_handlers::quarantine_cursor_error;
+use crate::engine::db_handler::repo_audit::enqueue_refused_read_audit;
 
 impl ShamirDbHandler {
     /// FG-5b CREATE — resolve the query's table, open an MVCC snapshot
     /// pinned for the cursor's whole lifetime, run the first page, and
     /// park the cursor in the registry bound to this session.
     pub(in crate::engine::db_handler) async fn create_cursor(
+        &self,
+        session: &Session,
+        query_version: u32,
+        db_name: &str,
+        query: ReadQuery,
+        page_size: u32,
+    ) -> DbResponse {
+        let repo = query.from.repo.clone();
+        let table = query.from.table.clone();
+        let response = self
+            .create_cursor_inner(session, query_version, db_name, query, page_size)
+            .await;
+        if let (Some(audit), DbResponse::Error { code, .. }) = (&self.audit, &response) {
+            drop(enqueue_refused_read_audit(
+                &self.cancel_refusal_audit,
+                audit,
+                session,
+                "create_cursor",
+                (db_name, &repo, &table),
+                code,
+            ));
+        }
+        response
+    }
+
+    async fn create_cursor_inner(
         &self,
         session: &Session,
         query_version: u32,

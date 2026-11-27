@@ -24,9 +24,9 @@ use shamir_connect::server::session::{Session, SessionPermissions};
 use shamir_query_types::admin::activity::{CancelOutcome, RequestExecId};
 
 use crate::db_handler::repo_audit::{
-    enqueue_cancel_refusal_audit, enqueue_typed_read_audit, CancelRefusalAudit,
-    CANCEL_AUDIT_OBSERVABILITY_CAPACITY, CANCEL_AUDIT_OBSERVABILITY_PRINCIPAL_SHARE,
-    CANCEL_AUDIT_PRINCIPAL_SHARE,
+    enqueue_cancel_refusal_audit, enqueue_refused_read_audit, enqueue_typed_read_audit,
+    CancelRefusalAudit, CANCEL_AUDIT_OBSERVABILITY_CAPACITY,
+    CANCEL_AUDIT_OBSERVABILITY_PRINCIPAL_SHARE, CANCEL_AUDIT_PRINCIPAL_SHARE,
 };
 
 const TIMEOUT: Duration = Duration::from_secs(120);
@@ -498,5 +498,100 @@ async fn typed_read_clock_failure_is_counted_as_a_dropped_job() {
         queue.dropped_count(),
         3,
         "clock failure plus both quota refusals are the only drops"
+    );
+}
+
+/// BLOCKED-APPENDER FLOOD, refused-read security events.
+///
+/// A single principal can fill only its own share: another principal's
+/// refused read must still be admitted while global queue capacity remains.
+/// This discriminates per-principal accounting from sharing another
+/// principal's Security-event share.
+#[tokio::test]
+async fn refused_read_flood_cannot_consume_another_principals_share() {
+    let appender = Arc::new(GatedAppender::default());
+    let writer = Arc::new(AuditChainWriter::new_with_shared(
+        Arc::new(AuditChain::new([23; 32])),
+        appender.clone(),
+    ));
+    let queue = Arc::new(CancelRefusalAudit::default());
+    let principal_a = session("refused-read-flood", 8);
+    let principal_b = session("refused-read-outsider", 9);
+
+    let mut accepted = Vec::new();
+    let mut admitted_a = 0usize;
+    for _ in 0..CANCEL_AUDIT_PRINCIPAL_SHARE {
+        let job = enqueue_refused_read_audit(
+            &queue,
+            &writer,
+            &principal_a,
+            "get_record",
+            ("app", "repo", "table"),
+            "not_found",
+        );
+        if let Some(job) = job {
+            admitted_a += 1;
+            accepted.push(job);
+        }
+    }
+    let over_share = enqueue_refused_read_audit(
+        &queue,
+        &writer,
+        &principal_a,
+        "get_record",
+        ("app", "repo", "table"),
+        "not_found",
+    );
+    let over_share_refused = over_share.is_none();
+    if let Some(job) = over_share {
+        accepted.push(job);
+    }
+    let from_other = enqueue_refused_read_audit(
+        &queue,
+        &writer,
+        &principal_b,
+        "get_record",
+        ("app", "repo", "table"),
+        "not_found",
+    );
+    let other_accepted = from_other.is_some();
+    if let Some(job) = from_other {
+        accepted.push(job);
+    }
+    let drops = queue.dropped_count();
+
+    appender.release_all();
+    for job in accepted {
+        tokio::time::timeout(TIMEOUT, job)
+            .await
+            .expect("accepted refused-read audit job timed out")
+            .unwrap();
+    }
+
+    assert_eq!(admitted_a, CANCEL_AUDIT_PRINCIPAL_SHARE);
+    assert!(over_share_refused, "principal A exceeded its queue share");
+    assert!(
+        other_accepted,
+        "principal A must not consume principal B's Security-event share"
+    );
+    assert_eq!(
+        drops, 1,
+        "the over-share refusal is counted as a dropped event"
+    );
+    let recorded = appender.recorded();
+    assert_eq!(recorded.len(), CANCEL_AUDIT_PRINCIPAL_SHARE + 1);
+    assert_eq!(
+        recorded
+            .iter()
+            .filter(|entry| entry.user == principal_a.username)
+            .count(),
+        CANCEL_AUDIT_PRINCIPAL_SHARE
+    );
+    assert_eq!(
+        recorded
+            .iter()
+            .filter(|entry| entry.user == principal_b.username)
+            .count(),
+        1
     );
 }

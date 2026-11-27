@@ -103,7 +103,9 @@ use shamir_types::types::record_id::RecordId;
 
 use super::activity::server_busy_response;
 use super::config::NodeMode;
+use super::repo_audit::enqueue_refused_read_audit;
 use super::repo_audit::enqueue_typed_read_audit;
+
 use crate::byte_budget::{stash_guard, stash_serialized_response, ByteBudgetGuard};
 use crate::db_handler::cursor_handlers::error_response;
 use crate::db_handler::cursor_support::{authorize_cursor_read, resolve_repo};
@@ -306,6 +308,30 @@ impl ShamirDbHandler {
     /// P2 — `DbRequest::GetRecord`: the typed exact-key point read.
     /// See the module docs for the gate ordering and the budget story.
     pub(super) async fn get_record(
+        &self,
+        session: &Session,
+        db_name: &str,
+        repo_name: &str,
+        table_name: &str,
+        key: RecordId,
+    ) -> DbResponse {
+        let response = self
+            .get_record_inner(session, db_name, repo_name, table_name, key)
+            .await;
+        if let (Some(audit), DbResponse::Error { code, .. }) = (&self.audit, &response) {
+            drop(enqueue_refused_read_audit(
+                &self.cancel_refusal_audit,
+                audit,
+                session,
+                "get_record",
+                (db_name, repo_name, table_name),
+                code,
+            ));
+        }
+        response
+    }
+
+    async fn get_record_inner(
         &self,
         session: &Session,
         db_name: &str,

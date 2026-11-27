@@ -93,6 +93,7 @@ pub(in crate::engine::db_handler) struct BeginPause {
     get_record_identity: GetRecordIdentityPause,
     create_cursor_identity: CreateCursorIdentityPause,
     fetch_identity: FetchIdentityPause,
+    fetch_before_state_lock: FetchIdentityPause,
 }
 
 impl BeginPause {
@@ -171,6 +172,24 @@ impl ShamirDbHandler {
     #[cfg(test)]
     pub(in crate::engine::db_handler) async fn fetch_identity_pause(&self) {
         self.begin_pause.fetch_identity.pause().await;
+    }
+
+    /// Install a pause after FetchNext lookup and before it acquires cursor state.
+    #[cfg(test)]
+    pub(in crate::engine::db_handler) fn with_fetch_before_state_lock_pause(
+        self,
+        reached: Arc<tokio::sync::Barrier>,
+        resume: Arc<tokio::sync::Barrier>,
+    ) -> Self {
+        self.begin_pause
+            .fetch_before_state_lock
+            .install(reached, resume);
+        self
+    }
+
+    #[cfg(test)]
+    pub(in crate::engine::db_handler) async fn fetch_before_state_lock_pause(&self) {
+        self.begin_pause.fetch_before_state_lock.pause().await;
     }
 
     /// Reads the raw-native-path decode counter (test-only reader).
