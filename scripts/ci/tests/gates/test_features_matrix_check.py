@@ -66,6 +66,11 @@ def tree_text(engine_features, table_features=("default",)):
     for feat in ("default", "fjall", "test-util", "loom"):
         if feat in table_features:
             lines.append('shamir-engine-table feature "%s"' % feat)
+    # The tx crate's features are independently tracked from engine features.
+    lines.append("shamir-engine-tx v0.1.0")
+    for feat in ("default", "fjall", "test-util"):
+        if feat == "default" or feat in engine_features:
+            lines.append('shamir-engine-tx feature "%s"' % feat)
     return "\n".join(lines) + "\n"
 
 
@@ -362,6 +367,23 @@ class ForwardedFeatureTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("shamir-engine-table", err)
         self.assertIn("complete cargo tree stdout", err)
+
+    def test_tx_test_util_forwarded_mismatch_exits_1(self):
+        tree = tree_text(["test-util"]).replace(
+            'shamir-engine-tx feature "test-util"\n', ""
+        )
+        code, _, err = run_main(["--expected", "test-util"], tree=tree)
+        self.assertEqual(code, 1)
+        self.assertIn("shamir-engine-tx", err)
+
+    def test_missing_tx_package_exits_2(self):
+        tree = "\n".join(
+            line for line in tree_text([]).splitlines()
+            if not line.startswith("shamir-engine-tx")
+        )
+        code, _, err = run_main(["--expected", "no-default"], tree=tree)
+        self.assertEqual(code, 2)
+        self.assertIn("shamir-engine-tx does not appear", err)
 
     def test_validator_forwarded_mismatch_exits_1(self):
         tree = tree_text(["test-util"], {"default", "test-util"}).replace('shamir-engine-validator feature "test-util"\n', "")

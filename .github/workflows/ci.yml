@@ -255,6 +255,9 @@ jobs:
           cargo doc -p shamir-engine-repo --no-deps --document-private-items --locked --features test-util
           cargo doc -p shamir-engine-table --no-deps --document-private-items --locked
           cargo doc -p shamir-engine-table --no-deps --document-private-items --locked --features test-util
+          cargo doc -p shamir-engine-tx --no-deps --document-private-items --locked
+          cargo doc -p shamir-engine-tx --no-deps --document-private-items --locked --no-default-features
+          cargo doc -p shamir-engine-tx --no-deps --document-private-items --locked --features test-util
 
   fmt:
     name: cargo fmt
@@ -416,6 +419,18 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links"
         run: cargo doc -p shamir-engine-table --no-deps --document-private-items --locked --features test-util
+      - if: needs.affected.outputs.run_engine == 'true'
+        env:
+          RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links"
+        run: cargo doc -p shamir-engine-tx --no-deps --document-private-items --locked
+      - if: needs.affected.outputs.run_engine == 'true'
+        env:
+          RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links"
+        run: cargo doc -p shamir-engine-tx --no-deps --document-private-items --locked --no-default-features
+      - if: needs.affected.outputs.run_engine == 'true'
+        env:
+          RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links"
+        run: cargo doc -p shamir-engine-tx --no-deps --document-private-items --locked --features test-util
       - name: engine scope notice
         if: needs.affected.outputs.run_engine != 'true'
         shell: bash
@@ -492,7 +507,10 @@ jobs:
         if: matrix.cell.id == 'no-default' && needs.affected.outputs.run_engine == 'true'
       - run: cargo clippy -p shamir-engine-table --lib --locked --features test-util -- -D warnings
         if: matrix.cell.id == 'test-util' && needs.affected.outputs.run_engine == 'true'
-      # --all-targets ONLY here: under dev-dependency/workspace unification
+      - run: cargo clippy -p shamir-engine-tx --lib --locked --no-default-features -- -D warnings
+        if: matrix.cell.id == 'no-default' && needs.affected.outputs.run_engine == 'true'
+      - run: cargo clippy -p shamir-engine-tx --lib --locked --features test-util -- -D warnings
+        if: matrix.cell.id == 'test-util' && needs.affected.outputs.run_engine == 'true'
       # it would falsely enable features in the reduced cells (see CI
       # evidence above); in default-plus the resolution equals the label.
       - run: cargo check -p shamir-engine --all-targets --locked ${{ matrix.cell.flags }}
@@ -545,6 +563,8 @@ jobs:
           cargo clippy -p shamir-engine --all-targets --locked --features test-util,fts_indexed_long -- -D warnings
           cargo clippy -p shamir-engine-table --lib --locked -- -D warnings
           cargo clippy -p shamir-engine-table --lib --locked --features test-util -- -D warnings
+          cargo clippy -p shamir-engine-tx --lib --locked --no-default-features -- -D warnings
+          cargo clippy -p shamir-engine-tx --lib --locked --features test-util -- -D warnings
 
   # Windows cold-cache 30-min timeout fix (owner decision 2026-10-30): the
   # workspace compile/link was the dominant, OS-dependent cost inside `test`'s

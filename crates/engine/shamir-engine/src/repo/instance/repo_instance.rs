@@ -1,4 +1,3 @@
-use crate::repo::fk_reverse_cache::FkReverseCache;
 use crate::repo::instance::support::metrics::{EngineMetrics, EngineMetricsSnapshot};
 use crate::repo::journal::backend::durability_handle::retention_gate::RetentionGate;
 use crate::repo::repo_types::BoxRepo;
@@ -10,14 +9,12 @@ pub use crate::repo::version_provider::repo_token;
 // no semantics changed.
 use crate::repo::DurabilityHandle;
 use crate::table::{TableCatalog, TableConfig, TableManager};
-use crate::tx::cold_reconcile::lifecycle::ForegroundLifecycle;
+use crate::tx::commit::core::repo_core::RepoCoreInit;
 use crate::tx::commit::pipeline::admission::gate::CommitAdmissionGate;
 pub use crate::tx::drain::truncation_pin_guard::TruncationPinGuard;
-use crate::tx::CommitTailBarrier;
+use crate::tx::{CommitTailBarrier, RepoCore};
 pub use lifecycle::{OnlineBackupError, SealHold};
 use shamir_query_types::batch::VisibilityWait;
-#[cfg(test)]
-use shamir_storage::error::DbResult;
 use shamir_types::types::common::{new_dash_map_wc, TDashMap, THasher};
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
@@ -32,7 +29,6 @@ pub(crate) use crate::repo::journal::backend::durability_handle::ChangefeedHandl
 // Cold opens handed off by dropped callers (`tx/commit/core/catalog_access.rs`)
 // register here; `RepoInstance::shutdown_clean` drains the owner before
 // commit quiescence.
-pub(crate) use lifecycle::ColdOpenTasks;
 
 /// Manages a single repository and its tables.
 ///
@@ -152,33 +148,19 @@ impl RepoInstance {
         let live = Arc::new(());
         let rename_fence = Arc::new(scc::HashMap::with_hasher(THasher::default()));
         let rename_fence_len = Arc::new(AtomicUsize::new(0));
-        let core = crate::tx::commit::core::RepoCore {
+        let core = RepoCore::from_shell(RepoCoreInit {
             name: name.clone(),
             repo,
             catalog,
             durability_handle,
             horizon,
-            truncation_pins: Arc::new(crate::tx::drain::truncation_pin::TruncationPin::new()),
             live_weak: Arc::downgrade(&live),
             rename_fence: crate::tx::commit::rename_fence::RenameFenceView::new(
                 Arc::clone(&rename_fence),
                 Arc::clone(&rename_fence_len),
             ),
-            fk_reverse_cache: Arc::new(FkReverseCache::new()),
-            receipt_worker: Arc::new(OnceCell::new()),
-            worker_lifecycle: Some(Arc::new(ForegroundLifecycle::new())),
-            replication_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            cold_opens: Arc::new(ColdOpenTasks::new()),
             wal_segment_bytes: crate::repo::durability_policy::effective_wal_segment_bytes(),
-            #[cfg(test)]
-            journal_publish_hook: Arc::new(arc_swap::ArcSwapOption::empty()),
-            #[cfg(test)]
-            table_init_hook: Arc::new(arc_swap::ArcSwapOption::empty()),
-            #[cfg(test)]
-            clean_horizon_test_state: Arc::new(std::sync::OnceLock::new()),
-            #[cfg(test)]
-            background_drainer_disabled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        };
+        });
         Self {
             name,
             live: Some(live),
@@ -188,12 +170,4 @@ impl RepoInstance {
             metrics: Arc::new(EngineMetrics::default()),
         }
     }
-}
-
-/// tx-facing seam (`tx/recovery/clean_horizon/checkpoint.rs` imports
-/// `crate::repo::durability_policy::checkpoint_allocation_floor`). Resolves
-/// the journal store and delegates to the repo-layer core.
-#[cfg(test)]
-pub(crate) async fn checkpoint_allocation_floor(repo: &RepoInstance) -> DbResult<u64> {
-    repo.core.checkpoint_allocation_floor().await
 }

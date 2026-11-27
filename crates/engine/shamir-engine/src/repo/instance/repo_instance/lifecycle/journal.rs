@@ -157,7 +157,7 @@ impl RepoInstance {
         let sampled_w = self.tx_gate().await?.completion().watermark();
         let h = self.changefeed().await?;
         self.core
-            .durability_handle
+            .durability_handle()
             .read_changelog_bounded_from(
                 h,
                 sampled_w,
@@ -198,7 +198,7 @@ impl RepoInstance {
     /// Install an isolated journal fixture before lazy initialization.
     #[cfg(test)]
     pub(crate) fn install_journal_for_test(&self, handle: ChangefeedHandle) {
-        assert!(self.core.durability_handle.changefeed.set(handle).is_ok());
+        assert!(self.core.durability_handle().changefeed.set(handle).is_ok());
     }
 
     /// Test-only read-side observation of writer persistence/confirmation.

@@ -31,7 +31,7 @@ You are an engineer on **S.H.A.M.I.R.** — a production-grade, self-contained, 
 `crates/client/shamir-client-ts` (pure TypeScript, no `Cargo.toml` — kept out so the
 `crates/*/*` glob doesn't try to load it). Crates live in layer folders
 `crates/<group>/<crate>/` (names do not change; at most 7 crates per group). The
-default workspace ships **41 crates** (including the `shamir-client-node`
+default workspace ships **42 crates** (including the `shamir-client-node`
 napi-rs binding, a regular member; MSVC-only on Windows) plus the vendored
 `vendor/hnsw_rs` member:
 
@@ -41,7 +41,7 @@ napi-rs binding, a regular member; MSVC-only on Windows) plus the vendored
 | `storage` | `shamir-storage`, `shamir-wal`, `shamir-tx` |
 | `query` | `shamir-query-types`, `shamir-query-builder`, `shamir-query-builder-macros`, `shamir-funclib` |
 | `index` | `shamir-index-core`, `shamir-index`, `shamir-vector` |
-| `engine` | `shamir-engine`, `shamir-engine-repo`, `shamir-engine-table`, `shamir-engine-query`, `shamir-engine-validator`, `shamir-db` |
+| `engine` | `shamir-engine`, `shamir-engine-repo`, `shamir-engine-table`, `shamir-engine-tx`, `shamir-engine-query`, `shamir-engine-validator`, `shamir-db` |
 | `wasm` | `shamir-wasm-host`, `shamir-wasm-admission`, `shamir-lang`, `shamir-sdk`, `shamir-sdk-macros` |
 | `net` | `shamir-connect`, `shamir-transport-http`, `shamir-transport-ipc`, `shamir-transport-tcp`, `shamir-transport-ws` |
 | `server` | `shamir-server`, `shamir-server-security`, `shamir-sync` |
@@ -260,7 +260,7 @@ cargo tl -p shamir-tx                      # one-crate lib
 
 ```
 ./scripts/test.sh @tx                      # shamir-tx
-./scripts/test.sh @engine                  # shamir-engine + shamir-engine-query + shamir-engine-validator
+./scripts/test.sh @engine                  # shamir-engine + shamir-engine-repo + shamir-engine-table + shamir-engine-tx + shamir-engine-query + shamir-engine-validator
 ./scripts/test.sh @oracle                  # tx + engine (Version Oracle area)
 ./scripts/test.sh @types                   # shamir-types + shamir-collections
 ./scripts/test.sh @storage                 # shamir-storage + shamir-wal
@@ -561,12 +561,12 @@ and `#[ignore]` changes are never declarable**.
 * `rustdoc` (full tier; mirrored in the fast tier when `shamir-engine` is
   affected) — `cargo doc -p shamir-engine --no-deps --document-private-items
   --locked` with broken/private intra-doc links promoted to errors, once with
-  default features and once with `--no-default-features`; also documents `shamir-engine-query`, `shamir-engine-validator`, `shamir-engine-repo` and `shamir-engine-table` with and without `test-util`. Docs are code.
+  default features and once with `--no-default-features`; also documents `shamir-engine-query`, `shamir-engine-validator`, `shamir-engine-repo`, `shamir-engine-table` and `shamir-engine-tx` with and without `test-util`. Docs are code.
 * `engine-features` / `engine-features-fast` — isolated `-p shamir-engine`
   feature cells (check + clippy per cell), each asserting via
   `scripts/ci/gates/features_matrix_check.py` that the ENABLED feature set
   matches the cell exactly, so "no defaults" is proven, not just labelled.
-  The full matrix also checks isolated query-, validator-, repo- and table-crate features. Fast tier runs cells 1 and 5 on ubuntu, plus the table crate's two lib cells, drafts only.
+  The full matrix also checks isolated query-, validator-, repo-, table- and tx-crate features. Fast tier runs cells 1 and 5 on ubuntu, plus the table and tx crates' lib cells, drafts only.
 * `loom-model` discovery — fails before running when
   `cargo nextest list -E 'test(loom_model)'` finds zero tests (plus
   `--no-tests=fail` at run time), so a renamed/gated-away model cannot

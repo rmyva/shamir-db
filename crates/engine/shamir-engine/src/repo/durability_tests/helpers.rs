@@ -96,7 +96,7 @@ fn journal_event(repo: &str, commit_version: u64) -> ChangelogEvent {
 /// `read_changelog_bounded_impl` covers exactly `versions`.
 #[cfg(feature = "fjall")]
 pub(crate) async fn seed_journal(repo: &RepoInstance, versions: &[u64]) {
-    let store = repo.core.repo.store_get("__changelog__").await.unwrap();
+    let store = repo.core.repo().store_get("__changelog__").await.unwrap();
     for &v in versions {
         let event = journal_event(repo.name(), v);
         store

@@ -16,12 +16,12 @@ use super::super::RepoInstance;
 impl RepoInstance {
     #[cfg(all(test, feature = "fjall"))]
     pub(crate) async fn changelog_store_for_test(&self) -> DbResult<Arc<dyn Store>> {
-        self.core.repo.store_get("__changelog__").await
+        self.core.repo().store_get("__changelog__").await
     }
 
     #[cfg(all(test, feature = "fjall"))]
     pub(crate) fn set_wal_segment_bytes_for_test(&mut self, bytes: u64) {
-        self.core.wal_segment_bytes = bytes;
+        self.core.set_wal_segment_bytes(bytes);
     }
 
     #[cfg(test)]
@@ -43,6 +43,6 @@ impl RepoInstance {
     }
 
     pub fn wal_retention_metrics(&self) -> [u64; 5] {
-        self.core.durability_handle.wal_retention_metrics()
+        self.core.durability_handle().wal_retention_metrics()
     }
 }

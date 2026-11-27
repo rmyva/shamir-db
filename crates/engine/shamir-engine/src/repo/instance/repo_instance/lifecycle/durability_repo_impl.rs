@@ -11,7 +11,7 @@ use shamir_storage::types::Repo as _;
 use std::sync::Arc;
 
 #[cfg(all(test, feature = "fjall"))]
-use crate::tx::clean_horizon::tests::test_journal_seam;
+use crate::tx::tests::clean_horizon_tests::test_journal_seam;
 
 impl RepoInstance {
     #[cfg(all(test, feature = "fjall"))]
@@ -139,7 +139,7 @@ impl RepoInstance {
         .await;
         // Cold certification may have started a writer that holds the store
         // lock after instance drop. Join it even if replay failed.
-        let shutdown = match instance.core.durability_handle.changefeed.get() {
+        let shutdown = match instance.core.durability_handle().changefeed.get() {
             Some(handle) => Box::pin(handle.feed.shutdown_and_wait()).await,
             None => Ok(()),
         };
@@ -149,7 +149,7 @@ impl RepoInstance {
         // the WAL and can truncate it. Keep the instance alive for the barrier.
         instance
             .core
-            .repo
+            .repo()
             .persist_once()
             .await
             .map_err(after_open)?;
@@ -159,7 +159,7 @@ impl RepoInstance {
     /// Scrape initialized WAL and repo-owned pull observations; never opens stores.
     #[must_use]
     pub fn durability_metrics_snapshot(&self) -> DurabilityMetricsSnapshot {
-        self.core.durability_handle.durability_metrics_snapshot()
+        self.core.durability_handle().durability_metrics_snapshot()
     }
 
     /// Snapshot read of the shared policy; pins the value against concurrent stores.
@@ -187,14 +187,14 @@ impl RepoInstance {
         if self.durability_change_requires_reopen() {
             return Err(DbError::RepoRequiresReopen(self.name.clone()));
         }
-        resolve(server_default, Some(over), self.core.wal_segment_bytes)
+        resolve(server_default, Some(over), self.core.wal_segment_bytes())
     }
 
     /// Validate before storing; rejected policies leave every clone unchanged.
     /// Factory opens validate once and install before recovery/admission.
     /// Later setters use the same captured segment size as WAL rotation.
     pub fn set_durability(&self, policy: DurabilityPolicy) -> DbResult<()> {
-        let resolved = resolve(&policy, None, self.core.wal_segment_bytes)?;
+        let resolved = resolve(&policy, None, self.core.wal_segment_bytes())?;
         // `completed_reseed` on an ephemeral backend (in-memory / hybrid;
         // Mem WAL sink, `!has_persistent_wal()`) is ALLOWED: it is the only
         // honest serve mode when nothing survives a restart. `wal_commit`
@@ -204,9 +204,9 @@ impl RepoInstance {
         // here (durable mem repos are relied on by tests and legal at the
         // engine layer); durable-ephemeral publication-time validation lives
         // server-side.
-        let policy = resolved.for_wal_backend(self.core.durability_handle.wal_dir.is_some());
+        let policy = resolved.for_wal_backend(self.core.durability_handle().wal_dir.is_some());
         self.core
-            .durability_handle
+            .durability_handle()
             .durability
             .store(Arc::new(policy));
         Ok(())
@@ -255,7 +255,7 @@ impl RepoInstance {
             first,
             &group,
             mode,
-            &self.core.durability_handle.durability_metrics,
+            &self.core.durability_handle().durability_metrics,
             |clamp| self.read_changelog_bounded_impl(from_version, limit, false, clamp),
         )
         .await
@@ -268,7 +268,7 @@ impl RepoInstance {
     pub(crate) async fn ensure_replication_armed(&self) -> DbResult<()> {
         if self
             .core
-            .replication_armed
+            .replication_armed()
             .load(std::sync::atomic::Ordering::Acquire)
         {
             return Ok(());
@@ -276,7 +276,7 @@ impl RepoInstance {
         let store = self.tx_info_store().await?;
         crate::meta::repo_identity::ensure_armed(&store).await?;
         self.core
-            .replication_armed
+            .replication_armed()
             .store(true, std::sync::atomic::Ordering::Release);
         Ok(())
     }

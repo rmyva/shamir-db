@@ -44,8 +44,8 @@
 #
 # Available scopes (extend as needed):
 #   @tx       — shamir-tx
-#   @engine   — shamir-engine + shamir-engine-repo + shamir-engine-table + shamir-engine-query + shamir-engine-validator
-#   @oracle   — shamir-tx + shamir-engine + shamir-engine-repo + shamir-engine-table (Version Oracle area)
+#   @engine   — shamir-engine + shamir-engine-repo + shamir-engine-table + shamir-engine-tx + shamir-engine-query + shamir-engine-validator
+#   @oracle   — shamir-tx + shamir-engine + shamir-engine-repo + shamir-engine-table + shamir-engine-tx (Version Oracle area)
 #   @types    — shamir-types + shamir-collections
 #   @storage  — shamir-storage + shamir-wal
 #   @server   — shamir-server + shamir-server-security + shamir-sync + shamir-connect
@@ -117,8 +117,8 @@ fi
 scope_args() {
     case "$1" in
         @tx)       echo "-p shamir-tx" ;;
-        @engine)   echo "-p shamir-engine -p shamir-engine-repo -p shamir-engine-table -p shamir-engine-query -p shamir-engine-validator" ;;
-        @oracle)   echo "-p shamir-tx -p shamir-engine -p shamir-engine-repo -p shamir-engine-table" ;;
+        @engine)   echo "-p shamir-engine -p shamir-engine-repo -p shamir-engine-table -p shamir-engine-tx -p shamir-engine-query -p shamir-engine-validator" ;;
+        @oracle)   echo "-p shamir-tx -p shamir-engine -p shamir-engine-repo -p shamir-engine-table -p shamir-engine-tx" ;;
         @types)    echo "-p shamir-types -p shamir-collections" ;;
         @storage)  echo "-p shamir-storage -p shamir-wal" ;;
         @server)   echo "-p shamir-server -p shamir-server-security -p shamir-sync -p shamir-connect" ;;

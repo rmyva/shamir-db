@@ -22,6 +22,7 @@ const FORBIDDEN_SUBSTRINGS: &[&str] = &[".data_store(", ".info_store(", ".intern
 const ENGINE_FAMILY: &[&str] = &[
     "shamir-engine-repo",
     "shamir-engine-table",
+    "shamir-engine-tx",
     "shamir-engine",
     "shamir-engine-query",
     "shamir-engine-validator",
@@ -114,7 +115,7 @@ fn no_raw_handle_calls_outside_engine_family() {
                 violations.push(format!(
                     "{}: contains `{}` — raw TableManager handles (info_store/data_store/interner) \
                      are reserved for the engine family (shamir-engine-repo, shamir-engine-table, \
-                     shamir-engine, shamir-engine-query, shamir-engine-validator)",
+                     shamir-engine-tx, shamir-engine, shamir-engine-query, shamir-engine-validator)",
                     rel.display(),
                     needle
                 ));

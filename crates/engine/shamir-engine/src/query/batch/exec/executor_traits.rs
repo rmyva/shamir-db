@@ -7,6 +7,8 @@
 //! `table::support::table_resolver` and is re-exported here.
 
 use crate::query::batch::{BatchError, BatchOp};
+use shamir_query_types::batch::VisibilityWait;
+
 use crate::query::read::QueryResult;
 use shamir_engine_query::query::filter::read_budget::QueryMetrics;
 use shamir_query_types::CallOp;
@@ -16,20 +18,52 @@ use shamir_types::types::common::TMap;
 
 pub use crate::table::TableResolver;
 
-/// Repo-scoped resolution port for tx-aware batch paths.
+/// Transaction lifecycle operations required by batch execution.
 ///
-/// Extends [`TableResolver`] with the one method that reaches above the
-/// table layer; after the engine's crate split this port stays on the
-/// batch (query) side, so its return type may follow the tx-facing
-/// coordinator without dragging the table-side contract along.
+/// The facade implements this narrow port for the tx-layer `RepoCore` using
+/// its explicit public batch transaction methods. Callers depend on this
+/// contract rather than the coordinator's commit helper modules.
+#[async_trait::async_trait]
+pub trait BatchTxPort: Send + Sync {
+    async fn commit_implicit_batch(
+        &self,
+        tx: shamir_tx::TxContext,
+        wait: VisibilityWait,
+        cancel: Option<std::sync::Arc<shamir_tx::CancelHandle>>,
+    ) -> Result<crate::tx::TxOutcome, crate::tx::CommitError>;
+
+    async fn commit_explicit_batch(
+        &self,
+        tx: shamir_tx::TxContext,
+        wait: VisibilityWait,
+        cancel: Option<std::sync::Arc<shamir_tx::CancelHandle>>,
+    ) -> Result<crate::tx::TxOutcome, crate::tx::CommitError>;
+
+    async fn begin_interactive_batch(
+        &self,
+        isolation: shamir_tx::IsolationLevel,
+    ) -> shamir_storage::error::DbResult<(shamir_tx::TxContext, shamir_tx::SnapshotGuard)>;
+
+    async fn commit_interactive_batch(
+        &self,
+        tx: shamir_tx::TxContext,
+    ) -> Result<crate::tx::TxOutcome, crate::tx::CommitError>;
+
+    async fn release_batch_locks(&self, tx: &shamir_tx::TxContext);
+    async fn release_interactive_batch_locks(&self, tx: &shamir_tx::TxContext);
+    async fn synced_flush(&self) -> DbResult<()>;
+    async fn sync_wal(&self) -> DbResult<()>;
+    fn default_visibility_wait(&self) -> VisibilityWait;
+}
+
+///
+/// Resolves repositories to the tx-layer `RepoCore`, which implements
+/// [`BatchTxPort`] in the facade through narrow public tx operations. Keeping
+/// this return type preserves existing resolver implementations; callers use
+/// the port contract for batch transaction lifecycle operations.
 #[async_trait::async_trait]
 pub trait BatchResolver: TableResolver {
-    /// Resolve a repository by name to its [`crate::tx::RepoCore`] — the
-    /// tx-layer aggregate (gate, WAL, commit lifecycle), a cheap `Clone`.
-    ///
-    /// Used by tx-aware paths to obtain the per-repo coordinator.
-    /// Cross-repo guard upstream guarantees `repo_name` is well-defined
-    /// for transactional batches.
+    /// Resolve the tx coordinator for a repository. It implements [`BatchTxPort`].
     async fn resolve_repo(&self, repo_name: &str) -> DbResult<crate::tx::RepoCore>;
 
     /// Optional catalogue metadata probe used to preflight table reads.

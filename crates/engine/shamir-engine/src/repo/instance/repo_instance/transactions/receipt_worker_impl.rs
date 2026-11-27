@@ -6,7 +6,7 @@ impl RepoInstance {
     #[cfg(all(test, feature = "fjall"))]
     pub(crate) async fn receipt_worker_parked_guards(&self) -> Option<usize> {
         self.core
-            .receipt_worker
+            .receipt_worker()
             .get()
             .map(|lease| lease.parked_count())
     }

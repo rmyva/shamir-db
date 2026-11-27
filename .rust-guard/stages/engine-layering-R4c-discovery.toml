@@ -1,0 +1,1521 @@
+base = "ffceb826af616d7d09f55d8ceb370b125ddd3dc4"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::commit::acknowledgement::tests::visibility_metrics_tests::bounded_timeout_records_counter_and_one_observation"
+to_path = "shamir-engine"
+to_item = "tx::tests::visibility_metrics_tests::bounded_timeout_records_counter_and_one_observation"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::commit::acknowledgement::tests::visibility_metrics_tests::direct_write_pending_is_attributed_by_crud_receipt"
+to_path = "shamir-engine"
+to_item = "tx::tests::visibility_metrics_tests::direct_write_pending_is_attributed_by_crud_receipt"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::commit::acknowledgement::tests::visibility_metrics_tests::explicit_tx_pending_is_attributed_by_commit_tx"
+to_path = "shamir-engine"
+to_item = "tx::tests::visibility_metrics_tests::explicit_tx_pending_is_attributed_by_commit_tx"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::commit::acknowledgement::tests::visibility_metrics_tests::implicit_batch_pending_is_attributed_by_commit_implicit"
+to_path = "shamir-engine"
+to_item = "tx::tests::visibility_metrics_tests::implicit_batch_pending_is_attributed_by_commit_implicit"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::commit::acknowledgement::tests::visibility_metrics_tests::reopen_records_the_reopen_result_without_a_wait"
+to_path = "shamir-engine"
+to_item = "tx::tests::visibility_metrics_tests::reopen_records_the_reopen_result_without_a_wait"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::commit::acknowledgement::tests::visibility_metrics_tests::strict_fast_path_records_only_the_counter"
+to_path = "shamir-engine"
+to_item = "tx::tests::visibility_metrics_tests::strict_fast_path_records_only_the_counter"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::commit::acknowledgement::tests::visibility_metrics_tests::visible_through_sample_equals_gate_floor"
+to_path = "shamir-engine"
+to_item = "tx::tests::visibility_metrics_tests::visible_through_sample_equals_gate_floor"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::commit::pipeline::admission::tests::gate_tests::admit_release_counts_are_exact_and_reopen_leaks_no_count"
+to_path = "shamir-engine-tx"
+to_item = "commit::pipeline::admission::tests::gate_tests::admit_release_counts_are_exact_and_reopen_leaks_no_count"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::commit::pipeline::admission::tests::gate_tests::closed_gate_refuses_immediately_without_side_effect"
+to_path = "shamir-engine-tx"
+to_item = "commit::pipeline::admission::tests::gate_tests::closed_gate_refuses_immediately_without_side_effect"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::commit::pipeline::admission::tests::gate_tests::default_cap_is_documented_constant_and_usable"
+to_path = "shamir-engine-tx"
+to_item = "commit::pipeline::admission::tests::gate_tests::default_cap_is_documented_constant_and_usable"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::commit::pipeline::admission::tests::gate_tests::lease_is_send_and_owned"
+to_path = "shamir-engine-tx"
+to_item = "commit::pipeline::admission::tests::gate_tests::lease_is_send_and_owned"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::commit::pipeline::admission::tests::gate_tests::second_closer_gets_busy_and_owner_drop_reopens"
+to_path = "shamir-engine-tx"
+to_item = "commit::pipeline::admission::tests::gate_tests::second_closer_gets_busy_and_owner_drop_reopens"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::commit::pipeline::admission::tests::wait_tests::close_vs_acquire_boundary_never_leaves_an_uncounted_lease"
+to_path = "shamir-engine-tx"
+to_item = "commit::pipeline::admission::tests::wait_tests::close_vs_acquire_boundary_never_leaves_an_uncounted_lease"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::commit::pipeline::admission::tests::wait_tests::close_waits_for_pre_close_leases_then_zero_gap_free"
+to_path = "shamir-engine-tx"
+to_item = "commit::pipeline::admission::tests::wait_tests::close_waits_for_pre_close_leases_then_zero_gap_free"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::commit::pipeline::admission::tests::wait_tests::leader_waits_closed_then_admits_after_reopen"
+to_path = "shamir-engine-tx"
+to_item = "commit::pipeline::admission::tests::wait_tests::leader_waits_closed_then_admits_after_reopen"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::drainer::orphan_repair::tests::adversarial_store_tests::full_journal_channel_defers_orphan_event"
+to_path = "shamir-engine"
+to_item = "tx::tests::orphan_repair_tests::adversarial_store_tests::full_journal_channel_defers_orphan_event"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::drainer::orphan_repair::tests::adversarial_store_tests::post_enqueue_checkpoint_failure_is_retryable_without_gap"
+to_path = "shamir-engine"
+to_item = "tx::tests::orphan_repair_tests::adversarial_store_tests::post_enqueue_checkpoint_failure_is_retryable_without_gap"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::drainer::orphan_repair::tests::adversarial_store_tests::preflight_checkpoint_failure_is_retryable_without_gap"
+to_path = "shamir-engine"
+to_item = "tx::tests::orphan_repair_tests::adversarial_store_tests::preflight_checkpoint_failure_is_retryable_without_gap"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::drainer::orphan_repair::tests::adversarial_store_tests::repeated_repair_event_put_is_idempotent"
+to_path = "shamir-engine"
+to_item = "tx::tests::orphan_repair_tests::adversarial_store_tests::repeated_repair_event_put_is_idempotent"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::drainer::orphan_repair::tests::durability_tests::bypass_negative_control_unlinks_without_orphan_checkpoint"
+to_path = "shamir-engine"
+to_item = "tx::tests::orphan_repair_tests::durability_tests::bypass_negative_control_unlinks_without_orphan_checkpoint"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::drainer::orphan_repair::tests::durability_tests::checkpoint_failure_retains_sealed_orphan_wal_then_retry_unlinks"
+to_path = "shamir-engine"
+to_item = "tx::tests::orphan_repair_tests::durability_tests::checkpoint_failure_retains_sealed_orphan_wal_then_retry_unlinks"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::drainer::orphan_repair::tests::durability_tests::child_entrypoint"
+to_path = "shamir-engine"
+to_item = "tx::tests::orphan_repair_tests::durability_tests::child_entrypoint"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::drainer::orphan_repair::tests::durability_tests::post_truncate_crash_reopens_and_replays_orphan_event_twice"
+to_path = "shamir-engine"
+to_item = "tx::tests::orphan_repair_tests::durability_tests::post_truncate_crash_reopens_and_replays_orphan_event_twice"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::drainer::orphan_repair::tests::durability_tests::raw_checkpoint_reader_reports_missing_j_and_floor"
+to_path = "shamir-engine"
+to_item = "tx::tests::orphan_repair_tests::durability_tests::raw_checkpoint_reader_reports_missing_j_and_floor"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::drainer::orphan_repair::tests::metrics_tests::orphan_repair_metrics_count_repair_once_and_not_on_replay"
+to_path = "shamir-engine"
+to_item = "tx::tests::orphan_repair_tests::metrics_tests::orphan_repair_metrics_count_repair_once_and_not_on_replay"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::drainer::orphan_repair::tests::missing_evidence_tests::absent_gate_and_window_evidence_recovers_then_certifies_gap"
+to_path = "shamir-engine"
+to_item = "tx::tests::orphan_repair_tests::missing_evidence_tests::absent_gate_and_window_evidence_recovers_then_certifies_gap"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::drainer::orphan_repair::tests::missing_evidence_tests::missing_evidence_does_not_settle_non_contiguous_orphan"
+to_path = "shamir-engine"
+to_item = "tx::tests::orphan_repair_tests::missing_evidence_tests::missing_evidence_does_not_settle_non_contiguous_orphan"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::drainer::orphan_repair::tests::missing_evidence_tests::missing_evidence_does_not_settle_version_present_in_window"
+to_path = "shamir-engine"
+to_item = "tx::tests::orphan_repair_tests::missing_evidence_tests::missing_evidence_does_not_settle_version_present_in_window"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::drainer::orphan_repair::tests::missing_evidence_tests::missing_evidence_gap_init_failure_is_counted_and_retry_clears_error"
+to_path = "shamir-engine"
+to_item = "tx::tests::orphan_repair_tests::missing_evidence_tests::missing_evidence_gap_init_failure_is_counted_and_retry_clears_error"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::drainer::orphan_repair::tests::repair_tests::closed_writer_fallback_records_gap_after_gap_admission"
+to_path = "shamir-engine"
+to_item = "tx::tests::orphan_repair_tests::repair_tests::closed_writer_fallback_records_gap_after_gap_admission"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::drainer::orphan_repair::tests::repair_tests::double_repair_leaves_one_event"
+to_path = "shamir-engine"
+to_item = "tx::tests::orphan_repair_tests::repair_tests::double_repair_leaves_one_event"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::drainer::orphan_repair::tests::repair_tests::existing_mismatch_is_error_and_orphan_is_preserved"
+to_path = "shamir-engine"
+to_item = "tx::tests::orphan_repair_tests::repair_tests::existing_mismatch_is_error_and_orphan_is_preserved"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::drainer::orphan_repair::tests::repair_tests::later_queued_event_cannot_be_served_before_repaired_orphan"
+to_path = "shamir-engine"
+to_item = "tx::tests::orphan_repair_tests::repair_tests::later_queued_event_cannot_be_served_before_repaired_orphan"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::drainer::orphan_repair::tests::repair_tests::missing_table_orphan_remains_retryable"
+to_path = "shamir-engine"
+to_item = "tx::tests::orphan_repair_tests::repair_tests::missing_table_orphan_remains_retryable"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::drainer::orphan_repair::tests::repair_tests::orphan_is_repaired_and_bounded_pull_has_no_gap"
+to_path = "shamir-engine"
+to_item = "tx::tests::orphan_repair_tests::repair_tests::orphan_is_repaired_and_bounded_pull_has_no_gap"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::drainer::orphan_repair::tests::unknown_tests::corrupt_existing_event_is_error_and_preserved"
+to_path = "shamir-engine"
+to_item = "tx::tests::orphan_repair_tests::unknown_tests::corrupt_existing_event_is_error_and_preserved"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::drainer::orphan_repair::tests::unknown_tests::eventless_entry_falls_back_without_consulting_writer"
+to_path = "shamir-engine"
+to_item = "tx::tests::orphan_repair_tests::unknown_tests::eventless_entry_falls_back_without_consulting_writer"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::drainer::orphan_repair::tests::unknown_tests::legacy_entry_drains_as_certified_gap"
+to_path = "shamir-engine"
+to_item = "tx::tests::orphan_repair_tests::unknown_tests::legacy_entry_drains_as_certified_gap"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::drainer::orphan_repair::tests::unknown_tests::legacy_entry_falls_back_without_consulting_writer"
+to_path = "shamir-engine"
+to_item = "tx::tests::orphan_repair_tests::unknown_tests::legacy_entry_falls_back_without_consulting_writer"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::truncation_pin::tests::wiring_tests::drainer_resamples_pin_after_checkpoint_and_flush"
+to_path = "shamir-engine"
+to_item = "tx::tests::drain::truncation_pin_wiring_tests::drainer_resamples_pin_after_checkpoint_and_flush"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::truncation_pin::tests::wiring_tests::retention_honours_positive_floor_inclusively_then_release_resumes"
+to_path = "shamir-engine"
+to_item = "tx::tests::drain::truncation_pin_wiring_tests::retention_honours_positive_floor_inclusively_then_release_resumes"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::truncation_pin::tests::wiring_tests::retention_resamples_pin_after_certification_and_flush"
+to_path = "shamir-engine"
+to_item = "tx::tests::drain::truncation_pin_wiring_tests::retention_resamples_pin_after_certification_and_flush"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::checkpoint_seam_tests::checkpoint_failure_prevents_unlink_then_retry_catches_up"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::checkpoint_seam_tests::checkpoint_failure_prevents_unlink_then_retry_catches_up"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::checkpoint_seam_tests::checkpoint_order_and_unprotected_negative_control"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::checkpoint_seam_tests::checkpoint_order_and_unprotected_negative_control"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::checkpoint_seam_tests::checkpoint_samples_w_before_changefeed_pending_gap_recheck"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::checkpoint_seam_tests::checkpoint_samples_w_before_changefeed_pending_gap_recheck"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::crash_matrix_tests::child_entrypoint"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::crash_matrix_tests::child_entrypoint"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::crash_matrix_tests::crash_mid_checkpoint_reopens_twice_without_follower_gap"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::crash_matrix_tests::crash_mid_checkpoint_reopens_twice_without_follower_gap"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::crash_matrix_tests::crash_post_checkpoint_preserves_image"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::crash_matrix_tests::crash_post_checkpoint_preserves_image"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::crash_matrix_tests::crash_post_truncate_recovers_baseline"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::crash_matrix_tests::crash_post_truncate_recovers_baseline"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::crash_matrix_tests::crash_pre_checkpoint_preserves_image"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::crash_matrix_tests::crash_pre_checkpoint_preserves_image"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::crash_matrix_tests::crash_pre_truncate_preserves_image"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::crash_matrix_tests::crash_pre_truncate_preserves_image"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::crash_matrix_tests::raw_checkpoint_reader_reports_missing_j_and_floor"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::crash_matrix_tests::raw_checkpoint_reader_reports_missing_j_and_floor"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::recovery_floor_tests::recovery_floor_waits_for_marker_mutex_and_preserves_higher_floor"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::recovery_floor_tests::recovery_floor_waits_for_marker_mutex_and_preserves_higher_floor"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::repair_pending_tests::channel_full_defers_and_repairs_in_order"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::repair_pending_tests::channel_full_defers_and_repairs_in_order"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::repair_pending_tests::double_repair_produces_one_put"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::repair_pending_tests::double_repair_produces_one_put"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::repair_pending_tests::interleaved_normal_commits_keep_order"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::repair_pending_tests::interleaved_normal_commits_keep_order"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::repair_pending_tests::legacy_entry_declares_minimal_gap"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::repair_pending_tests::legacy_entry_declares_minimal_gap"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::repair_pending_tests::mismatching_event_is_loud_error"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::repair_pending_tests::mismatching_event_is_loud_error"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::repair_pending_tests::persistent_negative_control_unclamped_truncation_yields_gap"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::repair_pending_tests::persistent_negative_control_unclamped_truncation_yields_gap"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::repair_pending_tests::persistent_retention_gate_holds_until_checkpointed_reopens"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::repair_pending_tests::persistent_retention_gate_holds_until_checkpointed_reopens"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::repair_pending_tests::retention_gate_holds_segment_until_checkpointed"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::repair_pending_tests::retention_gate_holds_segment_until_checkpointed"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::repair_pending_tests::unclean_restart_rebuilds_lost_deferred_event"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::repair_pending_tests::unclean_restart_rebuilds_lost_deferred_event"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::retention::retention_mem_tests::memory_wal_bypasses_retention_gate"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::retention::retention_mem_tests::memory_wal_bypasses_retention_gate"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::retention::retention_tests::dead_writer_declare_gap_refuses_without_unlinking"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::retention::retention_tests::dead_writer_declare_gap_refuses_without_unlinking"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::retention::retention_tests::declare_gap_never_unlinks_history_unsafe_segments"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::retention::retention_tests::declare_gap_never_unlinks_history_unsafe_segments"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::retention::retention_tests::declare_gap_persists_floor_and_unlinks_safe_retained_wal"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::retention::retention_tests::declare_gap_persists_floor_and_unlinks_safe_retained_wal"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::retention::retention_tests::hybrid_wal_bypasses_retention_gate_and_checkpoint"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::retention::retention_tests::hybrid_wal_bypasses_retention_gate_and_checkpoint"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::retention::retention_tests::refuse_writes_gate_clears_after_safe_drain"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::retention::retention_tests::refuse_writes_gate_clears_after_safe_drain"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::retention::retention_tests::refused_admission_does_not_publish_and_drain_allows_retry"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::retention::retention_tests::refused_admission_does_not_publish_and_drain_allows_retry"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::clean_horizon::tests::retention::retention_tests::successful_truncate_remeasures_retention_and_clears_gate"
+to_path = "shamir-engine"
+to_item = "tx::tests::clean_horizon_tests::retention::retention_tests::successful_truncate_remeasures_retention_and_clears_gate"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::drop_close_tests::close_before_first_install_never_spawns_handler"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::drop_close_tests::close_before_first_install_never_spawns_handler"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::drop_close_tests::owner_drop_active_and_queued_jobs_releases_actual_resource"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::drop_close_tests::owner_drop_active_and_queued_jobs_releases_actual_resource"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::drop_close_tests::owner_drop_idle_worker_releases_resource_after_join"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::drop_close_tests::owner_drop_idle_worker_releases_resource_after_join"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::drop_close_tests::owner_drop_queued_work_drains_before_resource_drop"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::drop_close_tests::owner_drop_queued_work_drains_before_resource_drop"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::interlock_tests::nonwaiting_negative_control_returns_before_publication_finishes"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::interlock_tests::nonwaiting_negative_control_returns_before_publication_finishes"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::interlock_tests::publication_runs_callback_and_termination_is_sticky"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::interlock_tests::publication_runs_callback_and_termination_is_sticky"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::interlock_tests::termination_first_prevents_publication_callback"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::interlock_tests::termination_first_prevents_publication_callback"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::interlock_tests::termination_waits_until_inflight_publication_callback_finishes"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::interlock_tests::termination_waits_until_inflight_publication_callback_finishes"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::lifecycle_tests::cancelled_reply_receiver_does_not_cancel_processing"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::lifecycle_tests::cancelled_reply_receiver_does_not_cancel_processing"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::lifecycle_tests::clean_receipt_lease_drop_does_not_require_reopen"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::lifecycle_tests::clean_receipt_lease_drop_does_not_require_reopen"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::lifecycle_tests::concurrent_failed_waiters_and_later_calls_share_cached_terminal"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::lifecycle_tests::concurrent_failed_waiters_and_later_calls_share_cached_terminal"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::lifecycle_tests::concurrent_failure_and_different_deadlines_are_independent"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::lifecycle_tests::concurrent_failure_and_different_deadlines_are_independent"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::lifecycle_tests::concurrent_shutdown_waiters_are_prepolled_pending_before_release"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::lifecycle_tests::concurrent_shutdown_waiters_are_prepolled_pending_before_release"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::lifecycle_tests::deadline_expiry_quarantines_and_retains_supervisor_until_join"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::lifecycle_tests::deadline_expiry_quarantines_and_retains_supervisor_until_join"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::lifecycle_tests::echo_worker_drains_and_repeated_shutdown_uses_terminal"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::lifecycle_tests::echo_worker_drains_and_repeated_shutdown_uses_terminal"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::lifecycle_tests::explicit_receipt_quarantine_fails_closed_without_parked_guards"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::lifecycle_tests::explicit_receipt_quarantine_fails_closed_without_parked_guards"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::lifecycle_tests::generic_quarantine_preserves_its_failure_reason"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::lifecycle_tests::generic_quarantine_preserves_its_failure_reason"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::lifecycle_tests::install_rejection_distinguishes_installed_and_closed"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::lifecycle_tests::install_rejection_distinguishes_installed_and_closed"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::lifecycle_tests::lifecycle_status_publication_is_interlocked_with_quarantine"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::lifecycle_tests::lifecycle_status_publication_is_interlocked_with_quarantine"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::lifecycle_tests::no_worker_shutdown_completes_immediately"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::lifecycle_tests::no_worker_shutdown_completes_immediately"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::lifecycle_tests::panic_terminal_follows_quarantine_and_supervisor_join"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::lifecycle_tests::panic_terminal_follows_quarantine_and_supervisor_join"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::lifecycle_tests::phase_matrix_notifies_each_next_phase_before_waiting"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::lifecycle_tests::phase_matrix_notifies_each_next_phase_before_waiting"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::lifecycle_tests::quarantine_between_install_check_and_hook_registration_fails_closed"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::lifecycle_tests::quarantine_between_install_check_and_hook_registration_fails_closed"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::lifecycle_tests::queue_close_race_preserves_execution_fifo"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::lifecycle_tests::queue_close_race_preserves_execution_fifo"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::lifecycle_tests::shutdown_waiter_cancellation_keeps_close_applied"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::lifecycle_tests::shutdown_waiter_cancellation_keeps_close_applied"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::lifecycle_tests::submit_without_worker_is_not_initialized"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::lifecycle_tests::submit_without_worker_is_not_initialized"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::repository_shutdown_tests::held_commit_tail_makes_repository_shutdown_report_quiescence_timeout"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::repository_shutdown_tests::held_commit_tail_makes_repository_shutdown_report_quiescence_timeout"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::repository_shutdown_tests::never_installed_worker_flushes_and_checkpoints_committed_horizon"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::repository_shutdown_tests::never_installed_worker_flushes_and_checkpoints_committed_horizon"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::repository_shutdown_tests::shutdown_checkpoint_timeout_quarantines_foreground_repo"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::repository_shutdown_tests::shutdown_checkpoint_timeout_quarantines_foreground_repo"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::repository_shutdown_tests::shutdown_flush_timeout_quarantines_foreground_repo"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::repository_shutdown_tests::shutdown_flush_timeout_quarantines_foreground_repo"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::repository_shutdown_tests::shutdown_persists_new_interner_names_and_flushes_store"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::repository_shutdown_tests::shutdown_persists_new_interner_names_and_flushes_store"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::supervisor_tests::concurrent_failure_and_different_deadlines_are_independent"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::supervisor_tests::concurrent_failure_and_different_deadlines_are_independent"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::supervisor_tests::final_foreground_token_closes_shared_lifecycle_without_raw_arc_cycle"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::supervisor_tests::final_foreground_token_closes_shared_lifecycle_without_raw_arc_cycle"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::supervisor_tests::lease_is_dropped_after_join_before_terminal"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::supervisor_tests::lease_is_dropped_after_join_before_terminal"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::supervisor_tests::protected_local_resource_survives_timeout_until_worker_join"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::supervisor_tests::protected_local_resource_survives_timeout_until_worker_join"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::supervisor_tests::protected_resource_drop_observes_actual_quarantine_during_unwind"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::supervisor_tests::protected_resource_drop_observes_actual_quarantine_during_unwind"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::supervisor_tests::protected_version_guard_commits_on_successful_publication"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::supervisor_tests::protected_version_guard_commits_on_successful_publication"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::lifecycle::tests::supervisor_tests::version_guard_is_armed_by_protection_before_panic"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_lifecycle_tests::supervisor_tests::version_guard_is_armed_by_protection_before_panic"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::tests::classification_tests::wal_header_distinguishes_eventless_from_legacy_unknown"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_tests::classification_tests::wal_header_distinguishes_eventless_from_legacy_unknown"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::tests::ephemeral_cold_tests::ephemeral_repositories_keep_legacy_cold_start_behavior"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_tests::ephemeral_cold_tests::ephemeral_repositories_keep_legacy_cold_start_behavior"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::tests::follower_cold_tests::follower_batch_crash_points_certify_only_the_in_flight_batch"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_tests::follower_cold_tests::follower_batch_crash_points_certify_only_the_in_flight_batch"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::tests::follower_cold_tests::ignoring_the_record_j_reproduces_the_wide_gap"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_tests::follower_cold_tests::ignoring_the_record_j_reproduces_the_wide_gap"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::tests::follower_cold_tests::known_j_record_gaps_only_the_in_flight_tail_reopen_twice"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_tests::follower_cold_tests::known_j_record_gaps_only_the_in_flight_tail_reopen_twice"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::tests::follower_cold_tests::legacy_bookmark_refuses_reopen_before_replay"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_tests::follower_cold_tests::legacy_bookmark_refuses_reopen_before_replay"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::tests::follower_cold_tests::non_follower_repos_keep_exact_conservative_certification"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_tests::follower_cold_tests::non_follower_repos_keep_exact_conservative_certification"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::tests::follower_cold_tests::unknown_j_record_keeps_the_conservative_gap"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_tests::follower_cold_tests::unknown_j_record_keeps_the_conservative_gap"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::tests::receipt_recovery_tests::cold_reopen_completes_outstanding_receipt"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_tests::receipt_recovery_tests::cold_reopen_completes_outstanding_receipt"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::tests::receipt_recovery_tests::cold_reopen_materialized_receipt_does_not_recommit"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_tests::receipt_recovery_tests::cold_reopen_materialized_receipt_does_not_recommit"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::tests::reconcile_tests::conflicting_journal_event_refuses_open"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_tests::reconcile_tests::conflicting_journal_event_refuses_open"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::tests::reconcile_tests::corrupt_journal_event_refuses_open"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_tests::reconcile_tests::corrupt_journal_event_refuses_open"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::tests::reconcile_tests::ephemeral_repositories_keep_legacy_cold_start_behavior"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_tests::reconcile_tests::ephemeral_repositories_keep_legacy_cold_start_behavior"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::tests::reconcile_tests::hybrid_factory_keeps_legacy_cold_start_behavior"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_tests::reconcile_tests::hybrid_factory_keeps_legacy_cold_start_behavior"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::tests::reconcile_tests::legacy_wal_is_point_gap_and_eventless_wal_is_gap_free"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_tests::reconcile_tests::legacy_wal_is_point_gap_and_eventless_wal_is_gap_free"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::tests::reconcile_tests::lost_unserved_event_is_deleted_but_provenance_keeps_event_and_gaps"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_tests::reconcile_tests::lost_unserved_event_is_deleted_but_provenance_keeps_event_and_gaps"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::tests::reconcile_tests::reconcile_crash_child_entrypoint"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_tests::reconcile_tests::reconcile_crash_child_entrypoint"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::tests::reconcile_tests::retention_checkpoint_protects_wal_and_bypass_control_exposes_loss"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_tests::reconcile_tests::retention_checkpoint_protects_wal_and_bypass_control_exposes_loss"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::tests::reconcile_tests::stopped_image_crash_boundaries_reopen_twice_without_follower_gaps"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_tests::reconcile_tests::stopped_image_crash_boundaries_reopen_twice_without_follower_gaps"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::tests::reconcile_tests::subprocess_crashes_during_reconcile_reopen_twice"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_tests::reconcile_tests::subprocess_crashes_during_reconcile_reopen_twice"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::recovery::cold_reconcile::tests::reconcile_tests::surviving_v3_wal_repairs_missing_event_and_follower_cursor_reads_it_twice"
+to_path = "shamir-engine"
+to_item = "tx::tests::cold_reconcile_tests::reconcile_tests::surviving_v3_wal_repairs_missing_event_and_follower_cursor_reads_it_twice"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::activation_routing_tests::admission_decision_refuses_unsupported_backends_before_any_state"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::activation_routing_tests::admission_decision_refuses_unsupported_backends_before_any_state"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::activation_routing_tests::admit_follower_fresh_and_native_verdicts"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::activation_routing_tests::admit_follower_fresh_and_native_verdicts"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::activation_routing_tests::admit_follower_refuses_conflicting_seed_install_state"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::activation_routing_tests::admit_follower_refuses_conflicting_seed_install_state"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::activation_routing_tests::admit_follower_refuses_floor_without_bookmark"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::activation_routing_tests::admit_follower_refuses_floor_without_bookmark"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::activation_routing_tests::floor_without_bookmark_refuses_follower_apply_repeatedly"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::activation_routing_tests::floor_without_bookmark_refuses_follower_apply_repeatedly"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::activation_routing_tests::leader_with_floor_marker_still_opens_and_preserves_floor"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::activation_routing_tests::leader_with_floor_marker_still_opens_and_preserves_floor"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::activation_routing_tests::legacy_bookmark_records_refuse_the_apply_repeatedly"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::activation_routing_tests::legacy_bookmark_records_refuse_the_apply_repeatedly"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::activation_routing_tests::legacy_floor_refusal_holds_across_reopen"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::activation_routing_tests::legacy_floor_refusal_holds_across_reopen"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::activation_routing_tests::v3_native_follower_applies_and_checkpoints_the_bookmark"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::activation_routing_tests::v3_native_follower_applies_and_checkpoints_the_bookmark"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::activation_routing_tests::valid_v3_record_including_zero_bookmark_applies"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::activation_routing_tests::valid_v3_record_including_zero_bookmark_applies"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::cancellation_tests::drop_at_receipt_checkpointed_is_fully_converged"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::cancellation_tests::drop_at_receipt_checkpointed_is_fully_converged"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::cancellation_tests::drop_at_receipt_materialized_converges_on_reapply"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::cancellation_tests::drop_at_receipt_materialized_converges_on_reapply"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::cancellation_tests::drop_at_receipt_prepared_converges_on_reapply"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::cancellation_tests::drop_at_receipt_prepared_converges_on_reapply"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::cancellation_tests::drop_during_checkpoint_commit_still_completes_and_publishes"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::cancellation_tests::drop_during_checkpoint_commit_still_completes_and_publishes"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::cancellation_tests::drop_during_uncertain_readback_still_completes_and_publishes"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::cancellation_tests::drop_during_uncertain_readback_still_completes_and_publishes"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::cancellation_tests::panic_after_materialized_requires_reopen_without_advancing_floors"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::cancellation_tests::panic_after_materialized_requires_reopen_without_advancing_floors"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::cancellation_tests::watermark_never_passes_unpublished_receipt_versions"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::cancellation_tests::watermark_never_passes_unpublished_receipt_versions"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::checkpoint_uncertain_tests::negative_control_without_reconcile_state_is_not_reconciled"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::checkpoint_uncertain_tests::negative_control_without_reconcile_state_is_not_reconciled"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::checkpoint_uncertain_tests::no_reconcile_counter_without_uncertain"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::checkpoint_uncertain_tests::no_reconcile_counter_without_uncertain"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::checkpoint_uncertain_tests::repeated_uncertainty_also_fail_stops_without_advancing_floors"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::checkpoint_uncertain_tests::repeated_uncertainty_also_fail_stops_without_advancing_floors"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::checkpoint_uncertain_tests::uncertain_checkpoint_reconciles_and_survives_reopens"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::checkpoint_uncertain_tests::uncertain_checkpoint_reconciles_and_survives_reopens"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::checkpoint_uncertain_tests::uncertain_without_commit_is_reconciled_when_enabled"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::checkpoint_uncertain_tests::uncertain_without_commit_is_reconciled_when_enabled"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::checkpoint_uncertain_tests::unresolved_uncertainty_retry_storage_failure_fail_stops_and_shutdown_fails"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::checkpoint_uncertain_tests::unresolved_uncertainty_retry_storage_failure_fail_stops_and_shutdown_fails"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::crash_subprocess_tests::crash_reopen_replay_convergence_matrix"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::crash_subprocess_tests::crash_reopen_replay_convergence_matrix"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::crash_subprocess_tests::receipt_crash_child_scenario"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::crash_subprocess_tests::receipt_crash_child_scenario"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::ddl_interlock_tests::parked_apply_blocks_ddl_via_the_write_domain"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::ddl_interlock_tests::parked_apply_blocks_ddl_via_the_write_domain"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::ddl_interlock_tests::paused_reservation_rejects_ordinary_admission_resume_uses_it"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::ddl_interlock_tests::paused_reservation_rejects_ordinary_admission_resume_uses_it"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::receipt_apply_tests::changed_pull_boundary_converges"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::receipt_apply_tests::changed_pull_boundary_converges"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::receipt_apply_tests::crash_prepared_resumes_with_identical_allocation"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::receipt_apply_tests::crash_prepared_resumes_with_identical_allocation"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::receipt_apply_tests::fenced_multi_chunk_apply_keeps_v3_invariant_across_reopen"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::receipt_apply_tests::fenced_multi_chunk_apply_keeps_v3_invariant_across_reopen"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::receipt_apply_tests::fresh_apply_writes_receipt_pipeline_atomically"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::receipt_apply_tests::fresh_apply_writes_receipt_pipeline_atomically"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::receipt_apply_tests::identity_rejection_is_fail_closed"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::receipt_apply_tests::identity_rejection_is_fail_closed"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::receipt_apply_tests::materialized_pause_hits_injected_failure_replays_recorded_counters"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::receipt_apply_tests::materialized_pause_hits_injected_failure_replays_recorded_counters"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::receipt_apply_tests::non_retryable_error_parks_guards"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::receipt_apply_tests::non_retryable_error_parks_guards"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::receipt_apply_tests::paused_reservation_survives_a_failed_resume"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::receipt_apply_tests::paused_reservation_survives_a_failed_resume"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::receipt_apply_tests::periodic_persist_cannot_overwrite_committed_counter"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::receipt_apply_tests::periodic_persist_cannot_overwrite_committed_counter"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::receipt_apply_tests::receipt_path_writes_absolute_counters"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::receipt_apply_tests::receipt_path_writes_absolute_counters"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::receipt_apply_tests::uncertain_materialization_reconciles_by_read_back"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::receipt_apply_tests::uncertain_materialization_reconciles_by_read_back"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::tests::crash_image_tests::floor_only_crash_image_classifies_unowned_and_refuses_adoption"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_durability_tests::crash_image_tests::floor_only_crash_image_classifies_unowned_and_refuses_adoption"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::tests::crash_image_tests::legacy_bookmark_crash_images_refuse_repeatedly_without_rewrite"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_durability_tests::crash_image_tests::legacy_bookmark_crash_images_refuse_repeatedly_without_rewrite"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::tests::crash_image_tests::v3_crash_image_still_classifies_native"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_durability_tests::crash_image_tests::v3_crash_image_still_classifies_native"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::tests::gap_tests::pending_init_gap_advances_bookmark_without_certifying_horizon"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_durability_tests::gap_tests::pending_init_gap_advances_bookmark_without_certifying_horizon"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::tests::gap_tests::persisted_gap_allows_batch_and_keeps_clean_horizon_unchanged"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_durability_tests::gap_tests::persisted_gap_allows_batch_and_keeps_clean_horizon_unchanged"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::tests::range_tests::known_horizon_limits_uncertainty_to_later_versions"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_durability_tests::range_tests::known_horizon_limits_uncertainty_to_later_versions"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::tests::range_tests::maximum_horizon_does_not_overflow"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_durability_tests::range_tests::maximum_horizon_does_not_overflow"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::tests::range_tests::unknown_horizon_preserves_conservative_range"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_durability_tests::range_tests::unknown_horizon_preserves_conservative_range"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::truncation_pin::tests::truncation_pin_tests::acquire_waits_for_every_deletion_lease_with_task_handshake"
+to_path = "shamir-engine-tx"
+to_item = "drain::truncation_pin::tests::truncation_pin_tests::acquire_waits_for_every_deletion_lease_with_task_handshake"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::truncation_pin::tests::truncation_pin_tests::cancelling_waiting_acquire_leaves_no_pin"
+to_path = "shamir-engine-tx"
+to_item = "drain::truncation_pin::tests::truncation_pin_tests::cancelling_waiting_acquire_leaves_no_pin"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::truncation_pin::tests::truncation_pin_tests::minimum_tracks_first_two_pins_and_drop_in_both_orders"
+to_path = "shamir-engine-tx"
+to_item = "drain::truncation_pin::tests::truncation_pin_tests::minimum_tracks_first_two_pins_and_drop_in_both_orders"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::truncation_pin::tests::truncation_pin_tests::unwind_releases_only_panicking_holders_pin_and_lease"
+to_path = "shamir-engine-tx"
+to_item = "drain::truncation_pin::tests::truncation_pin_tests::unwind_releases_only_panicking_holders_pin_and_lease"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::truncation_pin::tests::truncation_pin_tests::zero_and_one_floors_are_not_unrestricted"
+to_path = "shamir-engine-tx"
+to_item = "drain::truncation_pin::tests::truncation_pin_tests::zero_and_one_floors_are_not_unrestricted"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::truncation_pin::tests::wiring_tests::drainer_retains_zero_floor_then_resumes_without_new_commits"
+to_path = "shamir-engine"
+to_item = "tx::tests::drain::truncation_pin_wiring_tests::drainer_retains_zero_floor_then_resumes_without_new_commits"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::drainer::state::truncate::startup_seed_tests::startup_seed_waits_and_filters_delayed_snapshot"
+to_path = "shamir-engine"
+to_item = "tx::tests::drain::startup_seed_tests::startup_seed_waits_and_filters_delayed_snapshot"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::truncation_lease::tests::cancelled_delete_caller_cannot_release_workers_lease"
+to_path = "shamir-engine-tx"
+to_item = "drain::truncation_lease::tests::cancelled_delete_caller_cannot_release_workers_lease"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::drain::truncation_lease::tests::deletion_error_and_worker_panic_release_lease"
+to_path = "shamir-engine-tx"
+to_item = "drain::truncation_lease::tests::deletion_error_and_worker_panic_release_lease"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::checkpoint_uncertain_tests::materialization_batch_failure_preserves_prepared_receipt_and_retry_allocation"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::checkpoint_uncertain_tests::materialization_batch_failure_preserves_prepared_receipt_and_retry_allocation"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::checkpoint_uncertain_tests::multichunk_materialization_failure_resumes_same_receipt_without_extra_allocations"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::checkpoint_uncertain_tests::multichunk_materialization_failure_resumes_same_receipt_without_extra_allocations"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::checkpoint_uncertain_tests::post_checkpoint_flush_failure_with_open_gap_is_done"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::checkpoint_uncertain_tests::post_checkpoint_flush_failure_with_open_gap_is_done"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::receipt_apply_tests::post_checkpoint_flush_failure_fresh_chunk_is_done"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::receipt_apply_tests::post_checkpoint_flush_failure_fresh_chunk_is_done"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::receipt_apply_tests::post_checkpoint_flush_failure_resumed_chunk_is_done"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::receipt_apply_tests::post_checkpoint_flush_failure_resumed_chunk_is_done"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"
+
+[[moved]]
+path = "shamir-engine"
+item = "tx::replication::apply_replicated::follower_durability::receipt::tests::receipt_apply_tests::upstream_bookmark_does_not_skip_unpublished_local_chunk"
+to_path = "shamir-engine"
+to_item = "tx::tests::follower_receipt_tests::receipt_apply_tests::upstream_bookmark_does_not_skip_unpublished_local_chunk"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test moved with its module"
+owner = "<wave-R4c>"

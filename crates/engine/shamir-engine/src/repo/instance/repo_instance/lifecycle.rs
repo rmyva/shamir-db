@@ -1,7 +1,7 @@
 use crate::repo::changelog_store::write_domain::RepoWriteDomain;
 use crate::repo::durability_policy::DurabilityPolicy;
-use crate::repo::fk_reverse_cache::FkReverseCache;
 use crate::repo::repo_types::{BoxRepoFactory, RepoFactory};
+use crate::table::fk_reverse_cache::FkReverseCache;
 use crate::table::interner_manager::InternerManager;
 use crate::table::TableConfig;
 #[cfg(test)]
@@ -27,7 +27,6 @@ mod online_backup;
 // failures into `PortError`) — pure re-export, no semantics changed.
 pub use online_backup::{OnlineBackupError, SealHold};
 mod recovery;
-pub(crate) use recovery::ColdOpenTasks;
 mod seed_backing_impl;
 mod seed_metadata_impl;
 
@@ -60,7 +59,7 @@ impl RepoInstance {
     /// This does not drain WAL history and must not be called by `flush_buffers`
     /// while commits are running.
     pub async fn quiesce_commits(&self, timeout: std::time::Duration) -> DbResult<()> {
-        tokio::time::timeout(timeout, self.core.horizon.commit_tail().wait_zero())
+        tokio::time::timeout(timeout, self.core.horizon().commit_tail().wait_zero())
             .await
             .map_err(|_| {
                 DbError::Internal(format!(
@@ -82,12 +81,12 @@ impl RepoInstance {
     pub fn diagnostics(&self) -> shamir_tx::GateDiagnostics {
         let mut snapshot = self
             .core
-            .horizon
+            .horizon()
             .tx_gate_cell()
             .get()
             .map(|gate| gate.diagnostics())
             .unwrap_or_default();
-        if let Some(drainer) = self.core.horizon.drainer_cell().get() {
+        if let Some(drainer) = self.core.horizon().drainer_cell().get() {
             drainer.enrich_diagnostics(&mut snapshot);
         }
         snapshot
@@ -164,7 +163,7 @@ impl RepoInstance {
     /// are keyed by table name *inside* the repo, not by the repo name.
     pub fn with_name(&self, new_name: String) -> Self {
         let mut cloned = self.clone();
-        cloned.core.name = new_name.clone();
+        cloned.core.set_name(new_name.clone());
         cloned.name = new_name;
         cloned
     }
@@ -210,7 +209,7 @@ impl RepoInstance {
     ) -> DbResult<Self> {
         let instance = Self::from_factory_unrecovered(name, factory, configs).await?;
         let manager = InternerManager::new_labeled(
-            instance.core.repo.store_get("__interner__").await?,
+            instance.core.repo().store_get("__interner__").await?,
             instance.name().to_string(),
         )
         .with_quota_for_test(quota);
@@ -230,7 +229,7 @@ impl RepoInstance {
     pub fn install_repo_interner_for_test(&self, manager: InternerManager) {
         assert!(
             self.core
-                .catalog
+                .catalog()
                 .set_repo_interner_if_uninitialized(manager),
             "repo interner must be uninitialized before test injection",
         );
@@ -254,7 +253,7 @@ impl RepoInstance {
     pub async fn recover_v2_inflight(&self) -> DbResult<usize> {
         let permit = self
             .core
-            .durability_handle
+            .durability_handle()
             .write_domain
             .admit()
             .await
@@ -272,7 +271,7 @@ impl RepoInstance {
         permit: &crate::repo::RepoWritePermit,
     ) -> DbResult<usize> {
         self.core
-            .durability_handle
+            .durability_handle()
             .write_domain
             .debug_check_permit(permit);
         // Round-11 (stack layout): see `recover_v2_inflight`.
@@ -378,7 +377,7 @@ impl RepoInstance {
     ///
     /// Returns total number of history entries deleted across all tables.
     pub async fn run_gc(&self) -> DbResult<usize> {
-        let stores = self.core.catalog.mvcc_snapshot();
+        let stores = self.core.catalog().mvcc_snapshot();
 
         let mut total = 0usize;
         for mvcc in stores {
@@ -397,19 +396,19 @@ impl RepoInstance {
         // `prune_commit_log_below` walks an empty `TreeIndex` range and
         // returns 0 immediately. The gate may not even exist yet (the
         // `OnceCell` is lazy-init'd on the first `tx_gate()` call); we use
-        // `self.core.horizon.tx_gate_cell().get()` (non-allocating peek) to skip cleanly when
+        // `self.core.horizon().tx_gate_cell().get()` (non-allocating peek) to skip cleanly when
         // the gate has never been initialised.
         //
         // Lock order: `prune_commit_log_below` takes NO locks — it uses
         // `scc::TreeIndex::remove_range` (lock-free CAS). Callers MUST NOT
         // hold `commit_mutex` here (we don't — `run_gc` is an independent
         // background task).
-        if let Some(gate) = self.core.horizon.tx_gate_cell().get() {
+        if let Some(gate) = self.core.horizon().tx_gate_cell().get() {
             let min_alive = gate.min_alive();
             let _pruned = gate.prune_commit_log_below(min_alive);
         }
 
-        self.core.horizon.tx_metrics().on_gc_run(total);
+        self.core.horizon().tx_metrics().on_gc_run(total);
         Ok(total)
     }
 }

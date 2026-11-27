@@ -3600,6 +3600,7 @@ dependencies = [
  "shamir-engine-query",
  "shamir-engine-repo",
  "shamir-engine-table",
+ "shamir-engine-tx",
  "shamir-engine-validator",
  "shamir-funclib",
  "shamir-index",
@@ -3707,6 +3708,34 @@ dependencies = [
  "shamir-wasm-host",
  "smallvec",
  "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "shamir-engine-tx"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "arc-swap",
+ "async-trait",
+ "bytes",
+ "futures",
+ "log",
+ "rmp-serde",
+ "scc",
+ "serde",
+ "serde_bytes",
+ "shamir-collections",
+ "shamir-engine-query",
+ "shamir-engine-repo",
+ "shamir-engine-table",
+ "shamir-index",
+ "shamir-query-types",
+ "shamir-storage",
+ "shamir-tunables",
+ "shamir-tx",
+ "shamir-types",
+ "shamir-wal",
+ "thiserror 2.0.21",
  "tokio",
 ]
 

@@ -9,7 +9,8 @@ use super::fk_isolation::{
 };
 use crate::query::batch::param_subst::{contains_param_ref, resolve_write_value};
 use crate::query::batch::receipts::write_result_to_query_result_with_encoding;
-use crate::query::batch::{BatchError, BatchOp};
+use crate::query::batch::BatchOp;
+use crate::query::batch::{BatchError, BatchTxPort};
 use crate::query::read::QueryResult;
 impl<'a> QueryRunner<'a> {
     pub(super) async fn run_insert_arm(
@@ -155,7 +156,7 @@ impl<'a> QueryRunner<'a> {
                     &repo,
                     tx,
                     alias,
-                    wait.unwrap_or_else(|| repo.commit_visibility_wait()),
+                    wait.unwrap_or_else(|| repo.default_visibility_wait()),
                     self.scope.cancel_handle().cloned(),
                 )
                 .await?;
@@ -372,7 +373,7 @@ impl<'a> QueryRunner<'a> {
                         &repo,
                         tx,
                         alias,
-                        wait.unwrap_or_else(|| repo.commit_visibility_wait()),
+                        wait.unwrap_or_else(|| repo.default_visibility_wait()),
                         self.scope.cancel_handle().cloned(),
                     )
                     .await?;
@@ -573,7 +574,7 @@ impl<'a> QueryRunner<'a> {
                         &repo,
                         tx,
                         alias,
-                        wait.unwrap_or_else(|| repo.commit_visibility_wait()),
+                        wait.unwrap_or_else(|| repo.default_visibility_wait()),
                         self.scope.cancel_handle().cloned(),
                     )
                     .await?;
@@ -707,7 +708,7 @@ impl<'a> QueryRunner<'a> {
                     &repo,
                     tx,
                     alias,
-                    wait.unwrap_or_else(|| repo.commit_visibility_wait()),
+                    wait.unwrap_or_else(|| repo.default_visibility_wait()),
                     self.scope.cancel_handle().cloned(),
                 )
                 .await?;

@@ -351,7 +351,7 @@ async fn pin(
 // The initialized manager's interner hydrates via Store reads and its buffer
 // config is a Store::get; neither path re-enters the repo write domain.
 fn initialized(repo: &RepoInstance, name: &str) -> DbResult<TableManager> {
-    repo.core.catalog.initialized_table(name).ok_or_else(|| {
+    repo.core.catalog().initialized_table(name).ok_or_else(|| {
         DbError::Validation(format!(
             "table '{name}' must be opened before logical export"
         ))

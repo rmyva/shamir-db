@@ -127,6 +127,12 @@ FORWARDED = {
         | ({"loom"} if "loom" in EXPECTED[cell] else set())
         for cell in EXPECTED
     },
+    "shamir-engine-tx": {
+        cell: {"default"}
+        | ({"fjall"} if "fjall" in EXPECTED[cell] else set())
+        | ({"test-util"} if "test-util" in EXPECTED[cell] else set())
+        for cell in EXPECTED
+    },
     "shamir-engine-query": {
         cell: {"default"} | ({"test-util"} if cell in {"test-util", "fjall-test-util", "default-plus"} else set())
         for cell in EXPECTED

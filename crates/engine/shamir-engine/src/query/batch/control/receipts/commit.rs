@@ -2,16 +2,13 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::query::batch::BatchError;
-use crate::tx::ack::commit_tx_with_kind;
+use crate::query::batch::{BatchError, BatchTxPort};
 use crate::tx::CommitError;
-use crate::tx::RepoCore;
 use shamir_query_types::batch::{TransactionInfo, VisibilityWait};
-use shamir_tx::visibility_metrics::PendingKind;
 use shamir_tx::CancelHandle;
 
-pub(crate) fn commit_implicit<'a>(
-    repo: &'a RepoCore,
+pub(crate) fn commit_implicit<'a, R: BatchTxPort + ?Sized>(
+    repo: &'a R,
     tx: shamir_tx::TxContext,
     alias: &'a str,
     wait: VisibilityWait,
@@ -25,8 +22,8 @@ pub(crate) fn commit_implicit<'a>(
 /// Boxed on purpose: the commit pipeline future is large and this is awaited
 /// from four write arms of the per-op runner, which recurses through nested
 /// batches; inlining it would multiply the runner's stack footprint.
-pub(crate) fn commit_implicit_with_cancel<'a>(
-    repo: &'a RepoCore,
+pub(crate) fn commit_implicit_with_cancel<'a, R: BatchTxPort + ?Sized>(
+    repo: &'a R,
     tx: shamir_tx::TxContext,
     alias: &'a str,
     wait: VisibilityWait,
@@ -66,8 +63,8 @@ pub(crate) fn receipt_error_code(error: &CommitError) -> Option<&'static str> {
     }
 }
 
-async fn commit_implicit_inner(
-    repo: &RepoCore,
+async fn commit_implicit_inner<R: BatchTxPort + ?Sized>(
+    repo: &R,
     tx: shamir_tx::TxContext,
     alias: &str,
     wait: VisibilityWait,
@@ -75,7 +72,7 @@ async fn commit_implicit_inner(
 ) -> Result<TransactionInfo, BatchError> {
     let tx_id = tx.tx_id.0;
     let snapshot = tx.snapshot_version;
-    match commit_tx_with_kind(tx, repo, wait, PendingKind::ImplicitBatch, cancel).await {
+    match repo.commit_implicit_batch(tx, wait, cancel).await {
         Ok(outcome) => Ok(TransactionInfo::committed(
             outcome.tx_id,
             outcome.snapshot_version,

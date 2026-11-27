@@ -44,16 +44,15 @@ type = "MigrationCoordinator"
 module = "crate::table_manager::migration::coordinator"
 
 [[owned_impl]]
-# owner: <engine-layering-R2c1b> — the tx-layer aggregate; every inherent
-# impl must live in tx/commit/core (or a descendant module of it).
+# owner: <engine-layering-R4c> — tx crate aggregate; its inherent impls live in the tx crate's commit::core, and the engine facade
+# implements the engine-owned `BatchTxPort` port for it (orphan rule), so the module is the crate root.
 type = "RepoCore"
-module = "crate::tx::commit::core"
+module = "crate"
 
 [[owned_impl]]
-# owner: <engine-layering-R2c1b> — the tx-horizon bundle; every inherent
-# impl must live in tx/commit/core (or a descendant module of it).
+# owner: <engine-layering-R2c1b> — tx crate aggregate; inherent impl ownership follows its defining source modules.
 type = "TxHorizon"
-module = "crate::tx::commit::core"
+module = "crate::commit::core"
 
 [[owned_impl]]
 # owner: <FILE-HEADROOM-b> — impls span admin and ops in query types, plus
