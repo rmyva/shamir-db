@@ -34,6 +34,20 @@ use shamir_transport_ws::server::{BROWSER_WS_PATH, NATIVE_WS_PATH};
 use shamir_transport_ws::BrowserOriginPolicy;
 
 use tokio::task::JoinHandle;
+
+use crate::server::server_handle::HttpListenerOutcome;
+
+/// A listener task without login routes proves nothing and reports the
+/// settled outcome; the HTTP tasks produce their own typed outcome.
+fn spawn_settled<F>(fut: F) -> JoinHandle<HttpListenerOutcome>
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    tokio::spawn(async move {
+        fut.await;
+        HttpListenerOutcome::settled()
+    })
+}
 use tokio_rustls::TlsAcceptor;
 use tokio_util::sync::CancellationToken;
 
@@ -82,7 +96,7 @@ pub(super) struct SpawnedListeners {
     pub(super) conn_limiter: ConnLimiter,
     pub(super) bound_addrs: Vec<Option<SocketAddr>>,
     pub(super) bound_ipc_paths: Vec<Option<String>>,
-    pub(super) listener_tasks: Vec<JoinHandle<()>>,
+    pub(super) listener_tasks: Vec<JoinHandle<HttpListenerOutcome>>,
     pub(super) http_gates: Vec<Arc<RestGate>>,
 }
 
@@ -166,7 +180,7 @@ pub(super) async fn spawn_listeners(
     // branch below), so they get `None` in `bound_addrs` and `Some(path)`
     // here instead. Every other listener kind pushes `None` here.
     let mut bound_ipc_paths: Vec<Option<String>> = Vec::with_capacity(config.listeners.len());
-    let mut listener_tasks: Vec<JoinHandle<()>> = Vec::new();
+    let mut listener_tasks: Vec<JoinHandle<HttpListenerOutcome>> = Vec::new();
 
     // Global cap on simultaneously-active connections — shared across
     // every listener.
@@ -226,7 +240,7 @@ pub(super) async fn spawn_listeners(
                 let token = shutdown_token.clone();
                 let limiter = conn_limiter.clone();
                 let per_ip = per_ip_limiter.clone();
-                listener_tasks.push(tokio::spawn(accept_loop_ipc(
+                listener_tasks.push(spawn_settled(accept_loop_ipc(
                     listener, ctx, token, limiter, per_ip,
                 )));
                 bound_addrs.push(None);
@@ -295,7 +309,7 @@ pub(super) async fn spawn_listeners(
                     let token = shutdown_token.clone();
                     let limiter = conn_limiter.clone();
                     let per_ip = per_ip_limiter.clone();
-                    listener_tasks.push(tokio::spawn(accept_loop_tcp(
+                    listener_tasks.push(spawn_settled(accept_loop_tcp(
                         listener, acceptor, ctx, token, limiter, per_ip,
                     )));
                     local_addr
@@ -312,7 +326,7 @@ pub(super) async fn spawn_listeners(
                     let token = shutdown_token.clone();
                     let limiter = conn_limiter.clone();
                     let per_ip = per_ip_limiter.clone();
-                    listener_tasks.push(tokio::spawn(accept_loop_plain(
+                    listener_tasks.push(spawn_settled(accept_loop_plain(
                         listener, ctx, token, limiter, per_ip,
                     )));
                     local_addr
@@ -335,7 +349,7 @@ pub(super) async fn spawn_listeners(
                         BrowserOriginPolicy::try_allow(l.browser_origin_allowlist.iter().cloned())
                             .map_err(BootError::Bind)?,
                     );
-                    listener_tasks.push(tokio::spawn(accept_loop_ws_native(
+                    listener_tasks.push(spawn_settled(accept_loop_ws_native(
                         listener,
                         acceptor,
                         ctx,
@@ -363,7 +377,7 @@ pub(super) async fn spawn_listeners(
                         .path
                         .clone()
                         .unwrap_or_else(|| BROWSER_WS_PATH.to_string());
-                    listener_tasks.push(tokio::spawn(accept_loop_ws_browser(
+                    listener_tasks.push(spawn_settled(accept_loop_ws_browser(
                         listener,
                         acceptor,
                         ctx,
@@ -392,7 +406,7 @@ pub(super) async fn spawn_listeners(
         for mut task in listener_tasks.drain(..) {
             let abort = task.abort_handle();
             match tokio::time::timeout_at(listener_deadline, &mut task).await {
-                Ok(Ok(())) => {}
+                Ok(Ok(_)) => {}
                 Ok(Err(join_error)) => {
                     tracing::error!(%join_error, "listener task failed during boot rollback");
                 }

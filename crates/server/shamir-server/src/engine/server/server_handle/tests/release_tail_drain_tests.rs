@@ -40,7 +40,7 @@ async fn expired_stage_deadline_reports_the_tail_immediately() {
     .await
     .expect("the drain must end at the stage deadline, not at a fresh 10 s clock");
     assert!(
-        !drained,
+        drained != crate::server::server_handle::Settlement::Settled,
         "a live tail at an expired deadline is not drained"
     );
     assert!(
@@ -111,7 +111,10 @@ async fn close_then_drain_waits_for_the_registered_tail() {
         .await
         .expect("drain task timeout")
         .expect("drain task joined");
-    assert!(drained, "the registered tail must settle");
+    assert!(
+        drained == crate::server::server_handle::Settlement::Settled,
+        "the registered tail must settle"
+    );
     assert!(report.is_clean(), "{report:?}");
     // THE assertion: the release fired only after the drain was observed
     // still pending, so a drain that returned instantly (dropping the live

@@ -131,11 +131,16 @@ fn a_store_that_outlives_the_teardown_reaches_the_shutdown_report() {
         "a store that outlived the teardown makes the shutdown unclean: {report:?}"
     );
 
-    // The counterfactual: with the lock released, the SAME runtime and the same
-    // data directory shut down cleanly — so the entry above came from the held
-    // lock, not from the runtime or from the fixture.
+    // DECIDED: a shutdown whose store-release stage did not PROVE release is
+    // NOT clean, so the data-directory instance lock is NOT released — a
+    // second launch on the SAME data directory must be refused with
+    // `AlreadyRunning` (matched by CONTENT, never `is_err()`), and the leak
+    // is intentional: the OS holds the lock until the process exits. The
+    // leaked handle lives inside the test's tempdir; `TempDir`'s Drop
+    // tolerates the locked file (Windows) and the dir is removed at process
+    // end, so the leak test leaves no debris it depends on cleaning.
     let data_dir_for_reboot = data_dir.clone();
-    let handle = runtime
+    let reboot = runtime
         .block_on(async move {
             tokio::time::timeout(
                 BOUND,
@@ -150,42 +155,16 @@ fn a_store_that_outlives_the_teardown_reaches_the_shutdown_report() {
             )
             .await
         })
-        .expect("second boot within the bound")
-        .expect("second boot");
-    guard.mark("second launcher booted with the lock released");
-    let clean = runtime.block_on(async {
-        tokio::time::timeout(
-            BOUND,
-            crate::runtime::drain_server(handle, Duration::from_secs(30)),
-        )
-        .await
-        .expect("the second shutdown must finish within the bound")
-    });
-    guard.mark("second shutdown drained");
+        .expect("second boot within the bound");
+    guard.mark("second launcher refused over the leaked instance lock");
+    let message = match reboot {
+        Err(error) => error.to_string(),
+        Ok(_) => panic!("a leaked instance lock must refuse a second boot with AlreadyRunning"),
+    };
     assert!(
-        clean
-            .errors()
-            .iter()
-            .all(|error| !error.contains("stores still held after the release timeout")),
-        "with the lock released the barrier must not report a held store: {clean:?}"
-    );
-    assert!(
-        clean
-            .errors()
-            .iter()
-            .all(|error| !error.contains("store release could not be verified")),
-        "with the lock released the barrier must verify the store release: {clean:?}"
-    );
-    assert!(
-        clean
-            .errors()
-            .iter()
-            .all(|error| !error.contains("graceful shutdown exceeded deadline")),
-        "the counterfactual shutdown must not merely expire: {clean:?}"
-    );
-    assert!(
-        clean.is_clean(),
-        "the counterfactual shutdown must be clean: {clean:?}"
+        message.contains("already using") && message.contains(data_dir.to_str().unwrap_or("data")),
+        "the second boot must fail with BootError::AlreadyRunning naming the data directory: \
+         {message}"
     );
 }
 

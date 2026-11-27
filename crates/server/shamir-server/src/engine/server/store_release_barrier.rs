@@ -299,7 +299,7 @@ pub(crate) enum UnverifiedReason {
     BudgetExpired,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ReleaseOutcome {
     /// No store under the root holds its directory lock.
     Released,

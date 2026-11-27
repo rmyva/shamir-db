@@ -10,5 +10,5 @@ pub use artifact_kind::{ArtifactKind, KIND_FIELD};
 pub use seed_catalogue::{
     FinalWriteBarrierForTest, SeedCatalogueFlushFaultForTest, TerminalRowSetFaultForTest,
 };
-pub use shutdown_report::{ShutdownReport, ShutdownWaitStage};
+pub use shutdown_report::{ExpiredOwnerWait, ShutdownReport, ShutdownWaitStage};
 pub(crate) use table_catalogue_grouping::group_tables_by_repo;

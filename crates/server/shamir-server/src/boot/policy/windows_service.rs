@@ -182,22 +182,47 @@ fn service_main_inner() -> anyhow::Result<()> {
         tracing::info!("shamir-server running as Windows service");
     };
 
-    // Run the server. On return (normal or error), ALWAYS report Stopped.
+    // Run the server. A panic unwinding out of the polled drain must never
+    // escape into the non-unwinding SCM callback: catch it at this runtime
+    // owner, map it to the defined non-zero panic status (the same 70 the
+    // binary exits with), and take the SAME bounded runtime shutdown as the
+    // error path through `exits_through_bounded_shutdown` (the mapped `Err`
+    // counts as boot_failed).
+    let mut panicked = false;
+    let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rt.block_on(runtime::serve(config, bootstrap, shutdown, on_ready))
+    })) {
+        Ok(result) => result,
+        Err(_panic) => {
+            panicked = true;
+            tracing::error!("shamir-server service: the shutdown drain panicked");
+            Err(anyhow::anyhow!("the server run panicked"))
+        }
+    };
+
+    // On return (normal or error), ALWAYS report Stopped.
     // `SERVICE_PROCESS_EXIT` mirrors the report's `exit_code()` and nothing
     // forces the process exit: `set_service_status(Stopped)` is only reported
     // after `serve` returned, which is why `serve` waits for the scheduled
     // worker and keeps the data-directory lock until then.
-    let result = rt.block_on(runtime::serve(config, bootstrap, shutdown, on_ready));
-
+    let panic_status = u32::from(runtime::PANIC_EXIT_CODE);
     SERVICE_PROCESS_EXIT.store(
-        result.as_ref().map_or(1, |report| report.exit_code()),
+        if panicked {
+            runtime::PANIC_EXIT_CODE
+        } else {
+            result.as_ref().map_or(1, |report| report.exit_code())
+        },
         Ordering::Release,
     );
 
     // Report StopPending then Stopped.
-    let exit_code = match &result {
-        Ok(report) => ServiceExitCode::Win32(u32::from(report.exit_code())),
-        Err(_) => ServiceExitCode::Win32(1),
+    let exit_code = if panicked {
+        ServiceExitCode::Win32(panic_status)
+    } else {
+        match &result {
+            Ok(report) => ServiceExitCode::Win32(u32::from(report.exit_code())),
+            Err(_) => ServiceExitCode::Win32(1),
+        }
     };
 
     let _ = report_status(

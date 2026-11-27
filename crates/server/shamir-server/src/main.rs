@@ -157,7 +157,26 @@ fn run_main() -> anyhow::Result<u8> {
         .worker_threads(4)
         .enable_all()
         .build()?;
-    let result = rt.block_on(run_async(cli));
+    // A panic unwinding out of the polled drain must NOT unwind past the
+    // runtime owner: ordinary runtime destruction during an unwind can run
+    // while detached work is live. Catch it here and take the SAME bounded
+    // runtime shutdown as the error path, mapping the panic to the unclean
+    // exit code 70. The data-directory lock is leaked by the owner guard (a
+    // panicking owner never consumes it), so the OS keeps the lock until the
+    // process exits.
+    let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rt.block_on(run_async(cli))
+    })) {
+        Ok(result) => result,
+        Err(_panic) => {
+            eprintln!("shamir-server: the shutdown drain panicked; exiting 70");
+            // The panic-mapped result flows through the SAME
+            // `exits_through_bounded_shutdown` decision: the abnormal-report
+            // flag (exit code 70) is what selects the bounded runtime
+            // shutdown below.
+            Ok((shamir_server::runtime::PANIC_EXIT_CODE, true))
+        }
+    };
     // A failed run — OR an abnormal shutdown report (exit code 70) — can leave
     // a detached blocking job (a stalled final snapshot flush inside the
     // store): dropping the runtime would wait for it without a bound and the

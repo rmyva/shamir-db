@@ -247,12 +247,13 @@ fn assert_shutdown_error_and_metric(report: &ShutdownReport, error: &str) {
     );
 }
 
+use crate::boot::runtime::exits_through_bounded_shutdown;
+
 // SHUTDOWN-OWNER R2: the bounded runtime shutdown (one 5 s bound, the same at
 // all three sites) is entered when the boot failed OR the shutdown report is
 // abnormal; a clean report and a missing report never enter it.
 #[test]
 fn bounded_runtime_shutdown_decision_follows_boot_failure_and_report_abnormality() {
-    use crate::boot::runtime::exits_through_bounded_shutdown;
     // A failed boot leaves through the bound, with or without a report.
     assert!(exits_through_bounded_shutdown(true, None));
     assert!(exits_through_bounded_shutdown(true, Some(false)));

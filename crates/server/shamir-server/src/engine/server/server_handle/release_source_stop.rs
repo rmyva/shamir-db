@@ -13,12 +13,23 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use shamir_db::ShutdownReport;
+use shamir_db::{ShutdownReport, ShutdownWaitStage};
 use shamir_sync::durability::tx::tx_registry::{ReaperTask, TxRegistry};
 use shamir_sync::durability::tx::ReleaseTails;
 
+use super::shutdown_owner::Settlement;
+
 #[cfg(test)]
 use super::shutdown_probes::fire_release_sources_stopped_probe;
+
+/// Bound for the post-abort join of the interactive-tx reaper: after the
+/// abort lands at the reaper's next await, only its current synchronous
+/// section (`reap_expired`) remains. 2 s — the same value as the
+/// connection-abort join cap (`CONN_ABORT_TIMEOUT` in `core.rs`), which
+/// bounds the identical "one in-flight synchronous section after abort"
+/// wait for connection tasks; a reaper that has not finished within it may
+/// still be running and is NOT proof that the producer ended.
+pub(in crate::engine::server) const REAPER_POST_ABORT_JOIN: Duration = Duration::from_secs(2);
 
 /// Join the interactive-tx reaper (a release-tail producer) — it must be
 /// stopped before the tail admission closes.
@@ -28,33 +39,34 @@ use super::shutdown_probes::fire_release_sources_stopped_probe;
 /// shutdown owner) instead of detaching the task.
 ///
 /// `None` bound = the original unbounded join. On a timed-out bounded join
-/// the reaper task is ABORTED and its completion awaited: abort is
-/// cooperative — the task only awaits the sweep interval and the shutdown
-/// token — so the post-abort join is bounded by the sweep's current
-/// synchronous section (`reap_expired`), not by a clock. The timeout is
-/// recorded BEFORE the post-abort wait (an outer deadline dropping the
-/// caller's future mid-wait must not lose it), and a reaper task that
-/// panicked is reported too. Returns `false` only when the bounded join
-/// expired; a joined reaper (or no reaper at all) returns `true`.
+/// the reaper task is ABORTED and its completion awaited with its OWN named
+/// bound ([`REAPER_POST_ABORT_JOIN`]): a post-abort join that misses it is
+/// an in-flight producer that may still run past the caller — NOT proof.
+/// The timeout is recorded BEFORE the post-abort wait (an outer deadline
+/// dropping the caller's future mid-wait must not lose it); a reaper task
+/// that panicked or was cancelled is likewise NOT proof. The handle is
+/// forgotten only when it provably finished; on any unsettled outcome it
+/// stays in place so a repeated call stays a safe no-op (a finished handle
+/// is joined directly, polling a finished `JoinHandle` again is harmless).
 pub(in crate::engine::server) async fn join_tx_reaper(
     reaper: &mut Option<ReaperTask>,
     bound: Option<(tokio::time::Instant, Duration)>,
     report: &mut ShutdownReport,
-) -> bool {
+) -> Settlement {
     let Some(task) = reaper.as_mut() else {
-        return true;
+        return Settlement::Settled;
     };
-    let expired;
+    let settled;
     match bound {
         Some((deadline, budget)) => {
             match tokio::time::timeout_at(deadline, &mut task.handle).await {
                 Ok(joined) => {
-                    expired = false;
-                    report_reaper_failure(joined, report);
+                    // On a direct (non-abort) join, a cancelled result can only
+                    // follow our own earlier abort (a re-entry after an unsettled
+                    // post-abort wait) — the expected end of that abort.
+                    settled = reaper_join_settlement(joined, true, report);
                 }
                 Err(_) => {
-                    // Recorded before the post-abort wait below.
-                    expired = true;
                     report.add_error(format!(
                         "interactive transaction reaper join exceeded {budget:?}; the \
                          reaper was aborted and its final sweep awaited before tail \
@@ -62,18 +74,36 @@ pub(in crate::engine::server) async fn join_tx_reaper(
                     ));
                     // Stop the producer before the tail admission closes in
                     // the drain below. The abort lands at the reaper's next
-                    // await; the join after it only waits out one in-flight
-                    // sweep.
+                    // await; the join after it is bounded by
+                    // [`REAPER_POST_ABORT_JOIN`], not by a clock.
                     task.handle.abort();
-                    report_reaper_failure((&mut task.handle).await, report);
+                    let post_abort = tokio::time::Instant::now() + REAPER_POST_ABORT_JOIN;
+                    settled = match tokio::time::timeout_at(post_abort, &mut task.handle).await {
+                        // A cancelled join right after OUR abort is the
+                        // expected end of the abort — proof the task ended.
+                        Ok(joined) => reaper_join_settlement(joined, true, report),
+                        Err(_) => {
+                            report.add_error(format!(
+                                "the aborted interactive transaction reaper did not finish \
+                                 within {REAPER_POST_ABORT_JOIN:?}: it may still be running, \
+                                 so the release sources are NOT proven drained"
+                            ));
+                            Settlement::Unsettled(ShutdownWaitStage::ReleaseTailDrain)
+                        }
+                    };
+                    if matches!(settled, Settlement::Unsettled(_)) {
+                        // Not proven finished: leave the handle in place so a
+                        // repeated call stays a safe no-op (a FINISHED handle
+                        // is joined directly on re-entry).
+                        return settled;
+                    }
                 }
             }
         }
         None => {
             // Awaited THROUGH `&mut` (same borrow discipline as the bounded
             // branch above): the handle stays with the caller.
-            expired = false;
-            report_reaper_failure((&mut task.handle).await, report);
+            settled = reaper_join_settlement((&mut task.handle).await, false, report);
         }
     }
     // Joined (or aborted and joined): the handle is consumed, and polling a
@@ -81,17 +111,17 @@ pub(in crate::engine::server) async fn join_tx_reaper(
     // not re-await it. A deadline that drops the caller's future mid-wait
     // never reaches here and leaves the handle in place.
     *reaper = None;
-    !expired
+    settled
 }
 
 /// The reaper and tail bounds for one release-source stop, computed by the
 /// caller (each call site bounds the waits with ITS stage deadline).
 pub(in crate::engine::server) struct ReleaseStopBounds {
     /// The reaper join: `None` = the original unbounded join.
-    pub reaper: Option<(tokio::time::Instant, Duration)>,
+    pub(in crate::engine::server) reaper: Option<(tokio::time::Instant, Duration)>,
     /// The tail drain's absolute deadline and reported budget.
-    pub tail_deadline: tokio::time::Instant,
-    pub tail_budget: Duration,
+    pub(in crate::engine::server) tail_deadline: tokio::time::Instant,
+    pub(in crate::engine::server) tail_budget: Duration,
 }
 
 /// THE ordered stop: stop the release sources (join the reaper), clear the
@@ -101,9 +131,12 @@ pub(in crate::engine::server) struct ReleaseStopBounds {
 /// Called from the normal shutdown (before the repository flush) and from
 /// BOTH launch-rollback arms (listener bind failure; observability port
 /// failure — in the second one connections may already have opened
-/// transactions). Returns `true` when the reaper AND the tail drain both
-/// settled; either expiry is recorded in `report` with the caller's
-/// `context` naming the stage.
+/// transactions). Returns [`Settlement::Settled`] when the reaper AND the
+/// tail drain both PROVED settled. When the reaper did not settle, the
+/// registry is NOT cleared and the tail admission is NOT closed (a producer
+/// may still register releases) — the caller keeps the lock and no log line
+/// claims the sources were drained. The caller records the typed stage from
+/// the returned [`Settlement::Unsettled`].
 pub(in crate::engine::server) async fn stop_release_sources_and_drain_tails(
     reaper: &mut Option<ReaperTask>,
     registry: Option<&Arc<TxRegistry>>,
@@ -111,8 +144,11 @@ pub(in crate::engine::server) async fn stop_release_sources_and_drain_tails(
     bounds: ReleaseStopBounds,
     context: &str,
     report: &mut ShutdownReport,
-) -> bool {
-    let mut settled = join_tx_reaper(reaper, bounds.reaper, report).await;
+) -> Settlement {
+    let settled = join_tx_reaper(reaper, bounds.reaper, report).await;
+    if settled != Settlement::Settled {
+        return settled;
+    }
     if let Some(registry) = registry {
         // Dropping the returned `Arc`s is what triggers each RAII release
         // (registered into the still-open tail admission below).
@@ -125,26 +161,43 @@ pub(in crate::engine::server) async fn stop_release_sources_and_drain_tails(
     // before the repository flush.
     #[cfg(test)]
     fire_release_sources_stopped_probe();
-    settled &= super::release_tail_drain::drain_release_tails(
-        tails.map(|tails| tails.as_ref()),
-        true,
-        bounds.tail_deadline,
-        bounds.tail_budget,
-        context,
-        report,
+    settled.worst(
+        super::release_tail_drain::drain_release_tails(
+            tails.map(|tails| tails.as_ref()),
+            true,
+            bounds.tail_deadline,
+            bounds.tail_budget,
+            context,
+            report,
+        )
+        .await,
     )
-    .await;
-    settled
 }
 
-/// A reaper task that ended by panicking is a shutdown failure; the
-/// cancellation of our own `abort` is the expected end and is not.
-fn report_reaper_failure(joined: Result<(), tokio::task::JoinError>, report: &mut ShutdownReport) {
-    if let Err(error) = joined {
-        if !error.is_cancelled() {
-            report.add_error(format!(
-                "interactive transaction reaper task failed: {error}"
-            ));
+/// A reaper task that panicked, or was cancelled WITHOUT our abort, is NOT
+/// proof that the producer ended; only a clean join (or the expected
+/// cancelled end of our own abort) settles.
+fn reaper_join_settlement(
+    joined: Result<(), tokio::task::JoinError>,
+    after_abort: bool,
+    report: &mut ShutdownReport,
+) -> Settlement {
+    match joined {
+        Ok(()) => Settlement::Settled,
+        Err(error) if error.is_cancelled() && after_abort => Settlement::Settled,
+        Err(error) => {
+            if error.is_cancelled() {
+                report.add_error(
+                    "interactive transaction reaper task was cancelled without a clean join: \
+                     the producer is NOT proven ended"
+                        .to_string(),
+                );
+            } else {
+                report.add_error(format!(
+                    "interactive transaction reaper task failed: {error}"
+                ));
+            }
+            Settlement::Unsettled(ShutdownWaitStage::ReleaseTailDrain)
         }
     }
 }

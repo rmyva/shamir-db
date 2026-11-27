@@ -327,3 +327,25 @@ pub(in crate::engine::server) fn fire_release_zero_budget_probe() {
         probe();
     }
 }
+
+static META_SNAPSHOT_JOIN_PROBE: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
+
+/// Arm the one-shot probe fired at the ENTRY of the meta-snapshot join stage
+/// (teardown step 6): a test can prove the stage was REACHED before it makes
+/// any report assertion, instead of racing the outer deadline.
+pub(crate) fn arm_meta_snapshot_join_probe(probe: impl FnOnce() + Send + 'static) {
+    *META_SNAPSHOT_JOIN_PROBE
+        .lock()
+        .expect("meta snapshot join probe") = Some(Box::new(probe));
+}
+
+/// Fire (and clear) the meta-snapshot-join-entry probe, if armed.
+pub(in crate::engine::server) fn fire_meta_snapshot_join_probe() {
+    let probe = META_SNAPSHOT_JOIN_PROBE
+        .lock()
+        .expect("meta snapshot join probe")
+        .take();
+    if let Some(probe) = probe {
+        probe();
+    }
+}

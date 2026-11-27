@@ -61,7 +61,6 @@ struct BoundOverrideGuard;
 impl Drop for BoundOverrideGuard {
     fn drop(&mut self) {
         set_drain_backup_join_bound_for_test(None);
-        crate::runtime::set_drain_deadline_override(None);
     }
 }
 
@@ -167,7 +166,7 @@ async fn run_expired_drain_join() {
     guard.mark("drain returned with the worker still parked");
 
     assert_eq!(
-        report.expired_owner_wait(),
+        report.first_expired_owner_wait().map(|wait| wait.stage),
         Some(ShutdownWaitStage::ScheduledBackupJoin),
         "the expired drain-side backup join must be recorded TYPED, naming the stage: {report:?}"
     );
@@ -292,6 +291,56 @@ async fn run_sources_before_flush() {
     .expect("launch real server with backup")
     .expect("server bound");
 
+    // 7(b): park a REAL record-lock-holding transaction into the server's
+    // registry BEFORE the shutdown, so the flush-entry observation below can
+    // no longer pass with `remove_all()` or the tail drain silently removed.
+    let tx_owner = shamir_db::access::Actor::User(shamir_db::access::principal64([7; 16]));
+    let db = open_app_db_for_rollback(&tx_owner).await;
+    let (mut ctx, snapshot) = db
+        .tx_begin_as(tx_owner.clone(), "app", "main", "pessimistic")
+        .await
+        .expect("begin interactive tx");
+    let mut batch = shamir_query_builder::batch::Batch::new();
+    let insert = shamir_query_builder::write::Insert::with_repo("main", "items")
+        .row(shamir_types::types::value::QueryValue::Null);
+    batch.insert("staged", insert);
+    db.tx_execute_as(tx_owner.clone(), "app", &batch.build(), &mut ctx)
+        .await
+        .expect("stage a write that takes the record lock");
+    let tx_handle = ctx.tx_id.0;
+    let repo = db
+        .get_db("app")
+        .expect("fixture db")
+        .get_repo("main")
+        .expect("fixture repo");
+    let tx_release: crate::tx_registry::TxAbortRelease =
+        Arc::new(move |parked: shamir_tx::TxContext| {
+            let repo = repo.clone();
+            Box::pin(async move {
+                shamir_db::engine::tx::release_interactive_tx_locks(&parked, repo.core()).await;
+            }) as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+        });
+    let server_registry = Arc::clone(&handle.tx_registry);
+    server_registry
+        .register(
+            tx_handle,
+            crate::tx_registry::InteractiveTx::new(
+                ctx,
+                snapshot,
+                [8; 32],
+                [8; 16],
+                "app".into(),
+                "main".into(),
+                Duration::from_secs(3_600),
+                tx_release,
+            ),
+        )
+        .expect("park the record-lock tx");
+    assert!(!server_registry.is_empty(), "the tx must be registered");
+    let server_tails = server_registry.release_tails();
+    // The registry and TAIL state observed AT the flush entry (probe moment).
+    let flush_state: Arc<Mutex<Option<(bool, usize)>>> = Arc::new(Mutex::new(None));
+
     let order = Arc::new(Mutex::new(Vec::<&'static str>::new()));
     let (sources_tx, sources_rx) = tokio::sync::oneshot::channel::<()>();
     let (cleared_tx, cleared_rx) = tokio::sync::oneshot::channel::<()>();
@@ -312,8 +361,15 @@ async fn run_sources_before_flush() {
     };
     let _flush_probe = {
         let order = Arc::clone(&order);
+        let flush_state = Arc::clone(&flush_state);
+        let registry = Arc::clone(&server_registry);
+        let tails = server_tails.clone();
         arm_repo_flush_probe(move || {
             order.lock().expect("order log").push("flush");
+            *flush_state.lock().expect("flush state") = Some((
+                registry.is_empty(),
+                tails.as_ref().map_or(0, |t| t.live_tails_for_test()),
+            ));
             let _ = flush_tx.send(());
         })
     };
@@ -364,6 +420,20 @@ async fn run_sources_before_flush() {
         report.repository_failures().is_empty(),
         "the clean-path flush must succeed: {:?}",
         report.repository_failures()
+    );
+    let (registry_empty, live_tails) = flush_state
+        .lock()
+        .expect("flush state")
+        .expect("the flush entry must have been observed");
+    assert!(
+        registry_empty,
+        "AT the flush entry the registry must be EMPTY (mutant: `remove_all` removed while \
+         the marker stays — the parked record-lock tx would still sit in the registry)"
+    );
+    assert_eq!(
+        live_tails, 0,
+        "AT the flush entry every release tail (the record-lock tx's) must have settled \
+         (mutant: the tail drain removed while the marker stays)"
     );
 }
 

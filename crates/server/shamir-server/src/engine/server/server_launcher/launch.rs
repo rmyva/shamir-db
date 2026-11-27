@@ -39,7 +39,6 @@ use crate::server::boot_error::BootError;
 use crate::server::bootstrap_mode::BootstrapMode;
 use crate::server::meta_sinks::{spawn_meta_snapshot_task, MetaLockoutSink, MetaRateLimitSink};
 use crate::server::server_handle::ServerHandle;
-use crate::server::server_launcher::audit_teardown::{teardown_audit, AuditTeardown};
 use crate::tables_registry::TablesRegistry;
 use crate::user_directory::ScramDerivationGate;
 
@@ -47,15 +46,16 @@ use super::helpers::{boot_now_ns, default_node_id, REPL_RECONCILE_INTERVAL};
 
 /// Bound for draining the detached mutation workers and the online-export
 /// service in a launch rollback arm (the boot error still wins afterwards).
-const ROLLBACK_WORKER_DRAIN: Duration = Duration::from_secs(10);
 use super::http::BootGuard;
 use super::listeners::{spawn_listeners, ListenerEnv, SpawnedListeners};
 use super::load_metrics::bind_load_source;
 
 #[path = "support/rollback_cleanup.rs"]
 mod rollback_cleanup;
+#[path = "support/boot/rollback_settlement.rs"]
+mod rollback_settlement;
 
-use rollback_cleanup::{join_meta_snapshot, log_rollback_cleanup, stop_release_sources};
+use rollback_settlement::settle_rollback;
 
 // `log_rollback_cleanup` is `pub(super)` inside the private `rollback_cleanup`
 // module, so only a child of THIS module can call it: the shutdown-folder test
@@ -132,6 +132,9 @@ impl ServerLauncher {
         let started_at = std::time::Instant::now();
         let durability = config.durability.resolve_policy()?;
         config.durability.warn_unimplemented_retention();
+        // Resolved BEFORE any store opens: a fallible boot step that fails
+        // here has no stores and no tasks to roll back.
+        let now_ns = boot_now_ns()?;
 
         // Root shutdown token — the single source of truth for "the server
         // is stopping". Every long-lived task (accept loops, meta-snapshot,
@@ -149,7 +152,7 @@ impl ServerLauncher {
         let conn_tasks = ConnTasks::new(shutdown_token.clone());
 
         let super::durable_stores::DurableStores {
-            data_dir_lock,
+            data_dir_lock: raw_data_dir_lock,
             format_stamp,
             meta,
             backup,
@@ -160,6 +163,13 @@ impl ServerLauncher {
             kdf_for_bootstrap,
             observed_format_epoch,
         } = super::durable_stores::open(&config, &bootstrap).await?;
+        // The lock is held by the leak-on-drop guard from the moment it is
+        // taken until the end of the launch: a rollback that PROVES
+        // settlement releases it (`release_clean`); a rollback that expired
+        // or could not prove settlement LEAKS it (the OS holds the advisory
+        // lock until the process exits). The original boot error is returned
+        // unchanged either way.
+        let data_dir_lock = crate::server::server_handle::DataDirLock::new(raw_data_dir_lock);
 
         // 3. In-memory stores.
         //
@@ -188,7 +198,6 @@ impl ServerLauncher {
             lockout_sink,
             Some(lockout_observer),
         ));
-        let now_ns = boot_now_ns()?;
         // Rate-limit buckets are persisted by the SAME periodic task as
         // lockout (one 60s tick writes both). On boot the depleted-bucket
         // state is rehydrated conservatively: token levels survive but each
@@ -215,7 +224,7 @@ impl ServerLauncher {
         // `ServerHandle` so `shutdown()` can join it (otherwise it would
         // hold the redb file lock past shutdown and block any
         // same-data-dir restart).
-        let meta_snapshot_task = Some(spawn_meta_snapshot_task(
+        let mut meta_snapshot_task = Some(spawn_meta_snapshot_task(
             lockout.clone(),
             rate_limit.clone(),
             shutdown_token.clone(),
@@ -537,27 +546,6 @@ impl ServerLauncher {
             None => supervisor_builder,
         });
 
-        // Phase B Stage 6 — background reaper for interactive txs that
-        // outlive their idle TTL or absolute deadline. Shares the root
-        // shutdown token: `ServerHandle::shutdown` cancels it once and this
-        // task observes the cancel on its next `select!` poll.
-        let mut interactive_tx_reaper = Some(crate::tx_registry::spawn_reaper_task(
-            tx_registry_for_reaper,
-            crate::tx_registry::DEFAULT_INTERACTIVE_TX_IDLE_TTL,
-            crate::tx_registry::DEFAULT_REAPER_INTERVAL,
-            shutdown_token.clone(),
-        ));
-
-        // FG-5b — background reaper for result cursors that outlive their
-        // idle TTL. Shares the root shutdown token, same pattern as the
-        // interactive-tx reaper above.
-        let cursor_reaper = Some(crate::cursor_registry::spawn_reaper_task(
-            cursor_registry_for_reaper,
-            Duration::from_secs(config.security.cursors.idle_timeout_secs),
-            crate::cursor_registry::DEFAULT_CURSOR_REAPER_INTERVAL,
-            shutdown_token.clone(),
-        ));
-
         // 6. ResumeConfig.
         let (current_key, previous_key) = meta
             .ticket_keys()
@@ -582,6 +570,23 @@ impl ServerLauncher {
             meta.server_secrets()
                 .map_err(|e| BootError::ServerMeta(e.to_string()))?,
         );
+
+        // Phase B Stage 6 / FG-5b — the background reapers are spawned ONLY
+        // after the fallible metadata (ticket keys, identity, secrets) has
+        // been resolved: a metadata failure here must not bypass the rollback
+        // arms with a producer already running.
+        let mut interactive_tx_reaper = Some(crate::tx_registry::spawn_reaper_task(
+            tx_registry_for_reaper,
+            crate::tx_registry::DEFAULT_INTERACTIVE_TX_IDLE_TTL,
+            crate::tx_registry::DEFAULT_REAPER_INTERVAL,
+            shutdown_token.clone(),
+        ));
+        let cursor_reaper = Some(crate::cursor_registry::spawn_reaper_task(
+            cursor_registry_for_reaper,
+            Duration::from_secs(config.security.cursors.idle_timeout_secs),
+            crate::cursor_registry::DEFAULT_CURSOR_REAPER_INTERVAL,
+            shutdown_token.clone(),
+        ));
 
         // 8. Scheduler.
         let scheduler = Scheduler::spawn_with_maintenance(
@@ -639,50 +644,43 @@ impl ServerLauncher {
         {
             Ok(listeners) => listeners,
             Err(error) => {
+                // The instance lock lives in the leak-on-drop guard: only a
+                // PROVEN settlement releases it, any expiry or non-clean
+                // store-release probe leaks it, and `error` is returned
+                // unchanged either way.
                 let mut cleanup = shamir_db::ShutdownReport::default();
-                cancel_refusal_audit.close();
                 shutdown_token.cancel();
-                teardown_audit(
-                    AuditTeardown {
-                        cancel_refusal_audit: &cancel_refusal_audit,
-                        appender: &audit_appender,
-                        scheduler,
-                        #[cfg(test)]
-                        drain_probe: None,
+                settle_rollback(rollback_settlement::RollbackSettlement {
+                    stage: "listener bind",
+                    data_dir: config.data_dir.clone(),
+                    cancel_refusal_audit: &cancel_refusal_audit,
+                    scheduler,
+                    reaper: interactive_tx_reaper.take(),
+                    registry: &tx_registry_for_rollback,
+                    meta_snapshot_task: meta_snapshot_task.take(),
+                    cursor_reaper,
+                    owned_tracker: Arc::clone(&handler_owned_tracker),
+                    drops: rollback_settlement::RollbackDrops {
+                        handler,
+                        handler_concrete,
+                        shamir,
+                        supervisor,
+                        token_service,
+                        audit_writer,
+                        audit_appender,
+                        audit_chain,
+                        online_backup_registry,
+                        online_export,
+                        meta,
+                        user_dir,
+                        counters,
+                        lockout,
+                        rate_limit,
                     },
-                    &mut cleanup,
-                )
+                    lock: data_dir_lock,
+                    cleanup: &mut cleanup,
+                })
                 .await;
-                // Bounded drain of the detached workers the failed boot owns; failures logged.
-                handler_owned_tracker.close();
-                if tokio::time::timeout(ROLLBACK_WORKER_DRAIN, handler_owned_tracker.wait())
-                    .await
-                    .is_err()
-                {
-                    tracing::error!(
-                        "launch rollback: mutation workers still running after the drain bound"
-                    );
-                }
-                if let Some(export) = online_export.as_ref() {
-                    if !tokio::time::timeout(ROLLBACK_WORKER_DRAIN, export.wait_idle())
-                        .await
-                        .unwrap_or(false)
-                    {
-                        tracing::error!(
-                            "launch rollback: the online export worker is still draining"
-                        );
-                    }
-                }
-                join_meta_snapshot("listener bind", meta_snapshot_task).await;
-                stop_release_sources(
-                    "listener bind",
-                    &mut interactive_tx_reaper,
-                    &tx_registry_for_rollback,
-                    &mut cleanup,
-                )
-                .await;
-                log_rollback_cleanup("listener bind", &cleanup);
-                rollback_cleanup::join_cursor_reaper(cursor_reaper).await;
                 return Err(error);
             }
         };
@@ -778,7 +776,7 @@ impl ServerLauncher {
                 for mut task in listener_tasks {
                     let abort = task.abort_handle();
                     match tokio::time::timeout_at(listener_deadline, &mut task).await {
-                        Ok(Ok(())) => {}
+                        Ok(Ok(_)) => {}
                         Ok(Err(join_error)) => {
                             tracing::error!(%join_error, "listener task failed during launch rollback");
                         }
@@ -811,47 +809,38 @@ impl ServerLauncher {
                 }
                 token_service.shutdown_gc().await;
                 let mut cleanup = shamir_db::ShutdownReport::default();
-                teardown_audit(
-                    AuditTeardown {
-                        cancel_refusal_audit: &cancel_refusal_audit,
-                        appender: &audit_appender,
-                        scheduler,
-                        #[cfg(test)]
-                        drain_probe: None,
+                shutdown_token.cancel();
+                settle_rollback(rollback_settlement::RollbackSettlement {
+                    stage: "observability bind",
+                    data_dir: config.data_dir.clone(),
+                    cancel_refusal_audit: &cancel_refusal_audit,
+                    scheduler,
+                    reaper: interactive_tx_reaper.take(),
+                    registry: &tx_registry_for_rollback,
+                    meta_snapshot_task: meta_snapshot_task.take(),
+                    cursor_reaper,
+                    owned_tracker: Arc::clone(&handler_owned_tracker),
+                    drops: rollback_settlement::RollbackDrops {
+                        handler,
+                        handler_concrete,
+                        shamir,
+                        supervisor,
+                        token_service,
+                        audit_writer,
+                        audit_appender,
+                        audit_chain,
+                        online_backup_registry,
+                        online_export,
+                        meta,
+                        user_dir,
+                        counters,
+                        lockout,
+                        rate_limit,
                     },
-                    &mut cleanup,
-                )
+                    lock: data_dir_lock,
+                    cleanup: &mut cleanup,
+                })
                 .await;
-                // Bounded drain of the detached workers the failed boot owns; failures logged.
-                handler_owned_tracker.close();
-                if tokio::time::timeout(ROLLBACK_WORKER_DRAIN, handler_owned_tracker.wait())
-                    .await
-                    .is_err()
-                {
-                    tracing::error!(
-                        "launch rollback: mutation workers still running after the drain bound"
-                    );
-                }
-                if let Some(export) = online_export.as_ref() {
-                    if !tokio::time::timeout(ROLLBACK_WORKER_DRAIN, export.wait_idle())
-                        .await
-                        .unwrap_or(false)
-                    {
-                        tracing::error!(
-                            "launch rollback: the online export worker is still draining"
-                        );
-                    }
-                }
-                join_meta_snapshot("observability bind", meta_snapshot_task).await;
-                stop_release_sources(
-                    "observability bind",
-                    &mut interactive_tx_reaper,
-                    &tx_registry_for_rollback,
-                    &mut cleanup,
-                )
-                .await;
-                log_rollback_cleanup("observability bind", &cleanup);
-                rollback_cleanup::join_cursor_reaper(cursor_reaper).await;
                 return Err(error);
             }
         };
@@ -923,9 +912,7 @@ impl ServerLauncher {
             data_dir: config.data_dir.clone(),
             conn_tasks: conn_tasks.clone(),
             format_stamp,
-            data_dir_lock: Some(crate::server::server_handle::DataDirLock::new(
-                data_dir_lock,
-            )),
+            data_dir_lock: Some(data_dir_lock),
             tunables: Arc::new(RuntimeTunables::new()),
             // Tests drive the real handler and scrape the actual bound metrics address.
             #[cfg(test)]

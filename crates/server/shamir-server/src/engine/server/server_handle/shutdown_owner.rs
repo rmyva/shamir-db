@@ -33,7 +33,7 @@ pub(super) const REPO_FLUSH_BUDGET: Duration = Duration::from_secs(15);
 /// while a genuinely wedged runner can no longer hold the process hostage:
 /// on expiry the wait stops, the report names the stage, and the
 /// data-directory lock is KEPT until the process exits (see
-/// [`report_expired_owner_wait`]).
+/// [`record_expired_owner_wait`]).
 pub(super) const BACKUP_JOIN_FALLBACK_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Test-only seam for the drain-side backup join bound: a test cannot park a
@@ -134,26 +134,170 @@ impl Drop for DataDirLock {
     }
 }
 
+/// The ONE typed outcome of a shutdown settlement point: `Settled` means the
+/// point PROVED its work ended; `Unsettled(stage)` names the bounded wait that
+/// expired or the stage whose proof is missing. A join error, a cancelled
+/// join, an expiry of any bounded wait, a store-release probe that is not
+/// clean, and any "may still be running" outcome are NOT proof and leave the
+/// data-directory lock to leak. The owner drain and the outer-timeout path
+/// (`drain_server`) both decide on this value, never on spread `Option` flags.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Settlement {
+    Settled,
+    Unsettled(ShutdownWaitStage),
+}
+
+impl Settlement {
+    /// Combine two settlement points: any unsettled outcome wins — proof is
+    /// only as strong as its weakest point.
+    pub(crate) fn worst(self, other: Settlement) -> Settlement {
+        match self {
+            Settlement::Unsettled(_) => self,
+            Settlement::Settled => other,
+        }
+    }
+}
+
+/// Record the expired bounded wait TYPED in the report and return the
+/// matching unsettled settlement (one line per call site).
+pub(crate) fn unsettled(
+    stage: ShutdownWaitStage,
+    budget: Duration,
+    report: &mut ShutdownReport,
+) -> Settlement {
+    report.record_expired_owner_wait(stage, budget);
+    Settlement::Unsettled(stage)
+}
+
 /// Record an expired owner-drain wait. The fixed prefix `shutdown owner wait
 /// expired (` is the operator contract: on ANY of these expiries the
 /// data-directory instance lock is NOT released before the process exits
 /// (the `File` is leaked deliberately — the kernel releases the advisory
 /// lock when the process dies), and the report stays unclean, so the exit
 /// code is the abnormal-report code 70 as before. Nothing forces an exit.
-pub(crate) fn report_expired_owner_wait(
-    stage: ShutdownWaitStage,
-    budget: Duration,
+pub(crate) use unsettled as record_expired_owner_wait;
+
+/// Typed outcome of ONE HTTP listener task: whether its login-worker drain
+/// and its login-audit-consumer drain PROVED settled before the task ended
+/// (the drain failures of `http/launcher.rs` must surface as typed unsettled
+/// stages of the report, not only as log lines). `Default` is the settled
+/// outcome for listeners without login routes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct HttpListenerOutcome {
+    pub(crate) login_workers_settled: bool,
+    pub(crate) login_worker_budget: Duration,
+    pub(crate) audit_consumer_settled: bool,
+    pub(crate) audit_consumer_budget: Duration,
+}
+
+impl HttpListenerOutcome {
+    /// The outcome of a listener without login routes: nothing to prove.
+    pub(crate) fn settled() -> Self {
+        Self::default()
+    }
+}
+
+/// Map one listener outcome to its typed settlement: an unsettled login
+/// worker drain or audit consumer drain is an unsettled stage of the report
+/// (unclean report, exit 70, the lock stays).
+pub(crate) fn http_listener_settlement(
+    outcome: &HttpListenerOutcome,
     report: &mut ShutdownReport,
-) {
-    report.set_expired_owner_wait(
-        stage,
-        format!(
-            "shutdown owner wait expired ({}: waited {budget:?}): that stage is still running, \
-             so the data-directory instance lock is KEPT until the process exits — check for a \
-             running backup or export job, then restart the server",
-            stage.as_str()
-        ),
-    );
+) -> Settlement {
+    let mut settlement = Settlement::Settled;
+    if !outcome.login_workers_settled {
+        settlement = record_expired_owner_wait(
+            ShutdownWaitStage::HttpLoginWorkerDrain,
+            outcome.login_worker_budget,
+            report,
+        );
+    }
+    if !outcome.audit_consumer_settled {
+        settlement = settlement.worst(record_expired_owner_wait(
+            ShutdownWaitStage::HttpAuditConsumerDrain,
+            outcome.audit_consumer_budget,
+            report,
+        ));
+    }
+    settlement
+}
+
+/// Store-root names for the release report: bounded tokens, never full paths.
+fn store_names(locked: &[std::path::PathBuf]) -> String {
+    locked
+        .iter()
+        .filter_map(|dir| dir.file_name())
+        .map(|name| name.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Report the store-release barrier's outcome and turn it into the typed
+/// settlement: ONLY `Released` is proof; `StillLocked` and every `Unverified`
+/// reason record the typed [`ShutdownWaitStage::StoreReleaseProbe`] (unclean
+/// report, exit 70, the data-directory lock kept).
+pub(crate) fn report_store_release_outcome(
+    outcome: crate::server::store_release_barrier::ReleaseOutcome,
+    release_budget: Duration,
+    report: &mut ShutdownReport,
+) -> Settlement {
+    use crate::server::store_release_barrier::{ReleaseOutcome, UnverifiedReason};
+    match outcome {
+        ReleaseOutcome::Released => Settlement::Settled,
+        ReleaseOutcome::StillLocked(still_locked) => {
+            let stores = store_names(&still_locked);
+            tracing::warn!(
+                ?still_locked,
+                timeout = ?release_budget,
+                "shutdown: stores still held after the release timeout (last observed held)",
+            );
+            report.add_error(format!(
+                "stores still held after the release timeout {release_budget:?}: \
+                 {stores} — the last completed probe observed these stores held; an immediate \
+                 relaunch of the same data directory can fail with `Locked`"
+            ));
+            unsettled(ShutdownWaitStage::StoreReleaseProbe, release_budget, report)
+        }
+        ReleaseOutcome::Unverified(UnverifiedReason::BudgetExpired) => {
+            // UNKNOWN if no usable observation exists. A timed-out
+            // retry after a completed held observation is StillLocked;
+            // abort stops only a queued probe, not a running filesystem call.
+            tracing::warn!("shutdown: release probe deadline expired before submission");
+            super::core::report_unsubmitted_release_probe(
+                report,
+                "the deadline expired before submission",
+            );
+            unsettled(ShutdownWaitStage::StoreReleaseProbe, release_budget, report)
+        }
+        ReleaseOutcome::Unverified(reason) => {
+            let (summary, detail) = match reason {
+                UnverifiedReason::PoolStarved => (
+                    "the store-release blocking job did not complete before its deadline",
+                    "the blocking job may still be queued or running; if running, its filesystem call may continue after this UNKNOWN verdict",
+                ),
+                UnverifiedReason::DiscoveryGap => (
+                    "store discovery was incomplete",
+                    "the store set could not be fully discovered, or a discovered marker could no longer be verified",
+                ),
+                UnverifiedReason::ProbeError => (
+                    "the store-release blocking job ended without a result",
+                    "discovery or a lock probe did not complete successfully",
+                ),
+                UnverifiedReason::BudgetExpired => unreachable!("handled above"),
+            };
+            tracing::warn!(
+                ?reason,
+                timeout = ?release_budget,
+                "shutdown: store release could not be verified in time",
+            );
+            report.add_error(format!(
+                "store release could not be verified within {release_budget:?}: {summary}; \
+                 {detail}, so whether every store released its directory lock is UNKNOWN; \
+                 an immediate relaunch of the same data directory can fail with `Locked`"
+            ));
+            unsettled(ShutdownWaitStage::StoreReleaseProbe, release_budget, report)
+        }
+    }
 }
 
 /// The shutdown state that must OUTLIVE the bounded shutdown wait.
@@ -218,9 +362,9 @@ impl ShutdownOwner {
         &mut self,
         bound: Option<(tokio::time::Instant, Duration)>,
         report: &mut ShutdownReport,
-    ) -> bool {
+    ) -> Settlement {
         let Some((_, task)) = self.schedule_task.as_mut() else {
-            return true;
+            return Settlement::Settled;
         };
         // Awaited THROUGH `&mut`: while the wait is pending the handle and its
         // drop guard stay in the owner, so the deadline dropping this future
@@ -231,15 +375,16 @@ impl ShutdownOwner {
                     self.schedule_task = None;
                     if let Err(error) = joined {
                         report.add_error(format!("backup schedule task failed: {error}"));
+                        return Settlement::Unsettled(ShutdownWaitStage::ScheduledBackupJoin);
                     }
-                    true
+                    Settlement::Settled
                 }
                 Err(_) => {
                     report.add_error(format!(
                         "backup schedule join exceeded shutdown budget {budget:?}; the run \
                              is NOT interrupted and its completion is awaited no further here"
                     ));
-                    false
+                    Settlement::Unsettled(ShutdownWaitStage::ScheduledBackupJoin)
                 }
             },
             None => {
@@ -247,8 +392,9 @@ impl ShutdownOwner {
                 self.schedule_task = None;
                 if let Err(error) = joined {
                     report.add_error(format!("backup schedule task failed: {error}"));
+                    return Settlement::Unsettled(ShutdownWaitStage::ScheduledBackupJoin);
                 }
-                true
+                Settlement::Settled
             }
         }
     }
@@ -261,19 +407,20 @@ impl ShutdownOwner {
     /// future the worker is still awaited here — the lock is released
     /// afterwards, never before. If any of the bounded waits below expires,
     /// the stage that expired is recorded typed in the report
-    /// ([`report_expired_owner_wait`]) and the lock is deliberately NOT
+    /// ([`record_expired_owner_wait`]) and the lock is deliberately NOT
     /// released: the [`DataDirLock`] guard leaks the file, so the kernel holds
     /// the advisory data-directory lock until the process exits and no other
     /// process can open the directory over the still-running stage. The
     /// report stays unclean, so the process exit code is the abnormal 70 as
     /// before.
-    pub(crate) async fn drain(mut self, report: &mut ShutdownReport) {
-        let mut expired: Option<ShutdownWaitStage> = None;
+    pub(crate) async fn drain(mut self, report: &mut ShutdownReport, outer: Settlement) {
+        let mut settlement = outer;
         let budget = drain_backup_join_budget();
         let (deadline, _) = stage_bound(None, budget, Duration::ZERO);
-        if !self.join_schedule(Some((deadline, budget)), report).await {
-            expired = Some(ShutdownWaitStage::ScheduledBackupJoin);
-            report_expired_owner_wait(ShutdownWaitStage::ScheduledBackupJoin, budget, report);
+        if let Settlement::Unsettled(stage @ ShutdownWaitStage::ScheduledBackupJoin) =
+            self.join_schedule(Some((deadline, budget)), report).await
+        {
+            settlement = record_expired_owner_wait(stage, budget, report);
         }
         if let Some(tracker) = &self.owned_mutation_tasks {
             tracker.close();
@@ -285,8 +432,11 @@ impl ShutdownOwner {
                 report.add_error(format!(
                     "owned mutation workers still running after the shutdown bound; repository flush skipped ({budget:?})"
                 ));
-                expired = Some(ShutdownWaitStage::MutationWorkersJoin);
-                report_expired_owner_wait(ShutdownWaitStage::MutationWorkersJoin, budget, report);
+                settlement = record_expired_owner_wait(
+                    ShutdownWaitStage::MutationWorkersJoin,
+                    budget,
+                    report,
+                );
             }
         }
         // The export drain HANDLE keeps its fallback ownership here (the
@@ -302,8 +452,8 @@ impl ShutdownOwner {
                 report.add_error(format!(
                     "online export worker still draining after the fallback bound ({budget:?})"
                 ));
-                expired = Some(ShutdownWaitStage::OnlineExportDrain);
-                report_expired_owner_wait(ShutdownWaitStage::OnlineExportDrain, budget, report);
+                settlement =
+                    record_expired_owner_wait(ShutdownWaitStage::OnlineExportDrain, budget, report);
             }
         }
         // Stop the release sources, clear the registry, wait for the release
@@ -315,7 +465,7 @@ impl ShutdownOwner {
                 stage_bound(None, CONN_DRAIN_TIMEOUT, Duration::ZERO);
             let (tail_deadline, tail_budget) =
                 stage_bound(None, RELEASE_TAIL_DRAIN, Duration::ZERO);
-            let settled = stop_release_sources_and_drain_tails(
+            let release_stop = stop_release_sources_and_drain_tails(
                 &mut self.tx_reaper,
                 self.tx_registry.as_ref(),
                 self.tx_release_tails.as_ref(),
@@ -328,30 +478,30 @@ impl ShutdownOwner {
                 report,
             )
             .await;
-            if !settled {
-                expired = Some(ShutdownWaitStage::ReleaseTailDrain);
-                report_expired_owner_wait(
-                    ShutdownWaitStage::ReleaseTailDrain,
-                    RELEASE_TAIL_DRAIN,
-                    report,
-                );
+            if let Settlement::Unsettled(stage) = release_stop {
+                record_expired_owner_wait(stage, RELEASE_TAIL_DRAIN, report);
             }
+            settlement = settlement.worst(release_stop);
         }
-        match expired {
+        match settlement {
             // Keep the advisory lock until the process exits: leave the
             // `DataDirLock` in place — its `Drop` impl leaks the inner `File`
             // on purpose, so the kernel releases the lock only at process
             // death — never explicitly unlocked, and never handed to another
             // process over a stage that is still running.
-            Some(_) => {}
-            // Released here, after the scheduled worker finished — the ONE
-            // clean end of the owner's life (never explicitly unlocked; the
-            // drop of the inner `File` is the release).
-            None => {
+            Settlement::Unsettled(_) => {}
+            // Released ONLY here: every settlement point proved its work
+            // ended AND the report is clean (no error, no typed expiry) —
+            // the ONE clean end of the owner's life (never explicitly
+            // unlocked; the drop of the inner `File` is the release).
+            Settlement::Settled if report.is_clean() => {
                 if let Some(lock) = self.data_dir_lock.take() {
                     lock.release_clean();
                 }
             }
+            // Settled owner waits but an unclean report (a failed join, a
+            // failed store-release probe): not proof. Leak the lock.
+            Settlement::Settled => {}
         }
     }
 }

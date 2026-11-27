@@ -40,6 +40,12 @@ const SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30
 /// process is gone.
 pub const EXIT_RUNTIME_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// The process exit code for a run that PANICKED inside the polled drain
+/// (unclean — the same abnormal-report semantics as a shutdown report that is
+/// not clean). The Windows service maps the same panic to the same 70 as its
+/// service exit status, so both runtime owners can never disagree.
+pub const PANIC_EXIT_CODE: u8 = 70;
+
 /// THE one decision for leaving through the BOUNDED runtime shutdown
 /// (`shutdown_timeout(EXIT_RUNTIME_SHUTDOWN_TIMEOUT)`): the run failed at
 /// boot (`boot_failed`), OR a shutdown report exists and is abnormal
@@ -51,36 +57,11 @@ pub fn exits_through_bounded_shutdown(boot_failed: bool, report_abnormal: Option
     boot_failed || report_abnormal == Some(true)
 }
 
-/// Test-only seam for the embedding shutdown deadline: a test cannot spend
-/// 30 s, so it shrinks the deadline for `ServerHandle::shutdown()` (which
-/// passes no deadline of its own). `None` (production) = [`SHUTDOWN_DEADLINE`].
-#[cfg(test)]
-static DRAIN_DEADLINE_OVERRIDE: std::sync::Mutex<Option<std::time::Duration>> =
-    std::sync::Mutex::new(None);
-
-/// Override [`SHUTDOWN_DEADLINE`] for ONE test; pass `None` to restore.
-#[cfg(test)]
-pub(crate) fn set_drain_deadline_override(deadline: Option<std::time::Duration>) {
-    *DRAIN_DEADLINE_OVERRIDE
-        .lock()
-        .expect("drain deadline override") = deadline;
-}
-
 /// The ONE source of the embedding shutdown deadline: `serve` and
 /// `ServerHandle::shutdown` both read it, so the public wrapper can never
-/// drift from the boot path. The override static and setter stay `#[cfg(test)]`.
+/// drift from the boot path.
 pub(crate) fn drain_deadline() -> std::time::Duration {
-    #[cfg(test)]
-    {
-        DRAIN_DEADLINE_OVERRIDE
-            .lock()
-            .expect("drain deadline override")
-            .unwrap_or(SHUTDOWN_DEADLINE)
-    }
-    #[cfg(not(test))]
-    {
-        SHUTDOWN_DEADLINE
-    }
+    SHUTDOWN_DEADLINE
 }
 
 /// Boot the server, wait for `shutdown`, then drain gracefully.
@@ -90,13 +71,15 @@ pub(crate) fn drain_deadline() -> std::time::Duration {
 /// [`foreground_shutdown`] in production, a SCM Stop event on Windows, etc.
 ///
 /// After the shutdown signal fires, the drain phase is bounded by
-/// [`SHUTDOWN_DEADLINE`]. If draining exceeds the deadline (e.g. a stuck
-/// connection), we return an unclean report rather than blocking
-/// indefinitely. Within that bound, earlier stages share the 1 s late-stage
-/// reserve documented above. The scheduled-backup worker and data-directory
-/// lock are owned outside the bounded future and are still awaited before this
-/// function returns (there is no forced exit and nothing calls
-/// `std::process::exit`).
+/// [`SHUTDOWN_DEADLINE`]: the PUBLIC future `serve` resolves only after the
+/// bounded teardown AND the post-deadline owner drain finish; on expiry the
+/// bounded teardown future is dropped (that is the capped fallback — "always
+/// awaited" is NOT true of the INNER timed teardown, only of the owner waits
+/// `serve` performs afterwards). The owner (the scheduled-backup worker and
+/// the data-directory instance lock) lives OUTSIDE the bounded future and is
+/// still awaited before this function returns; an owner wait that itself
+/// expires keeps the lock (leaked file) and the report names the stage typed.
+/// There is no forced exit and nothing calls `std::process::exit`.
 ///
 /// Order matters: the scheduled-backup worker and its in-flight run are
 /// awaited BEFORE the repository flush (their original position). Only the
@@ -151,7 +134,7 @@ pub async fn serve(
 /// 5 s / 500 ms; store release: 10 s / 250 ms). These bound WAITs only;
 /// synchronous work is not interrupted, and the detached metadata join may
 /// continue after timeout. If one of the OWNER's own bounded waits expires
-/// (see `shutdown_owner::report_expired_owner_wait`), the data-directory
+/// (see `shutdown_owner::record_expired_owner_wait`), the data-directory
 /// lock is deliberately NOT released here: the owner guard leaks the file,
 /// so the kernel holds the advisory lock until the process exits, and the
 /// report names the expired stage typed (exit code 70, the abnormal-report
@@ -172,20 +155,33 @@ pub(crate) async fn drain_server(
     // deadline still records its own verdict instead of being dropped with the
     // abandoned future.
     let deadline_at = tokio::time::Instant::now() + deadline;
-    let expired = tokio::time::timeout_at(
+    // THE settlement decision, shared with the fallback path: the outer
+    // timeout is an UNSETTLED outcome (typed stage, lock kept by the owner
+    // drain below); only a completed teardown with every inner settlement
+    // point proven reaches the drain as `Settled`.
+    let inner = match tokio::time::timeout_at(
         deadline_at,
         handle.shutdown_with_budget(&mut report, &mut owner, Some(deadline_at)),
     )
     .await
-    .is_err();
-    if expired {
-        report.add_error(deadline_error(deadline));
-        #[cfg(test)]
-        crate::server::mark_fallback_drain_join();
-    }
+    {
+        Ok(settlement) => settlement,
+        Err(_) => {
+            report.add_error(deadline_error(deadline));
+            #[cfg(test)]
+            crate::server::mark_fallback_drain_join();
+            crate::server::record_expired_owner_wait(
+                shamir_db::ShutdownWaitStage::OuterShutdownDeadline,
+                deadline,
+                &mut report,
+            )
+        }
+    };
     // Outside the deadline: on expiry the teardown was abandoned mid-way, but
-    // the worker is still awaited here and the lock is released only afterwards.
-    owner.drain(&mut report).await;
+    // the worker is still awaited here and the lock is released only if every
+    // settlement point — the outer timeout included — proved its work ended
+    // and the report is clean.
+    owner.drain(&mut report, inner).await;
     report
 }
 
