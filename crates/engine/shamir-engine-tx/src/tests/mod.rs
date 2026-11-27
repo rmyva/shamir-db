@@ -1,6 +1,3 @@
-// Keep historical crate-local tx paths for tx-owned tests.
-extern crate self as tx;
-
 #[cfg(test)]
 pub mod commit;
 #[cfg(test)]

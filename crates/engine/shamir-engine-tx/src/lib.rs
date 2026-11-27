@@ -14,9 +14,7 @@ pub mod test_seams;
 
 #[cfg(any(test, feature = "test-util"))]
 #[doc(hidden)]
-pub mod publish_journaled {
-    pub use crate::commit::pipeline::phase::publish_journaled::publish_journaled;
-}
+pub use commit::pipeline::phase::publish_journaled;
 
 pub mod commit;
 pub(crate) mod internal_ack {
