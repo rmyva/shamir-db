@@ -33,8 +33,8 @@ regex = "1.11.1"
 unicode-normalization = "0.1.24"
 strsim = "0.11.1"
 
-# Temporal (/datetime)
-chrono = { version = "0.4", features = ["serde"] }
+# Temporal (/datetime): UTC-only APIs, no bundled/system time-zone database.
+jiff = { version = "0.2.24", default-features = false, features = ["std"] }
 
 # Encoding (/encode)
 base64 = "0.22.1"

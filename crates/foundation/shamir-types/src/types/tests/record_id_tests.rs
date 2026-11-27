@@ -5,7 +5,59 @@ mod tests {
     use crate::types::record_id::RecordId;
     use shamir_collections::TFxSet;
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    /// Pins the committed SystemTime conversion formula. A pre-epoch clock uses
+    /// the ceiling-negative fallback; positive values retain floor semantics.
+    #[test]
+    fn unix_micros_conversion_is_pinned() {
+        use crate::types::ids::record_id::unix_micros_from_system_time;
+        assert_eq!(
+            unix_micros_from_system_time(UNIX_EPOCH + Duration::new(1_234_567_890, 123_456_789)),
+            1_234_567_890_123_456
+        );
+        assert_eq!(
+            unix_micros_from_system_time(UNIX_EPOCH + Duration::new(0, 999)),
+            0
+        );
+        assert_eq!(
+            unix_micros_from_system_time(UNIX_EPOCH - Duration::from_nanos(500)),
+            -1
+        );
+        assert_eq!(
+            unix_micros_from_system_time(UNIX_EPOCH - Duration::from_nanos(1_500_000)),
+            -1_500
+        );
+        assert_eq!(
+            unix_micros_from_system_time(UNIX_EPOCH - Duration::from_micros(2)),
+            -2
+        );
+    }
+
+    #[test]
+    fn custom_epoch_is_pinned_to_literal_microseconds() {
+        const EPOCH_2026: i64 = 1_769_817_600_000_000;
+        const BOUNDARY: i64 = 1i64 << 32;
+
+        assert_eq!(
+            &RecordId::from_ts(EPOCH_2026 - 1).as_bytes()[..8],
+            &(-1i64).to_be_bytes()
+        );
+        for timestamp in [EPOCH_2026, EPOCH_2026 + 1, EPOCH_2026 + BOUNDARY - 1] {
+            assert_eq!(
+                &RecordId::from_ts(timestamp).as_bytes()[..8],
+                &BOUNDARY.to_be_bytes()
+            );
+        }
+        assert_eq!(
+            &RecordId::from_ts(EPOCH_2026 + BOUNDARY).as_bytes()[..8],
+            &BOUNDARY.to_be_bytes()
+        );
+        assert_eq!(
+            &RecordId::from_ts(EPOCH_2026 + BOUNDARY + 1).as_bytes()[..8],
+            &(BOUNDARY + 1).to_be_bytes()
+        );
+    }
 
     #[test]
     fn test_record_id_uniqueness() {

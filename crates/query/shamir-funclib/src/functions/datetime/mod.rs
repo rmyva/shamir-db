@@ -1,4 +1,5 @@
 mod core;
+mod parse_rescue;
 
 pub use core::*;
 

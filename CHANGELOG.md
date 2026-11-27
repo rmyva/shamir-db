@@ -45,6 +45,7 @@ detailed engineering log previously kept here lives in
 `docs/dev-artifacts/checkpoints/2026-08-engineering-log.md`.
 
 ### Changed
+- Replaced the date/time implementation with the maintained alternative; `datetime/` scalar contracts are covered by explicit compatibility code and pinned golden vectors (RUSTSEC-2026-0543).
 - Documented the v1 wire/storage projection of `Dec`/`Big`/`Set` (RV-TYPES-F28FAFBF; documented projection, NOT a protocol change — the bytes are unchanged): on MessagePack encode `Dec`/`Big` are written as their decimal string and `Set` as a plain array in insertion order; on decode they come back as `Str`/`List`. The `codecs` README now states this instead of claiming all-type MessagePack round trips. Supporting it, `scalar_ref_numeric_eq` gained the missing typed-RHS arms: a stored decimal string (a projected `Dec`/`Big`) is now equal to an equal typed `Dec`/`Big` filter literal, compared via the canonical `NumericKey` (THE ONE RULE); an unparseable stored string simply does not match.
 - WebSocket endpoints `/shamir/v1` and `/shamir/v1/browser` now require the `shamir-v1` WebSocket subprotocol; requests without it (or offering only incompatible protocols) are rejected with HTTP 400 (RV-TRANSPORT-WS-C0C43A18; alpha policy: no compatibility shim). First-party clients now offer it.
 
