@@ -146,7 +146,7 @@ async fn r1_insert_after_start_is_rejected_and_commit_preserves_all_rows() {
 #[tokio::test]
 async fn r2_pre_start_interactive_transaction_aborts_at_commit() {
     let db = setup().await;
-    let (mut tx, _snapshot, _repo) = db.tx_begin("testdb", "src", "snapshot").await.unwrap();
+    let (mut tx, _snapshot, _) = db.tx_begin("testdb", "src", "snapshot").await.unwrap();
     db.tx_execute("testdb", &insert("staged before start"), &mut tx)
         .await
         .unwrap();

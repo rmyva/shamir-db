@@ -71,7 +71,7 @@ async fn readonly_tx_fixture() -> (Arc<ShamirDb>, ShamirDbHandler, Session, u64)
     )
     .await
     .expect("add repo");
-    let (tx, guard, _repo) = db
+    let (tx, guard, _) = db
         .tx_begin_as(owner, "app", "main", "snapshot")
         .await
         .expect("begin real transaction");

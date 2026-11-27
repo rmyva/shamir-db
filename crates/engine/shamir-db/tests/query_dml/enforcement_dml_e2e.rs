@@ -281,7 +281,7 @@ async fn tx_execute_as_enforces_table_acl() {
     let read_req = b.to_request_via_msgpack().expect("batch request encoding");
 
     // Open an interactive tx as User(1) (owner) — should succeed
-    let (mut tx_ok, _guard_ok, _repo) = shamir
+    let (mut tx_ok, _guard_ok, _) = shamir
         .tx_begin_as(Actor::User(1), "testdb", "main", "snapshot")
         .await
         .unwrap();
@@ -297,7 +297,7 @@ async fn tx_execute_as_enforces_table_acl() {
     // Open an interactive tx as User(99) (stranger) — tx_begin may succeed
     // (database is open), but tx_execute_as with a read on restricted table
     // should fail.
-    let (mut tx_bad, _guard_bad, _repo) = shamir
+    let (mut tx_bad, _guard_bad, _) = shamir
         .tx_begin_as(Actor::User(99), "testdb", "main", "snapshot")
         .await
         .unwrap();
@@ -634,7 +634,7 @@ async fn tx_execute_as_denies_forbidden_table_inside_top_level_for_each() {
     // `vault` STORE itself is open (setup_with_secrets), so tx_begin_as
     // succeeds — the forbidden table is the ForEach body's inner op, which
     // is exactly what this bug lets bypass a flat one-level pre-check.
-    let (mut tx, _guard, _repo) = shamir
+    let (mut tx, _guard, _) = shamir
         .tx_begin_as(Actor::User(2), "testdb", "vault", "snapshot")
         .await
         .unwrap();
@@ -663,7 +663,7 @@ async fn tx_execute_as_denies_forbidden_table_inside_top_level_batch() {
         .to_request_via_msgpack()
         .expect("batch request encoding");
 
-    let (mut tx, _guard, _repo) = shamir
+    let (mut tx, _guard, _) = shamir
         .tx_begin_as(Actor::User(2), "testdb", "vault", "snapshot")
         .await
         .unwrap();
@@ -705,7 +705,7 @@ async fn tx_execute_as_denies_forbidden_table_nested_batch_foreach_batch() {
         .to_request_via_msgpack()
         .expect("batch request encoding");
 
-    let (mut tx, _guard, _repo) = shamir
+    let (mut tx, _guard, _) = shamir
         .tx_begin_as(Actor::User(2), "testdb", "vault", "snapshot")
         .await
         .unwrap();
@@ -735,7 +735,7 @@ async fn tx_execute_as_allows_permitted_table_inside_top_level_for_each() {
         .to_request_via_msgpack()
         .expect("batch request encoding");
 
-    let (mut tx, _guard, _repo) = shamir
+    let (mut tx, _guard, _) = shamir
         .tx_begin_as(Actor::User(2), "testdb", "main", "snapshot")
         .await
         .unwrap();
@@ -765,7 +765,7 @@ async fn tx_execute_as_allows_permitted_table_inside_top_level_batch() {
         .to_request_via_msgpack()
         .expect("batch request encoding");
 
-    let (mut tx, _guard, _repo) = shamir
+    let (mut tx, _guard, _) = shamir
         .tx_begin_as(Actor::User(2), "testdb", "main", "snapshot")
         .await
         .unwrap();
@@ -808,7 +808,7 @@ async fn tx_execute_as_allows_permitted_table_nested_batch_foreach_batch() {
         .to_request_via_msgpack()
         .expect("batch request encoding");
 
-    let (mut tx, _guard, _repo) = shamir
+    let (mut tx, _guard, _) = shamir
         .tx_begin_as(Actor::User(2), "testdb", "main", "snapshot")
         .await
         .unwrap();
@@ -891,7 +891,7 @@ async fn tx_execute_as_system_bypasses_nested_batch_foreach_on_forbidden_table()
         .to_request_via_msgpack()
         .expect("batch request encoding");
 
-    let (mut tx, _guard, _repo) = shamir
+    let (mut tx, _guard, _) = shamir
         .tx_begin_as(Actor::System, "testdb", "vault", "snapshot")
         .await
         .unwrap();

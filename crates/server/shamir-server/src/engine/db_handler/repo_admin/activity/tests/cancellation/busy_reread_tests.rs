@@ -118,7 +118,7 @@ async fn remove_identity_refuses_a_substituted_transaction_arc() {
             .tx_registry()
             .get_owned(id, &owner.session_id)
             .unwrap();
-        let (other_ctx, other_snapshot, _repo) = db
+        let (other_ctx, other_snapshot, _) = db
             .tx_begin_as(owner_actor, "app", "main", "snapshot")
             .await
             .unwrap();
@@ -188,7 +188,7 @@ async fn busy_reread_of_different_committing_transaction_answers_finished() {
         reached.wait().await;
         let committing = base.tx_registry().begin_commit(id, &tx).unwrap();
         drop(committing);
-        let (replacement_ctx, replacement_snapshot, _repo) = db
+        let (replacement_ctx, replacement_snapshot, _) = db
             .tx_begin_as(owner_actor.clone(), "app", "main", "snapshot")
             .await
             .unwrap();

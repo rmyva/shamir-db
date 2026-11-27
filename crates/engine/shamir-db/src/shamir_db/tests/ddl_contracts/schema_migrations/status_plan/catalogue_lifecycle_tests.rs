@@ -674,7 +674,7 @@ fn same_target_ddl_refuses_transactional_and_interactive_transactions_before_fir
             // Interactive tx: BEGIN stays available (opening a tx is not a
             // write); tx_execute of the same shape refuses with the same code
             // before any leaf runs, and the tx is dropped uncommitted.
-            let (mut tx, guard, _repo) = bounded(db.tx_begin(SERVING, REPO, "snapshot"))
+            let (mut tx, guard, _) = bounded(db.tx_begin(SERVING, REPO, "snapshot"))
                 .await
                 .expect("BEGIN must stay available while the fence is held");
             let mut batch = Batch::new();
