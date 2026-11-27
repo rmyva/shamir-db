@@ -684,7 +684,7 @@ fn observability_rollback_clears_a_registry_with_an_open_tx() {
                     .expect("begin interactive tx");
                 let mut batch = shamir_query_builder::batch::Batch::new();
                 let insert = shamir_query_builder::write::Insert::with_repo("main", "items")
-                    .row(shamir_types::types::value::QueryValue::Null);
+                    .row(shamir_query_builder::doc! { "id" => 1_i64 });
                 batch.insert("staged", insert);
                 db.tx_execute_as(owner.clone(), "app", &batch.build(), &mut ctx)
                     .await

@@ -180,9 +180,10 @@ pub(crate) use unsettled as record_expired_owner_wait;
 /// Typed outcome of ONE HTTP listener task: whether its login-worker drain
 /// and its login-audit-consumer drain PROVED settled before the task ended
 /// (the drain failures of `http/launcher.rs` must surface as typed unsettled
-/// stages of the report, not only as log lines). `Default` is the settled
-/// outcome for listeners without login routes.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// stages of the report, not only as log lines). There is deliberately no
+/// `Default`: a derived one would read `false` as "not proven" for a
+/// listener without login routes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct HttpListenerOutcome {
     pub(crate) login_workers_settled: bool,
     pub(crate) login_worker_budget: Duration,
@@ -193,7 +194,12 @@ pub(crate) struct HttpListenerOutcome {
 impl HttpListenerOutcome {
     /// The outcome of a listener without login routes: nothing to prove.
     pub(crate) fn settled() -> Self {
-        Self::default()
+        Self {
+            login_workers_settled: true,
+            login_worker_budget: Duration::ZERO,
+            audit_consumer_settled: true,
+            audit_consumer_budget: Duration::ZERO,
+        }
     }
 }
 
