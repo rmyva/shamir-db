@@ -2,4 +2,6 @@
 
 pub(crate) mod preflight;
 pub(crate) mod stage_load;
+#[cfg(test)]
+mod tests;
 pub(crate) mod validate;

@@ -480,8 +480,10 @@ pub trait Store: Send + Sync {
     /// order). `None` on either side = unbounded.
     ///
     /// The in-memory backend overrides this with a native range scan.
-    /// The default implementation, also used by Fjall, filters `iter_stream`, scanning until the
-    /// upper bound is passed (or the source ends).
+    /// The default implementation filters `iter_stream`, scanning until the
+    /// upper bound is passed (or the source ends). Disk backends SHOULD
+    /// override this with a native seek into the LSM tree — `FjallStore`
+    /// does.
     ///
     /// # Arguments
     /// * `start_inclusive` — lower bound. `None` = scan from the start.

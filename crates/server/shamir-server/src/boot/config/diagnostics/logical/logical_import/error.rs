@@ -41,6 +41,18 @@ pub enum LogicalImportError {
     /// The final same-volume rename of the stage onto the target failed.
     #[error("logical-import publish: {0}")]
     Publish(String),
+    /// One dump record cannot fit any transaction even with an empty batch:
+    /// the complete-entry bound exceeds the per-transaction WAL budget after
+    /// persisting the interner delta. Fires BEFORE any WAL submission.
+    /// (A dump row's body is capped at 16 MiB — codec FRAME_LIMIT — so with
+    /// small interner deltas this refusal is unreachable in practice; it
+    /// guards the invariant.)
+    #[error("logical-import record {position} exceeds the per-transaction WAL budget: complete entry bound {bound_bytes} bytes > {cap_bytes} even after persisting the interner delta")]
+    RecordTooLarge {
+        position: u64,
+        bound_bytes: u64,
+        cap_bytes: u64,
+    },
     /// The artifact file changed between preflight and post-load re-hash.
     #[error("logical-import: input file changed after preflight verification")]
     InputChanged,
