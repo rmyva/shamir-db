@@ -157,14 +157,42 @@ fn run_main() -> anyhow::Result<u8> {
         .worker_threads(4)
         .enable_all()
         .build()?;
-    let result = rt.block_on(run_async(cli));
-    if result.is_err() {
-        // A failed run can leave a detached blocking job (a stalled final
-        // snapshot): dropping the runtime would wait for it without a bound and
-        // the error would never be printed.
-        rt.shutdown_timeout(std::time::Duration::from_secs(5));
+    // A panic unwinding out of the polled drain must NOT unwind past the
+    // runtime owner: ordinary runtime destruction during an unwind can run
+    // while detached work is live. Catch it here and take the SAME bounded
+    // runtime shutdown as the error path, mapping the panic to the unclean
+    // exit code 70. The data-directory lock is leaked by the owner guard (a
+    // panicking owner never consumes it), so the OS keeps the lock until the
+    // process exits.
+    let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rt.block_on(run_async(cli))
+    })) {
+        Ok(result) => result,
+        Err(_panic) => {
+            eprintln!("shamir-server: the shutdown drain panicked; exiting 70");
+            // The panic-mapped result flows through the SAME
+            // `exits_through_bounded_shutdown` decision: the abnormal-report
+            // flag (exit code 70) is what selects the bounded runtime
+            // shutdown below.
+            Ok((shamir_server::runtime::PANIC_EXIT_CODE, true))
+        }
+    };
+    // A failed run — OR an abnormal shutdown report (exit code 70) — can leave
+    // a detached blocking job (a stalled final snapshot flush inside the
+    // store): dropping the runtime would wait for it without a bound and the
+    // error would never be printed. Both leave through the SAME bounded
+    // runtime shutdown; the data-directory lock is leaked by the owner guard,
+    // so the OS keeps it until the process is gone.
+    if shamir_server::runtime::exits_through_bounded_shutdown(
+        result.is_err(),
+        result
+            .as_ref()
+            .ok()
+            .map(|(_, report_abnormal)| *report_abnormal),
+    ) {
+        rt.shutdown_timeout(shamir_server::runtime::EXIT_RUNTIME_SHUTDOWN_TIMEOUT);
     }
-    result
+    result.map(|(code, _)| code)
 }
 
 /// Fixed usage line for the standalone `backup-verify` command (stderr; the
@@ -246,7 +274,7 @@ fn backup_error_class(error: &shamir_server::backup::BackupError) -> &'static st
     }
 }
 
-async fn run_async(cli: Cli) -> anyhow::Result<u8> {
+async fn run_async(cli: Cli) -> anyhow::Result<(u8, bool)> {
     // Install rustls crypto provider (required by tokio-rustls; second call
     // is a harmless no-op).
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
@@ -335,7 +363,7 @@ async fn run_async(cli: Cli) -> anyhow::Result<u8> {
                 "logical-export verified: {} items, {} bytes",
                 report.items, report.bytes
             );
-            return Ok(0);
+            return Ok((0, false));
         }
         Some(Subcmd::LogicalImport(args)) => {
             let cancel = tokio_util::sync::CancellationToken::new();
@@ -361,13 +389,13 @@ async fn run_async(cli: Cli) -> anyhow::Result<u8> {
                     " (idempotent retry)"
                 }
             );
-            return Ok(0);
+            return Ok((0, false));
         }
         Some(Subcmd::ReplicationSeedExport { db, repo, out }) => {
             let digest =
                 shamir_server::replication_seed::export(&config.data_dir, &db, &repo, &out).await?;
             println!("manifest sha256: {digest}");
-            return Ok(0);
+            return Ok((0, false));
         }
         Some(Subcmd::ReplicationSeedInstall {
             db,
@@ -386,7 +414,7 @@ async fn run_async(cli: Cli) -> anyhow::Result<u8> {
             )
             .await?;
             println!("installed manifest sha256: {}", receipt.artifact_digest);
-            return Ok(0);
+            return Ok((0, false));
         }
         Some(Subcmd::ReplicationSeedVerify {
             dir,
@@ -402,7 +430,7 @@ async fn run_async(cli: Cli) -> anyhow::Result<u8> {
                 anyhow::bail!("trusted manifest digest mismatch");
             }
             println!("manifest sha256: {digest}");
-            return Ok(0);
+            return Ok((0, false));
         }
         Some(Subcmd::Backup { to }) => {
             let report = backup::backup(&config.data_dir, &to)?;
@@ -413,7 +441,7 @@ async fn run_async(cli: Cli) -> anyhow::Result<u8> {
                 report.dest_dir.display()
             );
             println!("format stamp: {}", report.format_stamp);
-            return Ok(0);
+            return Ok((0, false));
         }
         Some(Subcmd::Restore { from, force }) => {
             let report = shamir_server::restore::restore(&from, &config.data_dir, force)?;
@@ -430,7 +458,7 @@ async fn run_async(cli: Cli) -> anyhow::Result<u8> {
                     pre.display()
                 );
             }
-            return Ok(0);
+            return Ok((0, false));
         }
         Some(Subcmd::AccessTree {
             depth,
@@ -451,7 +479,7 @@ async fn run_async(cli: Cli) -> anyhow::Result<u8> {
                 password,
             };
             shamir_server::access_tree::run(&config, &args).await?;
-            return Ok(0);
+            return Ok((0, false));
         }
         Some(Subcmd::Service { action }) => {
             match action {
@@ -465,11 +493,11 @@ async fn run_async(cli: Cli) -> anyhow::Result<u8> {
                     shamir_server::service::status()?;
                 }
             }
-            return Ok(0);
+            return Ok((0, false));
         }
         Some(Subcmd::Token { action }) => {
             shamir_server::tokens::cli::run(&config, action).await?;
-            return Ok(0);
+            return Ok((0, false));
         }
         Some(Subcmd::Doctor {
             db,
@@ -488,7 +516,7 @@ async fn run_async(cli: Cli) -> anyhow::Result<u8> {
                 json,
             };
             shamir_server::doctor::run(&config, &args).await?;
-            return Ok(0);
+            return Ok((0, false));
         }
         Some(Subcmd::FormatMigrate(_)) => {
             anyhow::bail!("format-migrate dispatch must occur before logging initialization")
@@ -565,5 +593,7 @@ async fn run_async(cli: Cli) -> anyhow::Result<u8> {
         shamir_server::runtime::notify_ready,
     )
     .await
-    .map(|report| report.exit_code())
+    // The bool is the report's abnormality, surfaced for the bounded runtime
+    // shutdown decision in `main`.
+    .map(|report| (report.exit_code(), !report.is_clean()))
 }

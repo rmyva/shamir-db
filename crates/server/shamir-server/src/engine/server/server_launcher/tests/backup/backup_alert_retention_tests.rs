@@ -88,6 +88,7 @@ async fn run_alert_retention() {
                     arm_run_observer(&observer_registry, None, &observer_ends);
                     let _ = send.send(ok);
                 },
+                || {},
             )
         })
         .await

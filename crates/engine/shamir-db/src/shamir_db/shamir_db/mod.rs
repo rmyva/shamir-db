@@ -14,7 +14,7 @@ mod tests;
 
 #[cfg(test)]
 pub(crate) use catalog::group_tables_by_repo;
-pub use catalog::{ArtifactKind, ShutdownReport, KIND_FIELD};
+pub use catalog::{ArtifactKind, ExpiredOwnerWait, ShutdownReport, ShutdownWaitStage, KIND_FIELD};
 #[cfg(any(test, feature = "test-util"))]
 pub use catalog::{
     FinalWriteBarrierForTest, SeedCatalogueFlushFaultForTest, TerminalRowSetFaultForTest,

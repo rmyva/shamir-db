@@ -118,6 +118,7 @@ async fn run() {
                     // Unbounded: a dropped outcome would hang the wait below.
                     let _ = send.send(ok);
                 },
+                || {},
             )
         })
         .await

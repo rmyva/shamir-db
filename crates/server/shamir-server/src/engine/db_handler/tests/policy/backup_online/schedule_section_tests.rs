@@ -277,6 +277,7 @@ async fn scheduler_exit_removes_the_schedule_section() {
         shutdown.clone(),
         Duration::from_secs(3600),
         |_| {},
+        || {},
     );
     let QueryValue::Map(reply) = status(&h, true, deadline).await.expect("status") else {
         panic!("reply map")
@@ -333,6 +334,7 @@ async fn two_scheduler_generations_are_independent() {
         shutdown_a.clone(),
         Duration::from_secs(731),
         |_| {},
+        || {},
     );
     let shutdown_b = CancellationToken::new();
     let task_b = spawn_for_test(
@@ -342,6 +344,7 @@ async fn two_scheduler_generations_are_independent() {
         shutdown_b.clone(),
         Duration::from_secs(900),
         |_| {},
+        || {},
     );
     let QueryValue::Map(reply) = status(&h, true, deadline).await.expect("status") else {
         panic!("reply map")
@@ -412,6 +415,7 @@ async fn aborting_the_scheduler_task_removes_the_section() {
         shutdown,
         Duration::from_secs(3600),
         |_| {},
+        || {},
     );
     let QueryValue::Map(reply) = status(&h, true, deadline).await.expect("status") else {
         panic!("reply map")
@@ -466,6 +470,7 @@ async fn failed_scheduled_run_publishes_stable_last_run_and_survives_a_manual_ru
         move |ok| {
             let _ = tx.send(ok);
         },
+        || {},
     );
     let terminal = tokio::time::timeout(remaining(deadline), rx.recv())
         .await

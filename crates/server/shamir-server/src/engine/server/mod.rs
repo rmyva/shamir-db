@@ -23,7 +23,10 @@ pub use bootstrap_mode::{BootstrapMode, Cli, Subcmd};
 #[cfg(test)]
 pub(crate) use server_handle::drain_connections;
 #[cfg(test)]
+pub(crate) use server_handle::fire_pre_observability_registry_probe;
+#[cfg(test)]
 pub(crate) use server_handle::mark_fallback_drain_join;
+pub(crate) use server_handle::record_expired_owner_wait;
 pub use server_handle::ServerHandle;
 pub use server_launcher::audit_store_b_vs_directory;
 pub use server_launcher::ServerLauncher;

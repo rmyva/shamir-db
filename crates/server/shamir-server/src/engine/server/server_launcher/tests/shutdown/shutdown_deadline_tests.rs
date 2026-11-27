@@ -2,26 +2,17 @@
 //! launch-rollback paths.
 //!
 //! `shutdown_deadline_does_not_abandon_the_scheduled_worker` parks the REAL
-//! native backup runner inside its post-run callback — after the protocol
-//! returned, before its completion signal — and then runs the embedding
-//! shutdown (`runtime::drain_server`) with a deadline whose early cutoff is
-//! 2 s. The bounded join must time out there with a zero-budget, stage-specific
-//! error, and the late stages must complete before the outer deadline. The
-//! worker is released near that deadline; `drain_server` may then be waiting for
-//! its owner outside the outer timeout. That wait is not the fallback branch:
-//! fallback is taken only if the outer `timeout_at` actually expires. The
-//! single-instance data-directory lock must be held while the worker runs and
-//! free afterwards.
+//! native backup runner inside its post-run callback and runs the embedding
+//! shutdown (`runtime::drain_server`) with a 2 s early cutoff. The bounded
+//! join must time out with a stage-specific error, the late stages must
+//! finish before the outer deadline, the worker is released near that
+//! deadline, and — DECIDED — the expired bounded wait keeps the data-dir
+//! lock until the process exits (fallback runs only if the outer timeout
+//! expires). Rollback tests assert the ORIGINAL boot error, the audit bound,
+//! and release-or-leak of the instance lock per the settlement proof.
 //!
-//! The two rollback tests make a bind fail (the listener path and the
-//! observability path) and assert that the ORIGINAL boot error comes back, that
-//! the shared audit deadline bounds the rollback, and that the instance lock is
-//! released again.
-//!
-//! Nothing synchronises with an arbitrary sleep: the worker rendezvous is a
-//! semaphore signalled from the runner thread, the release is a condition
-//! variable, and every await is bounded by [`BOUND`]. The deadline case also
-//! deliberately observes a fixed pending window after the early cutoff.
+//! No arbitrary sleeps: semaphore + condvar rendezvous, every await bounded
+//! by [`BOUND`].
 //!
 //! `late_budget::late_teardown_stages_report_the_remaining_shutdown_budget` covers the
 //! OTHER half of the same deadline: the two stages that run after the audit and
@@ -37,6 +28,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+use shamir_db::engine::repo::{BoxRepoFactory, RepoConfig};
+use shamir_db::engine::table::TableConfig;
 use shamir_private_dir::create_private_dir;
 use shamir_test_diag::{try_install_global_tracing_ring, FlakeGuard};
 use tokio::sync::Semaphore;
@@ -50,17 +43,19 @@ use crate::config::{
 };
 use crate::db_handler::NodeMode;
 use crate::server::server_handle::{
-    arm_fallback_drain_join_probe, arm_repo_flush_probe, arm_scheduled_join_probe,
+    arm_fallback_drain_join_probe, arm_pre_observability_registry_probe,
+    arm_release_sources_stopped_probe, arm_repo_flush_probe, arm_scheduled_join_probe,
 };
 use crate::server::server_launcher::audit_teardown::arm_teardown_probe;
 use crate::server::{release_stores, BootstrapMode, ReleaseOutcome, ServerLauncher};
 
 mod late_budget;
 mod owned_mutation_join;
+mod owner_lock;
+mod settlement_tests;
 mod zero_budget_release;
 
 const TEST_NAME: &str = "shutdown_deadline_does_not_abandon_the_scheduled_worker";
-const PUBLIC_TEST: &str = "public_shutdown_bounds_meta_snapshot_join_without_outer_deadline";
 const EXAMPLE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../../deploy/server.example.ktav"
@@ -80,12 +75,9 @@ const PENDING_WINDOW: Duration = Duration::from_millis(750);
 
 /// The outer deadline for the remaining-budget test.
 ///
-/// Two orders of magnitude above the stages that run before the meta-snapshot
-/// join (they never touch the blocking pool, so even a 10x slower runner
-/// reaches step 6 well inside it) and BELOW BOTH late-stage constants
-/// (`META_SNAPSHOT_JOIN_TIMEOUT` 5 s, `STORE_RELEASE_TIMEOUT` 10 s): neither
-/// late stage can finish on its own constant, so the report can only name their
-/// verdicts if they spend what is left of this budget.
+/// Two orders of magnitude above the pre-join stages and BELOW BOTH
+/// late-stage constants (5 s join, 10 s release): the report can only name
+/// their verdicts if they spend what is left of this budget.
 const REMAINING_BUDGET_DEADLINE: Duration = Duration::from_secs(3);
 
 #[test]
@@ -141,6 +133,7 @@ async fn run_scheduled_worker() {
                     shutdown.child_token(),
                     Duration::from_secs(3600),
                     move |ok| completed.store(ok, Ordering::SeqCst),
+                    || {},
                 )
             }
         })
@@ -158,8 +151,7 @@ async fn run_scheduled_worker() {
     drop(parked_permit);
     guard.mark("native runner parked before its completion signal");
 
-    // Distinct markers show the bounded join is reached in both modes, while
-    // the fallback join is reached only after deadline expiry.
+    // Markers: bounded join reached in both modes; fallback only on expiry.
     let (join_tx, join_rx) = tokio::sync::oneshot::channel::<()>();
     let (teardown_tx, teardown_rx) = tokio::sync::oneshot::channel::<()>();
     let joined = Arc::new(AtomicBool::new(false));
@@ -186,12 +178,11 @@ async fn run_scheduled_worker() {
 
     // Only now does the shutdown start: the deadline cannot pre-empt the run
     // start, only the wait for it.
-    // Observe until the fixed early cutoff, measured from the outer shutdown
-    // start. At t=2 s the scheduled join has no budget left; the 1 s reserve
-    // lets late stages finish before the outer t=3 s deadline. Keep the worker
-    // parked for most of that reserve: after bounded teardown, `drain_server`
-    // may still be waiting for its owner outside `timeout_at`. That is not the
-    // fallback branch unless the outer timeout itself expires.
+    // Observe until the fixed early cutoff (t=2 s; 1 s reserve for late
+    // stages before the t=3 s deadline). The worker stays parked through most
+    // of the reserve: `drain_server` may wait for its owner outside
+    // `timeout_at` — that is not the fallback branch unless the outer
+    // timeout itself expires.
     let shutdown_started = Instant::now();
     let mut shutdown = tokio::spawn(crate::runtime::drain_server(handle, TEST_DEADLINE));
     timeout(BOUND, teardown_rx)
@@ -256,12 +247,19 @@ async fn run_scheduled_worker() {
         finished.load(Ordering::SeqCst),
         "the post-run callback-stage marker must be set after its release wait (not proof of task exit)"
     );
+    // DECIDED: an expired bounded wait is NOT proof — the typed stage is
+    // recorded and the lock stays HELD even after the worker completed.
     assert!(
-        lock_after.is_ok(),
-        "the data-directory lock must be free after the callback reported successful completion"
+        lock_after.is_err(),
+        "an expired bounded owner wait must KEEP the data-directory lock: the bounded \
+         join timed out, its typed stage is recorded, and a leaked file is not reusable"
     );
-    // The bounded join timed out at the early cutoff; the outer deadline did
-    // not expire, so fallback drain was not the path taken.
+    assert_eq!(
+        shutdown.first_expired_owner_wait().map(|w| w.stage),
+        Some(shamir_db::ShutdownWaitStage::ScheduledBackupJoin),
+        "the expired bounded join must be recorded TYPED: {shutdown:?}"
+    );
+    // Bounded join timed out at the early cutoff; no fallback path taken.
     assert!(
         joined.load(Ordering::SeqCst),
         "bounded join marker must fire at the early-cutoff join"
@@ -274,11 +272,8 @@ async fn run_scheduled_worker() {
         !flush_entered.load(Ordering::SeqCst),
         "the repository flush must not run while the scheduled run is still pending: {shutdown:?}"
     );
-    // The runtime is STILL ALIVE here. Nothing may still hold a store: an
-    // observability handle dropped without cancellation would keep its poller
-    // and router (and their `Arc<ShamirDb>`) alive, and the barrier would still
-    // see a store lock (mutant: no cancel in `shutdown_with_report` and no
-    // `Drop` cancel on the handle).
+    // Still alive here: a leaked observability handle would keep its
+    // poller/router holding a store lock past the barrier.
     let released = release_stores(&data_dir, Duration::from_secs(10)).await;
     assert!(
         matches!(released, ReleaseOutcome::Released),
@@ -343,6 +338,7 @@ async fn run_normal_order() {
                     shutdown.child_token(),
                     Duration::from_secs(3600),
                     move |ok| completed.store(ok, Ordering::SeqCst),
+                    || {},
                 )
             }
         })
@@ -440,63 +436,6 @@ async fn run_normal_order() {
          waited for: {:?}",
         shutdown.repository_failures()
     );
-}
-
-/// Public `ServerHandle::shutdown()` has no outer deadline, yet the stages that
-/// wait on the blocking pool (token-GC join, meta-snapshot join) must stay
-/// bounded. A GC pass is restarted with no await before the pool is parked, so
-/// its blocking job is queued behind the parked one on every run (the
-/// launcher's own first pass races the park).
-#[test]
-fn public_shutdown_bounds_meta_snapshot_join_without_outer_deadline() {
-    on_single_blocking_thread(|| async {
-        let guard = FlakeGuard::with_watchdog(PUBLIC_TEST, Duration::from_secs(150));
-        try_install_global_tracing_ring();
-        let temp = tempfile::tempdir().expect("test root");
-        let data_dir = temp.path().join("data");
-        create_private_dir(&data_dir).expect("private data directory");
-        let handle = ServerLauncher {
-            config: bind_config(data_dir, "127.0.0.1:0".to_owned(), "127.0.0.1:0".to_owned()),
-            bootstrap: BootstrapMode::Skip,
-            node_mode: NodeMode::ReadWrite,
-        }
-        .launch()
-        .await
-        .expect("launch real server");
-        guard.mark("launched");
-
-        let stop = CancellationToken::new();
-        handle.token_service.shutdown_gc().await;
-        handle.token_service.start_gc(stop).await;
-        let occupant = BlockingPoolOccupant::park();
-        occupant.await_started();
-        guard.mark("token GC pass spawned, blocking pool occupied");
-        let report = timeout(BOUND, handle.shutdown())
-            .await
-            .expect("public shutdown must settle with the blocking pool parked");
-        guard.mark("shutdown returned");
-        let pool_still_occupied = !occupant.finished();
-        drop(occupant);
-
-        let errors = report.errors();
-        assert!(
-            errors
-                .iter()
-                .any(|error| error.contains("token GC shutdown exceeded 10s")),
-            "public shutdown must report the capped token-GC join expiry: {report:?}"
-        );
-        assert!(
-            errors
-                .iter()
-                .any(|error| error.contains("meta snapshot task did not stop within 5s")),
-            "public shutdown must report the capped meta-snapshot join expiry: {report:?}"
-        );
-        assert!(
-            pool_still_occupied,
-            "the shutdown report must be produced while the blocking job remains parked: {report:?}"
-        );
-        assert!(!report.is_clean(), "the report must be unclean: {report:?}");
-    });
 }
 
 /// A job that occupies the runtime's blocking pool until it is released.
@@ -597,9 +536,17 @@ fn listener_bind_rollback_keeps_the_boot_error_and_releases_the_lock() {
     // Nextest gives this test its own process, so the one-shot teardown probe
     // cannot be consumed by another test's launch.
     let teardown_ran = Arc::new(AtomicBool::new(false));
+    let sources_stopped = Arc::new(AtomicBool::new(false));
     let _teardown_probe = {
         let flag = Arc::clone(&teardown_ran);
         arm_teardown_probe(move || flag.store(true, Ordering::SeqCst))
+    };
+    // The rollback arm must run the ONE ordered release-source stop: fire the
+    // probe the helper fires after the sources stopped and the registry was
+    // cleared (mutant: the arm skips `stop_release_sources`).
+    let _sources_probe = {
+        let flag = Arc::clone(&sources_stopped);
+        arm_release_sources_stopped_probe(move || flag.store(true, Ordering::SeqCst))
     };
 
     let error = run_blocking(move || match block_on_launch(config) {
@@ -627,6 +574,11 @@ fn listener_bind_rollback_keeps_the_boot_error_and_releases_the_lock() {
         "the launch rollback must run the shared audit teardown (mutant: the `teardown_audit` \
          call removed from the listener-bind branch)"
     );
+    assert!(
+        sources_stopped.load(Ordering::SeqCst),
+        "the listener-bind rollback must stop the release sources and clear the registry \
+         (mutant: `stop_release_sources` removed from the arm)"
+    );
     // The rollback ran to completion: nothing of this launch holds the instance
     // lock any more, so a retry after freeing the port is possible.
     let lock = crate::maintenance_lock::acquire_server(&data_dir);
@@ -645,9 +597,14 @@ fn observability_bind_rollback_keeps_the_boot_error_and_releases_the_lock() {
     let occupied = held.local_addr().expect("held address").to_string();
     let config = bind_config(data_dir.clone(), "127.0.0.1:0".to_owned(), occupied.clone());
     let teardown_ran = Arc::new(AtomicBool::new(false));
+    let sources_stopped = Arc::new(AtomicBool::new(false));
     let _teardown_probe = {
         let flag = Arc::clone(&teardown_ran);
         arm_teardown_probe(move || flag.store(true, Ordering::SeqCst))
+    };
+    let _sources_probe = {
+        let flag = Arc::clone(&sources_stopped);
+        arm_release_sources_stopped_probe(move || flag.store(true, Ordering::SeqCst))
     };
 
     let error = run_blocking(move || match block_on_launch(config) {
@@ -672,10 +629,124 @@ fn observability_bind_rollback_keeps_the_boot_error_and_releases_the_lock() {
         "the launch rollback must run the shared audit teardown (mutant: the `teardown_audit` \
          call removed from the observability-bind branch)"
     );
+    assert!(
+        sources_stopped.load(Ordering::SeqCst),
+        "the observability-bind rollback must stop the release sources and clear the registry \
+         (mutant: `stop_release_sources` removed from the arm)"
+    );
     let lock = crate::maintenance_lock::acquire_server(&data_dir);
     assert!(
         lock.is_ok(),
         "the launch rollback must release the data-directory lock"
+    );
+}
+
+/// The observability-bind rollback with an OPEN interactive transaction in
+/// the registry: the pre-observability probe parks a REAL transaction (an
+/// in-memory `ShamirDb` tx registered into the SERVER's registry — the same
+/// `parked()` shape the activity tests use) at a deterministic point before
+/// the bind attempt, the occupied port fails the bind, and the test asserts
+/// the boot error still wins AND the registry is EMPTY after the rollback.
+/// With a registered tx present, emptiness FAILS if the arm's
+/// `stop_release_sources` (its `registry.remove_all()`) is removed — the
+/// teardown/sources markers alone cannot discriminate that, because with no
+/// tx registered the registry is empty either way.
+#[test]
+fn observability_rollback_clears_a_registry_with_an_open_tx() {
+    let temp = tempfile::tempdir().expect("test root");
+    let data_dir = temp.path().join("data");
+    create_private_dir(&data_dir).expect("private data directory");
+    let held = std::net::TcpListener::bind("127.0.0.1:0").expect("hold a port");
+    let occupied = held.local_addr().expect("held address").to_string();
+    let config = bind_config(data_dir.clone(), "127.0.0.1:0".to_owned(), occupied);
+
+    // The registry the launcher hands us; retained by cloning the Arc so the
+    // emptiness assertion runs AFTER the rollback returned.
+    let server_registry: Arc<
+        std::sync::Mutex<Option<std::sync::Arc<crate::tx_registry::TxRegistry>>>,
+    > = Arc::new(std::sync::Mutex::new(None));
+    let _registry_probe = {
+        let slot = Arc::clone(&server_registry);
+        arm_pre_observability_registry_probe(move |registry| {
+            let slot = Arc::clone(&slot);
+            let registry = std::sync::Arc::clone(registry);
+            Box::pin(async move {
+                // Park a REAL interactive tx (release closure = the real
+                // engine lock release, so the tail drain settles it like a
+                // production tx).
+                let owner = shamir_db::access::Actor::User(shamir_db::access::principal64([3; 16]));
+                let db = open_app_db_for_rollback(&owner).await;
+                // PESSIMISTIC with a staged write: it HOLDS a real record
+                // lock, so a rollback that skips the tail drain fails here.
+                let (mut ctx, snapshot) = db
+                    .tx_begin_as(owner.clone(), "app", "main", "pessimistic")
+                    .await
+                    .expect("begin interactive tx");
+                let mut batch = shamir_query_builder::batch::Batch::new();
+                let insert = shamir_query_builder::write::Insert::with_repo("main", "items")
+                    .row(shamir_query_builder::doc! { "id" => 1_i64 });
+                batch.insert("staged", insert);
+                db.tx_execute_as(owner.clone(), "app", &batch.build(), &mut ctx)
+                    .await
+                    .expect("stage a write that takes the record lock");
+                let handle = ctx.tx_id.0;
+                let repo = db
+                    .get_db("app")
+                    .expect("fixture db")
+                    .get_repo("main")
+                    .expect("fixture repo");
+                let release: crate::tx_registry::TxAbortRelease =
+                    std::sync::Arc::new(move |parked: shamir_tx::TxContext| {
+                        let repo = repo.clone();
+                        Box::pin(async move {
+                            shamir_db::engine::tx::release_interactive_tx_locks(
+                                &parked,
+                                repo.core(),
+                            )
+                            .await;
+                        })
+                            as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+                    });
+                let it = crate::tx_registry::InteractiveTx::new(
+                    ctx,
+                    snapshot,
+                    [9; 32],
+                    [9; 16],
+                    "app".into(),
+                    "main".into(),
+                    Duration::from_secs(3_600),
+                    release,
+                );
+                let registered = registry.register(handle, it);
+                assert!(
+                    registered.is_ok(),
+                    "the tx must park into the server's registry: {}",
+                    registered.err().map(|e| e.to_string()).unwrap_or_default()
+                );
+                assert!(!registry.is_empty(), "the tx must be registered");
+                *slot.lock().expect("registry slot") = Some(registry);
+            })
+        })
+    };
+
+    let error = run_blocking(move || match block_on_launch(config) {
+        Ok(_) => panic!("the occupied observability port must fail the bind"),
+        Err(error) => error,
+    });
+    let message = error.to_string();
+    assert!(
+        message.contains("listener bind") && message.contains("observability"),
+        "the boot error must still win over the rollback cleanup: {message}"
+    );
+    let registry = server_registry
+        .lock()
+        .expect("registry slot")
+        .clone()
+        .expect("the probe must have parked a tx before the bind attempt");
+    assert!(
+        registry.is_empty(),
+        "the rollback must clear the registry even with an open tx present (mutant: \
+         `stop_release_sources` removed from the arm)"
     );
 }
 
@@ -727,24 +798,6 @@ where
     run_blocking(move || {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
-            .build()
-            .expect("test runtime")
-            .block_on(body())
-    })
-}
-
-/// Like [`on_big_stack`], but with EXACTLY ONE blocking thread: the test can
-/// then occupy the whole pool with one parked job instead of guessing how many
-/// workers a default pool would hand out.
-fn on_single_blocking_thread<F, Fut>(body: F)
-where
-    F: FnOnce() -> Fut + Send + 'static,
-    Fut: Future<Output = ()>,
-{
-    run_blocking(move || {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .max_blocking_threads(1)
             .build()
             .expect("test runtime")
             .block_on(body())
@@ -842,4 +895,25 @@ fn listener_config(addr: String) -> ListenerConfig {
         kdf_override: None,
         browser_origin_allowlist: Vec::new(),
     }
+}
+
+/// In-memory `app`/`main` fixture for the observability-rollback test's open
+/// transaction (the same shape the activity tests' `parked()` helper uses).
+async fn open_app_db_for_rollback(
+    owner: &shamir_db::access::Actor,
+) -> std::sync::Arc<shamir_db::ShamirDb> {
+    let db = shamir_db::ShamirDb::init_memory()
+        .await
+        .expect("in-memory db");
+    db.create_db_as("app", owner.clone())
+        .await
+        .expect("create db");
+    db.add_repo_as(
+        "app",
+        RepoConfig::new("main", BoxRepoFactory::in_memory()).add_table(TableConfig::new("items")),
+        owner.clone(),
+    )
+    .await
+    .expect("add repo");
+    std::sync::Arc::new(db)
 }

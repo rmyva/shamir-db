@@ -39,7 +39,7 @@ pub use crate::shamir_db::{
 };
 pub use crate::shamir_db::{ShamirDb, SystemStoreConfig};
 
-pub use crate::shamir_db::shamir_db::ShutdownReport;
+pub use crate::shamir_db::shamir_db::{ExpiredOwnerWait, ShutdownReport, ShutdownWaitStage};
 
 // S5c-X PR8b-2: durable subscription binding (shamir-server stage W2 needs
 // the type and the version constant).

@@ -121,6 +121,7 @@ async fn two_registries_report_independent_schedule_sections() {
         shutdown_a.clone(),
         Duration::from_secs(3600),
         |_| {},
+        || {},
     );
     // B stays schedule-less while A's scheduler is live.
     assert_eq!(
@@ -146,6 +147,7 @@ async fn two_registries_report_independent_schedule_sections() {
         shutdown_b.clone(),
         Duration::from_secs(7200),
         |_| {},
+        || {},
     );
     assert_eq!(
         schedule_interval(&b).await,
@@ -287,6 +289,7 @@ async fn scheduled_success_publishes_done_real_next_run_and_rejects_stale_genera
         move |ok| {
             let _ = tx.send(ok);
         },
+        || {},
     );
     let completed = tokio::time::timeout(remaining(deadline), rx.recv())
         .await
@@ -348,6 +351,7 @@ async fn scheduled_success_publishes_done_real_next_run_and_rejects_stale_genera
         shutdown2.clone(),
         Duration::from_secs(interval_secs),
         |_| {},
+        || {},
     );
     let cell = registry.schedule_cell();
     // NO signal exists for this wait: the next-run cell is published by the
@@ -558,6 +562,7 @@ async fn abort_before_first_poll_clears_the_schedule_section() {
         shutdown.clone(),
         Duration::from_secs(3600),
         |_| {},
+        || {},
     );
     // The install is SYNCHRONOUS inside `spawn_for_test`: the section must be
     // present BEFORE the abort, proving the abort (not a failed install)
@@ -610,6 +615,7 @@ async fn abort_after_first_poll_clears_the_schedule_section() {
         move |ok| {
             let _ = tx.send(ok);
         },
+        || {},
     );
     let ok = tokio::time::timeout(remaining(deadline), rx.recv())
         .await
@@ -697,6 +703,7 @@ async fn window_excluding_now_skips_both_ticks_and_never_admits_a_run() {
         shutdown.clone(),
         Duration::from_secs(interval_secs),
         |_| {},
+        || {},
     );
 
     // Two full scheduled ticks across virtual hours: the boot tick and the
@@ -788,6 +795,7 @@ async fn huge_interval_next_run_survives_u128_to_the_cell_unclamped() {
         shutdown.clone(),
         interval,
         |_| {},
+        || {},
     );
 
     // The publication happens at the runner's first poll. NO signal exists

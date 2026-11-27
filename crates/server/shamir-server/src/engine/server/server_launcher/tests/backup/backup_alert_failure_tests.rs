@@ -68,6 +68,7 @@ async fn run_alert_failure() {
                 move |ok| {
                     let _ = send.send(ok);
                 },
+                || {},
             )
         })
         .await

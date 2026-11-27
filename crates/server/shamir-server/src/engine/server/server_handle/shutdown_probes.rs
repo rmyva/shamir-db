@@ -121,6 +121,166 @@ pub(in crate::engine::server) fn fire_repo_flush_probe() {
     }
 }
 
+/// One-shot probe fired in
+/// [`release_source_stop::stop_release_sources_and_drain_tails`] immediately
+/// AFTER the release sources are stopped and the registry cleared, BEFORE the
+/// tail admission closes and (on the graceful path) BEFORE the repository
+/// flush stage. A shutdown test compares its order with
+/// [`arm_repo_flush_probe`]: the sources must stop before the flush, so this
+/// marker must fire first (mutant: the helper moved after the flush).
+#[cfg(test)]
+static RELEASE_SOURCES_STOPPED_PROBE: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
+
+/// Clears an unfired [`arm_release_sources_stopped_probe`]; a probe that
+/// fires removes itself from the slot.
+#[cfg(test)]
+pub(crate) struct ReleaseSourcesStoppedProbeGuard;
+
+#[cfg(test)]
+impl Drop for ReleaseSourcesStoppedProbeGuard {
+    fn drop(&mut self) {
+        *RELEASE_SOURCES_STOPPED_PROBE
+            .lock()
+            .expect("release sources stopped probe") = None;
+    }
+}
+
+/// Arm ONE release-sources-stopped probe.
+#[cfg(test)]
+pub(crate) fn arm_release_sources_stopped_probe(
+    probe: impl FnOnce() + Send + 'static,
+) -> ReleaseSourcesStoppedProbeGuard {
+    *RELEASE_SOURCES_STOPPED_PROBE
+        .lock()
+        .expect("release sources stopped probe") = Some(Box::new(probe));
+    ReleaseSourcesStoppedProbeGuard
+}
+
+/// Fire and consume the release-sources-stopped probe, if any.
+#[cfg(test)]
+pub(in crate::engine::server) fn fire_release_sources_stopped_probe() {
+    let probe = RELEASE_SOURCES_STOPPED_PROBE
+        .lock()
+        .expect("release sources stopped probe")
+        .take();
+    if let Some(probe) = probe {
+        probe();
+    }
+}
+
+/// One-shot probe fired in
+/// [`release_source_stop::stop_release_sources_and_drain_tails`] immediately
+/// AFTER the registry is cleared (`drop(registry.remove_all())`), BEFORE the
+/// release-sources-stopped probe fires. A shutdown order test asserts this
+/// marker FIRED and precedes the sources-stopped and flush markers, so
+/// removing the registry clearing while leaving the markers in place fails
+/// the test (the sources-stopped marker alone cannot discriminate that).
+#[cfg(test)]
+static REGISTRY_CLEARED_PROBE: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
+
+/// Clears an unfired [`arm_registry_cleared_probe`]; a probe that fires
+/// removes itself from the slot.
+#[cfg(test)]
+pub(crate) struct RegistryClearedProbeGuard;
+
+#[cfg(test)]
+impl Drop for RegistryClearedProbeGuard {
+    fn drop(&mut self) {
+        *REGISTRY_CLEARED_PROBE
+            .lock()
+            .expect("registry cleared probe") = None;
+    }
+}
+
+/// Arm ONE registry-cleared probe.
+#[cfg(test)]
+pub(crate) fn arm_registry_cleared_probe(
+    probe: impl FnOnce() + Send + 'static,
+) -> RegistryClearedProbeGuard {
+    *REGISTRY_CLEARED_PROBE
+        .lock()
+        .expect("registry cleared probe") = Some(Box::new(probe));
+    RegistryClearedProbeGuard
+}
+
+/// Fire and consume the registry-cleared probe, if any.
+#[cfg(test)]
+pub(in crate::engine::server) fn fire_registry_cleared_probe() {
+    let probe = REGISTRY_CLEARED_PROBE
+        .lock()
+        .expect("registry cleared probe")
+        .take();
+    if let Some(probe) = probe {
+        probe();
+    }
+}
+
+/// One-shot probe fired in the LAUNCHER immediately BEFORE the observability
+/// bind attempt, handing the test the server's transaction registry. A
+/// rollback test parks a REAL interactive transaction into it and asserts,
+/// after the boot error returned, that the registry is EMPTY: with an open tx
+/// present, emptiness fails if the rollback arm's `stop_release_sources` (its
+/// `registry.remove_all()`) is removed — the stop/teardown markers alone
+/// cannot discriminate that, because with no tx registered the registry is
+/// empty either way. The closure is awaited by the launcher, so the test can
+/// park the transaction (async) at a deterministic point BEFORE the bind
+/// failure, without any polling.
+#[cfg(test)]
+type PreObservabilityRegistryProbe = Box<
+    dyn FnOnce(
+            &std::sync::Arc<shamir_sync::durability::tx::tx_registry::TxRegistry>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+        + Send,
+>;
+
+#[cfg(test)]
+static PRE_OBSERVABILITY_REGISTRY_PROBE: Mutex<Option<PreObservabilityRegistryProbe>> =
+    Mutex::new(None);
+
+/// Clears an unfired [`arm_pre_observability_registry_probe`]; a probe that
+/// fires removes itself from the slot.
+#[cfg(test)]
+pub(crate) struct PreObservabilityRegistryProbeGuard;
+
+#[cfg(test)]
+impl Drop for PreObservabilityRegistryProbeGuard {
+    fn drop(&mut self) {
+        *PRE_OBSERVABILITY_REGISTRY_PROBE
+            .lock()
+            .expect("pre-observability registry probe") = None;
+    }
+}
+
+/// Arm ONE pre-observability registry probe.
+#[cfg(test)]
+pub(crate) fn arm_pre_observability_registry_probe(
+    probe: impl FnOnce(
+            &std::sync::Arc<shamir_sync::durability::tx::tx_registry::TxRegistry>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+        + Send
+        + 'static,
+) -> PreObservabilityRegistryProbeGuard {
+    *PRE_OBSERVABILITY_REGISTRY_PROBE
+        .lock()
+        .expect("pre-observability registry probe") = Some(Box::new(probe));
+    PreObservabilityRegistryProbeGuard
+}
+
+/// Fire and consume the pre-observability registry probe, if any. Awaited by
+/// the launcher before the observability bind attempt.
+#[cfg(test)]
+pub(crate) async fn fire_pre_observability_registry_probe(
+    registry: &std::sync::Arc<shamir_sync::durability::tx::tx_registry::TxRegistry>,
+) {
+    let probe = PRE_OBSERVABILITY_REGISTRY_PROBE
+        .lock()
+        .expect("pre-observability registry probe")
+        .take();
+    if let Some(probe) = probe {
+        probe(registry).await;
+    }
+}
+
 /// One-shot probe fired at the ENTRY of the store-release stage's zero-budget
 /// branch (`server_handle/core.rs`, `release_budget.is_zero()`). Test-only: a
 /// deadline test that exhausts every stage deadline at once must be able to
@@ -162,6 +322,28 @@ pub(in crate::engine::server) fn fire_release_zero_budget_probe() {
     let probe = RELEASE_ZERO_BUDGET_PROBE
         .lock()
         .expect("release zero-budget probe")
+        .take();
+    if let Some(probe) = probe {
+        probe();
+    }
+}
+
+static META_SNAPSHOT_JOIN_PROBE: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
+
+/// Arm the one-shot probe fired at the ENTRY of the meta-snapshot join stage
+/// (teardown step 6): a test can prove the stage was REACHED before it makes
+/// any report assertion, instead of racing the outer deadline.
+pub(crate) fn arm_meta_snapshot_join_probe(probe: impl FnOnce() + Send + 'static) {
+    *META_SNAPSHOT_JOIN_PROBE
+        .lock()
+        .expect("meta snapshot join probe") = Some(Box::new(probe));
+}
+
+/// Fire (and clear) the meta-snapshot-join-entry probe, if armed.
+pub(in crate::engine::server) fn fire_meta_snapshot_join_probe() {
+    let probe = META_SNAPSHOT_JOIN_PROBE
+        .lock()
+        .expect("meta snapshot join probe")
         .take();
     if let Some(probe) = probe {
         probe();

@@ -29,7 +29,7 @@ use shamir_private_dir::create_private_dir;
 use shamir_test_diag::{ring::shared_ring, try_install_global_tracing_ring};
 use tokio_util::sync::CancellationToken;
 
-use super::rollback_cleanup::{join_meta_snapshot, log_rollback_cleanup};
+use super::rollback_cleanup::{join_meta_snapshot_settled, log_rollback_cleanup};
 use crate::config::{
     Config, KdfConfig, ListenerConfig, ListenerKind, LoggingConfig, ObservabilityConfig, TlsConfig,
 };
@@ -96,7 +96,7 @@ impl LockoutSnapshotSink for SaveSignal {
 }
 
 /// Polls a future exactly once without waiting for it.
-async fn poll_once<F: Future<Output = ()> + Unpin>(future: &mut F) -> Poll<()> {
+async fn poll_once<F: Future + Unpin>(future: &mut F) -> Poll<F::Output> {
     std::future::poll_fn(|cx| Poll::Ready(Pin::new(&mut *future).poll(cx))).await
 }
 
@@ -156,7 +156,10 @@ fn rollback_meta_snapshot_join_is_bounded_with_a_saturated_blocking_pool() {
             tokio::task::yield_now().await;
         }
 
-        let mut join = Box::pin(join_meta_snapshot("test-rollback-meta-join", Some(task)));
+        let mut join = Box::pin(join_meta_snapshot_settled(
+            "test-rollback-meta-join",
+            Some(task),
+        ));
         assert!(
             poll_once(&mut join).await.is_pending(),
             "the join must wait for the stuck task"

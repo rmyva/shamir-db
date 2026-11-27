@@ -29,7 +29,15 @@ use crate::server::boot_error::BootError;
 use shamir_connect::server::token_session::TokenSocketCaps;
 use shamir_transport_http::PeerInfo;
 
-type StartedHttp = (SocketAddr, JoinHandle<()>, Arc<RestGate>);
+use crate::server::server_handle::HttpListenerOutcome;
+
+/// Bound for joining the HTTP login audit consumer at shutdown (2 s; the
+/// same bound `drain_audit_task` uses — the consumer is cooperative and its
+/// already-running blocking appends are a known limit, see the operations
+/// guide).
+const AUDIT_CONSUMER_DRAIN: Duration = Duration::from_secs(2);
+
+type StartedHttp = (SocketAddr, JoinHandle<HttpListenerOutcome>, Arc<RestGate>);
 type UsernameLookup = Arc<dyn Fn(&[u8; 16]) -> String + Send + Sync>;
 
 async fn drain_audit_task(task: &mut JoinHandle<()>) -> Result<(), tokio::task::JoinError> {
@@ -417,6 +425,13 @@ pub(in crate::engine::server::server_launcher) async fn start_http_listener(
         async move {
             let config = Arc::new(config);
             let executor = Arc::new(executor);
+            // The drain failures here are TYPED unsettled stages of the
+            // shutdown report (see `HttpListenerOutcome`): aborting the
+            // audit consumer does not stop an already running blocking
+            // append, and workers left detached after the drain budget are
+            // not quiescence — the report must be unclean and the
+            // data-directory lock kept.
+            let mut outcome = HttpListenerOutcome::settled();
             let result = if let Some((routes, audit_task, audit_shutdown)) = routes {
                 let _audit_stop = audit_shutdown.clone().drop_guard();
                 let result = serve_with_routes(
@@ -433,15 +448,19 @@ pub(in crate::engine::server::server_launcher) async fn start_http_listener(
                 )
                 .await;
                 let worker_drain = HttpLoginRoutes::worker_drain_budget(request_timeout_ms);
+                outcome.login_worker_budget = worker_drain;
                 if !routes.shutdown(worker_drain).await {
+                    outcome.login_workers_settled = false;
                     tracing::warn!(drain_ms = worker_drain.as_millis(), "HTTP login worker drain timed out; workers remain detached; later audit events may be lost");
                 }
                 audit_shutdown.cancel();
                 let mut audit_task = audit_task;
-                if tokio::time::timeout(Duration::from_secs(2), &mut audit_task)
+                outcome.audit_consumer_budget = AUDIT_CONSUMER_DRAIN;
+                if tokio::time::timeout(AUDIT_CONSUMER_DRAIN, &mut audit_task)
                     .await
                     .is_err()
                 {
+                    outcome.audit_consumer_settled = false;
                     tracing::warn!("HTTP login audit consumer drain timed out; queued and late events may be lost");
                     audit_task.abort();
                     let _ = audit_task.await;
@@ -465,6 +484,7 @@ pub(in crate::engine::server::server_launcher) async fn start_http_listener(
             if let Err(error) = result {
                 tracing::error!(%error, "HTTP listener stopped");
             }
+            outcome
         }
         .instrument(span),
     );

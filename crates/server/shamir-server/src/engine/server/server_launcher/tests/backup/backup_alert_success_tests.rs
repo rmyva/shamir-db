@@ -62,6 +62,7 @@ async fn run_alert_success() {
                     }
                     let _ = send.send(ok);
                 },
+                || {},
             )
         })
         .await

@@ -57,8 +57,10 @@ pub(super) async fn open(
     // opening any durable store. Every store under this root is fjall
     // (repository stores, counters, sessions, users and `server_meta`), and
     // the redb-era wording here was stale. Ownership runs from this point to
-    // the shutdown: the `File` lives in `ServerHandle.data_dir_lock` until
-    // `ShutdownOwner::drain` drops it (the kernel also releases on crash).
+    // the shutdown: the `File` lives wrapped in `ServerHandle.data_dir_lock`
+    // (a `DataDirLock`) until `ShutdownOwner::drain` releases it cleanly (the
+    // kernel also releases on crash; any other end of the owner's life leaks
+    // the file so the lock survives until process exit).
     // This keeps two servers from opening the same data_dir and corrupting or
     // contending its stores.
     let data_dir_lock = crate::maintenance_lock::acquire_server(&config.data_dir)?;

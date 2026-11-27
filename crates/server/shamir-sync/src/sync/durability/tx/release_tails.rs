@@ -105,6 +105,12 @@ impl ReleaseTails {
         self.inner.state.lock().closed = true;
     }
 
+    /// Observability for shutdown tests: how many release tails are
+    /// currently live (0 = every registered release has settled).
+    pub fn live_tails_for_test(&self) -> usize {
+        self.inner.state.lock().live
+    }
+
     /// Wait until no registered tail is live, or `false` at `deadline`.
     pub async fn drain(&self, deadline: tokio::time::Instant) -> bool {
         loop {

@@ -246,3 +246,43 @@ fn assert_shutdown_error_and_metric(report: &ShutdownReport, error: &str) {
         "{captured}",
     );
 }
+
+use crate::boot::runtime::exits_through_bounded_shutdown;
+
+// SHUTDOWN-OWNER R2: the bounded runtime shutdown (one 5 s bound, the same at
+// all three sites) is entered when the boot failed OR the shutdown report is
+// abnormal; a clean report and a missing report never enter it.
+#[test]
+fn bounded_runtime_shutdown_decision_follows_boot_failure_and_report_abnormality() {
+    // A failed boot leaves through the bound, with or without a report.
+    assert!(exits_through_bounded_shutdown(true, None));
+    assert!(exits_through_bounded_shutdown(true, Some(false)));
+    assert!(exits_through_bounded_shutdown(true, Some(true)));
+    // A clean report and a missing report never do.
+    assert!(!exits_through_bounded_shutdown(false, None));
+    assert!(!exits_through_bounded_shutdown(false, Some(false)));
+    // An abnormal report (exit code 70, e.g. an expired owner wait) does —
+    // this is the path a wedged blocking job could otherwise hold forever.
+    assert!(exits_through_bounded_shutdown(false, Some(true)));
+    // The values that actually occur in the binary:
+    let mut report = ShutdownReport::pending(Vec::new());
+    assert!(!exits_through_bounded_shutdown(
+        false,
+        Some(!report.is_clean())
+    ));
+    report.add_error("shutdown owner wait expired (release tail drain: ...)".to_owned());
+    assert!(exits_through_bounded_shutdown(
+        false,
+        Some(!report.is_clean())
+    ));
+}
+
+#[test]
+fn the_bounded_exit_bound_is_the_single_named_five_second_constant() {
+    assert_eq!(
+        crate::boot::runtime::EXIT_RUNTIME_SHUTDOWN_TIMEOUT,
+        Duration::from_secs(5),
+        "the bounded runtime shutdown keeps its existing 5 s value; a second value would \
+         mean two different wedged-exit behaviours"
+    );
+}
