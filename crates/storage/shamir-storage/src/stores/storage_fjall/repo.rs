@@ -128,6 +128,34 @@ impl FjallRepo {
             .map_err(|e| DbError::Storage(e.to_string()))?;
         Ok(Self { db: Arc::new(db) })
     }
+
+    /// cfg(test): flush the named store's active memtable into persisted
+    /// segments (see `FjallStore::persist_memtables_for_test`) so tests can
+    /// exercise the persisted-table read path of `iter_range_stream`. Lives
+    /// on the repo because tests only hold `Arc<dyn Store>` handles (no
+    /// downcast), which cannot reach the concrete store's seam.
+    #[cfg(test)]
+    pub(crate) async fn persist_memtables_for_test(&self, store: &str) -> DbResult<()> {
+        validate_store_name(store)?;
+        let db = self.db.clone();
+        let name = store.to_string();
+        let db_for_open = db.clone();
+        let keyspace = task::spawn_blocking(move || -> DbResult<Keyspace> {
+            db_for_open
+                .keyspace(&name, KeyspaceCreateOptions::default)
+                .map_err(|e| DbError::Storage(e.to_string()))
+        })
+        .await
+        .map_err(|e| DbError::Internal(e.to_string()))??;
+        let store_handle = FjallStore {
+            keyspace,
+            db,
+            worker: std::sync::OnceLock::new(),
+            spawn_worker: None,
+        };
+        store_handle.persist_memtables_for_test();
+        Ok(())
+    }
 }
 
 #[async_trait]

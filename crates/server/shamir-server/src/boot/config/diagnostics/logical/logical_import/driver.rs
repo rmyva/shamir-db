@@ -25,6 +25,12 @@ use super::stage::lock::ImportLock;
 use super::stage::receipt::{Receipt, RECEIPT_NAME};
 use crate::engine::server::wait_stores_released;
 
+/// doc(hidden) re-export of the load stage's commit-boundary seam so the
+/// integration tests (`tests/admin/logical_dump`) can reach it through the
+/// crate root. NEW item — no existing visibility was widened.
+#[doc(hidden)]
+pub use super::load::stage_load::COMMIT_BOUNDARY;
+
 /// Same bound as the server's shutdown barrier
 /// (`engine::server::server_handle::STORE_RELEASE_TIMEOUT`, private there, so
 /// mirrored here): how long we poll for every fjall store under a directory
@@ -67,8 +73,14 @@ pub async fn import(
     }
     prepare_target_name(&args.target)?;
     let preflight_started = Instant::now();
-    let preflight = Preflight::run(&args.input, &args, &cancel)?;
-    phase("preflight", preflight_started, "");
+    let preflight_result = Preflight::run(&args.input, &args, &cancel);
+    let preflight_outcome = outcome_of(preflight_result.as_ref().err());
+    let preflight = preflight_result?;
+    phase(
+        "preflight",
+        preflight_started,
+        &format!("outcome={preflight_outcome}"),
+    );
     progress(&format!(
         "preflight verified: {} identities, {} repositories, {} tables",
         preflight.identities.len(),
@@ -84,7 +96,11 @@ pub async fn import(
             phase(
                 "publish",
                 publish_started,
-                &args.target.display().to_string(),
+                &format!(
+                    "outcome={} {}",
+                    outcome_of(published.as_ref().err()),
+                    args.target.display()
+                ),
             );
             match published {
                 Ok(()) => {
@@ -101,7 +117,7 @@ pub async fn import(
             // the stage's fjall locks so the discard's remove cannot hit a
             // locked file on Windows. Fail closed: discard aborted on timeout.
             let close_started = Instant::now();
-            wait_stores_released(stage.path(), STORE_RELEASE_TIMEOUT)
+            let released = wait_stores_released(stage.path(), STORE_RELEASE_TIMEOUT)
                 .await
                 .map_err(|locked| {
                     LogicalImportError::Stage(format!(
@@ -112,8 +128,16 @@ pub async fn import(
                             .collect::<Vec<_>>()
                             .join(", ")
                     ))
-                })?;
-            phase("close_wait", close_started, "stage=discard");
+                });
+            phase(
+                "close_wait",
+                close_started,
+                &format!(
+                    "stage=discard outcome={}",
+                    outcome_of(released.as_ref().err())
+                ),
+            );
+            released?;
             stage.discard()?;
             Err(e)
         }
@@ -136,16 +160,20 @@ async fn import_into_stage(
     // otherwise vanish with the engine's memory and the published directory
     // would silently miss them.
     let flush_started = Instant::now();
-    loaded
-        .home
-        .flush_all_waiting()
-        .await
-        .map_err(|e| LogicalImportError::Stage(format!("cannot flush the staged database: {e}")))?;
+    let flushed =
+        loaded.home.flush_all_waiting().await.map_err(|e| {
+            LogicalImportError::Stage(format!("cannot flush the staged database: {e}"))
+        });
     phase(
         "final_flush",
         flush_started,
-        &format!("records={}", loaded.records),
+        &format!(
+            "records={} outcome={}",
+            loaded.records,
+            outcome_of(flushed.as_ref().err())
+        ),
     );
+    flushed?;
     // Handle-lifecycle invariant: every handle the import opened (the staged
     // engine, its repositories and the user directory) is closed and dropped
     // BEFORE the publish rename, exactly once per instance — no database may
@@ -156,7 +184,7 @@ async fn import_into_stage(
     // every store is lock-free BEFORE the fresh validation open, so the open
     // can never race a live store. Fail closed on timeout.
     let close_started = Instant::now();
-    wait_stores_released(stage.path(), STORE_RELEASE_TIMEOUT)
+    let released = wait_stores_released(stage.path(), STORE_RELEASE_TIMEOUT)
         .await
         .map_err(|locked| {
             LogicalImportError::Stage(format!(
@@ -167,20 +195,33 @@ async fn import_into_stage(
                     .collect::<Vec<_>>()
                     .join(", ")
             ))
-        })?;
-    phase("close_wait", close_started, "stage=validation");
+        });
+    phase(
+        "close_wait",
+        close_started,
+        &format!(
+            "stage=validation outcome={}",
+            outcome_of(released.as_ref().err())
+        ),
+    );
+    released?;
     // Stage validation reads from a FRESH open of the staged directory, so
     // "validation passed" can never again mean "the loading engine still had
     // the records in memory".
     let reopen_started = Instant::now();
-    let reopened = ShamirDb::init(SystemStoreConfig::Fjall(
+    let reopen = ShamirDb::init(SystemStoreConfig::Fjall(
         stage.path().join("shamir_db_meta.redb"),
     ))
     .await
-    .map_err(|e| LogicalImportError::Stage(format!("cannot re-open the staged engine: {e}")))?;
-    phase("staging_reopen", reopen_started, "");
+    .map_err(|e| LogicalImportError::Stage(format!("cannot re-open the staged engine: {e}")));
+    phase(
+        "staging_reopen",
+        reopen_started,
+        &format!("outcome={}", outcome_of(reopen.as_ref().err())),
+    );
+    let reopened = reopen?;
     let validate_started = Instant::now();
-    validate::run(
+    let validated = validate::run(
         &reopened,
         preflight,
         &db_name,
@@ -188,17 +229,23 @@ async fn import_into_stage(
         &args.input,
         cancel,
     )
-    .await?;
+    .await;
     phase(
         "validate",
         validate_started,
-        &format!("records={}", loaded.records),
+        &format!(
+            "records={} outcome={}",
+            loaded.records,
+            outcome_of(validated.as_ref().err())
+        ),
     );
+    validated?;
     drop(reopened);
     // Deterministic close (root-cause fix for the Windows rename): wait until
     // every staged store (shamir_db + users) is lock-free BEFORE the stamp,
     // receipt and publish — the rename below can never hit a locked file.
-    wait_stores_released(stage.path(), STORE_RELEASE_TIMEOUT)
+    let close_started = Instant::now();
+    let released = wait_stores_released(stage.path(), STORE_RELEASE_TIMEOUT)
         .await
         .map_err(|locked| {
             LogicalImportError::Stage(format!(
@@ -209,7 +256,16 @@ async fn import_into_stage(
                     .collect::<Vec<_>>()
                     .join(", ")
             ))
-        })?;
+        });
+    phase(
+        "close_wait",
+        close_started,
+        &format!(
+            "stage=receipt outcome={}",
+            outcome_of(released.as_ref().err())
+        ),
+    );
+    released?;
     progress("validated against the artifact");
     let epoch = match inspect(stage.path()) {
         StampState::Valid(stamp) => stamp.format_epoch(),
@@ -220,12 +276,17 @@ async fn import_into_stage(
         }
     };
     let hash_started = Instant::now();
-    let artifact_digest = artifact_sha256(&args.input, cancel)?;
+    let hashed = artifact_sha256(&args.input, cancel);
     phase(
         "receipt_hash",
         hash_started,
-        &format!("bytes={}", preflight.report.bytes),
+        &format!(
+            "bytes={} outcome={}",
+            preflight.report.bytes,
+            outcome_of(hashed.as_ref().err())
+        ),
     );
+    let artifact_digest = hashed?;
     let receipt = Receipt {
         artifact_sha256: artifact_digest,
         source_db: preflight.database.name.clone(),
@@ -270,7 +331,15 @@ async fn retry_existing(
             args.target.display()
         )));
     }
-    let preflight = Preflight::run(&args.input, args, cancel)?;
+    let preflight_started = Instant::now();
+    let preflight_result = Preflight::run(&args.input, args, cancel);
+    let preflight_outcome = outcome_of(preflight_result.as_ref().err());
+    let preflight = preflight_result?;
+    phase(
+        "preflight",
+        preflight_started,
+        &format!("stage=retry outcome={preflight_outcome}"),
+    );
     let receipt = match Receipt::read(&args.target)? {
         Some(receipt) => receipt,
         None => {
@@ -285,12 +354,17 @@ async fn retry_existing(
         .clone()
         .unwrap_or_else(|| preflight.database.name.clone());
     let hash_started = Instant::now();
-    let artifact_digest = artifact_sha256(&args.input, cancel)?;
+    let hashed = artifact_sha256(&args.input, cancel);
     phase(
         "receipt_hash",
         hash_started,
-        &format!("bytes={}", preflight.report.bytes),
+        &format!(
+            "stage=retry bytes={} outcome={}",
+            preflight.report.bytes,
+            outcome_of(hashed.as_ref().err())
+        ),
     );
+    let artifact_digest = hashed?;
     if !receipt.matches(
         &artifact_digest,
         &preflight.database.name,
@@ -399,10 +473,21 @@ fn progress(message: &str) {
     eprintln!("logical-import: {message}");
 }
 
+/// `outcome=ok|error|cancelled` for a fallible phase line: a
+/// `LogicalImportError::Cancelled` maps to `cancelled`, any other `Err` to
+/// `error`, `None` to `ok`. Printed BEFORE the result propagates.
+fn outcome_of(err: Option<&LogicalImportError>) -> &'static str {
+    match err {
+        None => "ok",
+        Some(LogicalImportError::Cancelled) => "cancelled",
+        Some(_) => "error",
+    }
+}
+
 /// Phase timing line: single-line, no secrets. Mirrors `progress` but with
 /// a machine-readable `LOGICAL_IMPORT_PHASE phase=<name> elapsed_ms=<ms>
 /// <extras>` shape so CI logs can pin per-phase budgets.
-pub(crate) fn phase(phase: &str, started: Instant, extras: &str) {
+pub(super) fn phase(phase: &str, started: Instant, extras: &str) {
     let elapsed_ms = started.elapsed().as_millis();
     if extras.is_empty() {
         eprintln!("LOGICAL_IMPORT_PHASE phase={phase} elapsed_ms={elapsed_ms}");

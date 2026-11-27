@@ -66,6 +66,19 @@ impl std::error::Error for WorkerStartError {
 }
 
 impl FjallStore {
+    /// cfg(test): flush the active memtable into persisted segments so tests
+    /// can exercise the persisted-table read path of `iter_range_stream`.
+    /// Bounded fjall API call: `Keyspace::rotate_memtable_and_wait`
+    /// (fjall 3.1.13 `src/keyspace/mod.rs:713`, `#[doc(hidden)]`) seals the
+    /// memtable, enqueues the flush task, and waits until sealed memtables
+    /// reach zero. Blocking — call from a blocking context only.
+    #[cfg(test)]
+    pub(crate) fn persist_memtables_for_test(&self) {
+        self.keyspace
+            .rotate_memtable_and_wait()
+            .expect("memtable rotation + flush must succeed");
+    }
+
     /// Lazily spawn (on first call) or return the already-spawned write
     /// worker for this store. See the `worker` field's doc comment for why
     /// this must be lazy rather than eager.
@@ -247,9 +260,11 @@ impl Store for FjallStore {
     }
 
     /// Forward range scan using fjall's `keyspace.range(...)` — seeks
-    /// directly to the lower bound in the LSM tree, O(log N + K).
-    /// Replaces the default `iter_stream` + filter impl, which was
-    /// O(total keyspace) per call. Mirrors
+    /// directly to the lower bound in the LSM tree. Each BATCH call costs
+    /// O(log N + K); the cursor re-opens `range` with a `Bound::Excluded`
+    /// upper cursor per batch, so a whole K-key stream costs O(B·(log N + K))
+    /// over B batches (K keys total). Replaces the default `iter_stream` +
+    /// filter impl, which was O(total keyspace) per call. Mirrors
     /// `iter_range_stream_reverse`, walking upward: the cursor
     /// advances past each batch's last key via `Bound::Excluded`.
     fn iter_range_stream(
@@ -329,7 +344,7 @@ impl Store for FjallStore {
         .await
     }
 
-    /// `false` — RV-STORAGE-CC8D9EB5: pinned fjall 3.1.6
+    /// `false` — RV-STORAGE-CC8D9EB5: pinned fjall 3.1.13 (Cargo.lock)
     /// `WriteBatch::commit` applies batch items to memtables individually
     /// and only then publishes the snapshot watermark, while this store's
     /// raw reads (`Keyspace::get`/`range`/`prefix`) read at `SeqNo::MAX`
