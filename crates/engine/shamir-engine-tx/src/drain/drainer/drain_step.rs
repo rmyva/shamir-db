@@ -869,14 +869,14 @@ impl Drainer {
                 self.orphan_replay_consecutive_failures
                     .store(0, Ordering::Relaxed);
                 self.orphan_replay_last_error.store(None);
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-util"))]
                 let inject_marker_failure = crate::commit::TEST_POST_WAL_PRE_PUBLISH_HOOK
                     .get()
                     .is_some_and(|hook| {
                         hook.repo_name == repo.name()
                             && hook.fail_orphan_markers.swap(false, Ordering::AcqRel)
                     });
-                #[cfg(not(test))]
+                #[cfg(not(any(test, feature = "test-util")))]
                 let inject_marker_failure = false;
                 let marker_result = if inject_marker_failure {
                     Err(DbError::Internal("injected orphan marker failure".into()))

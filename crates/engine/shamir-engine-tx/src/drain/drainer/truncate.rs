@@ -160,7 +160,7 @@ impl Drainer {
                 Some(lease) => lease.truncate(Arc::clone(&wal)).await?,
                 None => 0,
             };
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-util"))]
             test_seam::record(repo, "truncate");
             // Recheck actual retained bytes after unlink; clear admission refusal only below cap.
             let _retention_action =

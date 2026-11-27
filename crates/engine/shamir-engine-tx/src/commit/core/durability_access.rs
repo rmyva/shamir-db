@@ -323,7 +323,7 @@ impl RepoCore {
             return Ok(());
         }
         // Negative-control seam: constant-false in production, branch elided.
-        if cfg!(test)
+        if cfg!(any(test, feature = "test-util"))
             && crate::meta::repo_identity::SKIP_UNCLEAN_EPOCH_BUMP_FOR_TEST
                 .load(std::sync::atomic::Ordering::Acquire)
         {

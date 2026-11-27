@@ -58,7 +58,7 @@ pub static TEST_POST_PRELOCK_PRE_MATERIALIZE_HOOK: std::sync::OnceLock<
 /// Parks on `TEST_POST_PRELOCK_PRE_MATERIALIZE_HOOK` if a test installed
 /// one; a true no-op otherwise.
 pub(super) async fn fire_post_prelock_pre_materialize_test_hook() {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     if let Some(hook) = TEST_POST_PRELOCK_PRE_MATERIALIZE_HOOK.get() {
         hook.reached
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);

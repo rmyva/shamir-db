@@ -4,7 +4,7 @@ use shamir_tx::{ChangelogEvent, RepoChangefeed, VersionGuard};
 
 use crate::commit::core::RepoCore;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 fn maybe_crash_before_publish(
     prepared: Option<&(Arc<ChangelogEvent>, Option<Arc<RepoChangefeed>>)>,
 ) {
@@ -44,7 +44,7 @@ pub fn publish_journaled(
     guard: VersionGuard,
     prepared: Option<(Arc<ChangelogEvent>, Option<Arc<RepoChangefeed>>)>,
 ) -> Option<Arc<ChangelogEvent>> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     maybe_crash_before_publish(prepared.as_ref());
     let event = prepared.map(|(event, feed)| {
         match feed {

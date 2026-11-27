@@ -41,7 +41,7 @@ pub(super) async fn follower_certified_through(
     if !follower_provenance {
         return Ok(j);
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     if IGNORE_BOOKMARK_J.load(Ordering::SeqCst) {
         return Ok(j);
     }

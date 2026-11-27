@@ -31,7 +31,7 @@ pub static TEST_MAX_TX_LIFETIME_OVERRIDE: std::sync::OnceLock<std::time::Duratio
     std::sync::OnceLock::new();
 
 fn effective_max_tx_lifetime() -> std::time::Duration {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     if let Some(d) = TEST_MAX_TX_LIFETIME_OVERRIDE.get() {
         return *d;
     }
@@ -110,7 +110,7 @@ pub static TEST_POST_VALIDATE_PRE_PUBLISH_HOOK: std::sync::OnceLock<
 /// a true no-op otherwise. See that static's doc for the exact program point
 /// and rationale.
 pub(super) async fn fire_post_validate_pre_publish_test_hook() {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     if let Some(hook) = TEST_POST_VALIDATE_PRE_PUBLISH_HOOK.get() {
         hook.reached
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -209,7 +209,7 @@ pub static TEST_ASYNC_INDEX_TAIL_HOOK: std::sync::OnceLock<std::sync::Arc<AsyncI
     std::sync::OnceLock::new();
 
 pub(super) async fn fire_async_index_tail_test_hook(repo: &RepoCore) {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     if let Some(hook) = TEST_ASYNC_INDEX_TAIL_HOOK.get() {
         if hook.repo_name == repo.name()
             && hook.armed.swap(false, std::sync::atomic::Ordering::AcqRel)

@@ -12,7 +12,7 @@ pub(crate) fn commit_wal_durability(
     durability: &DurabilityHandle,
     _repo_name: &str,
 ) -> shamir_wal::WalDurability {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     if TEST_SYNCED_WAL_REPO
         .get()
         .is_some_and(|name| name == _repo_name)

@@ -2,7 +2,7 @@ use shamir_collections::TFxMap;
 use shamir_tx::{IsolationLevel, TxContext};
 use shamir_types::types::common::THasher;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 use super::entry::fire_post_wal_pre_publish_test_hook;
 use super::entry::{
     commit_wal_durability, fire_async_index_tail_test_hook, fire_cancel_test_hook,
@@ -79,7 +79,7 @@ pub(super) async fn commit_tx_inner_legacy_async(
 
     apply_data_phase(&mut tx, repo, commit_version).await;
     let data_visible = !tx.async_prefix_failed;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     fire_post_wal_pre_publish_test_hook(repo, false).await;
     // SSI fix S2 — Phase 5a (`apply_data_phase` → `apply_committed_visible`)
     // finalized every claimed cell (version published, `reserved_by` cleared).

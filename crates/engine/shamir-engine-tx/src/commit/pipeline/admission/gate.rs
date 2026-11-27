@@ -45,14 +45,18 @@ use super::lease::CommitAdmissionLease;
 pub(crate) const ADMISSION_REOPEN_WAIT_CAP: Duration = Duration::from_secs(15);
 
 /// The cap the commit entry passes: the documented constant in production.
-#[cfg(not(test))]
+#[cfg(not(any(test, feature = "test-util")))]
 pub(crate) const LEADER_REOPEN_WAIT_CAP: Duration = ADMISSION_REOPEN_WAIT_CAP;
 
-/// Under `cfg(test)` the entry's cap is short so a refusal test does not wait
+/// Under `cfg(test)` or the `test-util` feature the entry's cap is short so a refusal test does not wait
 /// out the production value; it still leaves seconds of margin for
 /// deterministic park-then-reopen handshakes on a loaded runner.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 pub(crate) const LEADER_REOPEN_WAIT_CAP: Duration = Duration::from_secs(2);
+
+// The short test cap never exceeds the documented production cap (and keeps
+// the production constant referenced in every configuration).
+const _: () = assert!(LEADER_REOPEN_WAIT_CAP.as_secs() <= ADMISSION_REOPEN_WAIT_CAP.as_secs());
 
 /// CLOSED: gate refuses admission (bit 62).
 const CLOSED: usize = 1 << 62;

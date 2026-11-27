@@ -30,7 +30,7 @@ use shamir_storage::types::Store;
 use shamir_tx::RepoTxGate;
 
 use super::super::super::{prepare_event, ApplyOutcome, ApplyPolicy, PreparedEvent};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 use super::super::test_seam::{self, Phase};
 use super::resume::activation::{admit_follower, FollowerAdmission};
 use super::resume::worker::ReceiptLease;
@@ -529,7 +529,7 @@ async fn try_chunk(
             }
         }
         stage::commit_prepared(repo, permit, info, &plan, old).await?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-util"))]
         fail_after(repo.name(), Phase::Prepared)?;
     }
     run_chunk_tail(repo, permit, info, gate, &mut plan, old, lease).await
@@ -589,7 +589,7 @@ async fn run_chunk_tail(
         //              (Storage "injected") -> retry
         //   attempt 2: fast path -> seam fires again -> retry
         //   attempt 3: fast path -> seam fires -> attempt >= 3 -> PARK.
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-util"))]
         fail_after(repo.name(), Phase::Materialized)?;
         let publication = publish::publication_from_receipt(repo, permit, stored).await?;
         let chunk_local_end = stored
@@ -613,7 +613,7 @@ async fn run_chunk_tail(
     let work = stage::materialize_from_plan(repo, permit, plan).await?;
     let (receipt, counters) =
         stage::commit_materialized_work(repo, permit, info, &work, old).await?;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     fail_after(repo.name(), Phase::Materialized)?;
     let publication = publish::publication_from_plan(repo, permit, plan, &counters).await?;
     let chunk_local_end = receipt
@@ -734,7 +734,7 @@ fn same_batch(stored: &ReplicationReceipt, plan_receipt: &ReplicationReceipt) ->
 /// Inject the test seam's one-shot (or sticky) post-phase failure: returns
 /// `DbError::Storage("injected")` — or `DbError::RepoRequiresReopen("injected")`
 /// when the reopen-kind flag is set — exactly when the flag fires for `phase`.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 fn fail_after(repo_name: &str, phase: Phase) -> DbResult<()> {
     if test_seam::take_fail_after(repo_name, phase) {
         if test_seam::fail_after_reopen(repo_name) {
