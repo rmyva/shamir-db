@@ -75,8 +75,8 @@ async fn drainer_retains_zero_floor_then_resumes_without_new_commits() {
     let repo = disk_repo(&path, RetentionOverflow::RefuseWrites).await;
     let clone = repo.clone();
     assert!(Arc::ptr_eq(
-        &repo.core.truncation_pins,
-        &clone.core.truncation_pins
+        repo.core.truncation_pins_for_test(),
+        clone.core.truncation_pins_for_test()
     ));
     let pin = clone.core.pin_wal_history(0).await.unwrap();
     seed(&repo).await;

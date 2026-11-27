@@ -73,6 +73,13 @@ impl RepoCore {
         self.truncation_pins.acquire(floor).await
     }
 
+    /// Test seam: the truncation-pin cell shared by every clone of the repository.
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    pub fn truncation_pins_for_test(&self) -> &Arc<crate::drain::truncation_pin::TruncationPin> {
+        &self.truncation_pins
+    }
+
     /// Atomically clamp deletion and admit its lease, only after all preparation.
     pub(crate) fn try_begin_truncate(&self, ceiling: u64) -> Option<TruncationLease> {
         self.truncation_pins.try_begin_truncate(ceiling)
