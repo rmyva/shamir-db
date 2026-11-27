@@ -20543,3 +20543,27 @@ path = "crates/engine/shamir-engine-tx/src/replication/follower_durability/recei
 item = "shamir-engine::lib::tx::tests::follower_receipt_tests::crash_subprocess_tests::CHILD_TEST"
 reason = "R4c: a subprocess test filter names the test at its new path in the facade tree"
 owner = "<wave-R4c>"
+
+[[allow_widen]]
+path = "crates/engine/shamir-engine-tx/src/commit/core/repo_core.rs"
+item = "RepoCore::horizon"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: : item crosses a module or layer boundary"
+owner = "<wave-R4c>"
+
+[[allow_widen]]
+path = "crates/engine/shamir-engine-tx/src/commit/test_seams.rs"
+item = "TableInitHook::resume"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: : item crosses a module or layer boundary"
+owner = "<wave-R4c>"
+
+[[changed]]
+path = "crates/engine/shamir-engine-tx/src/recovery/clean_horizon/tests/checkpoint_seam_tests.rs"
+item = "shamir-engine::lib::tx::tests::clean_horizon_tests::checkpoint_seam_tests::checkpoint_failure_prevents_unlink_then_retry_catches_up"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test body follows the move"
+owner = "<wave-R4c>"
+
+[[changed]]
+path = "crates/engine/shamir-engine-tx/src/recovery/cold_reconcile/lifecycle/tests/supervisor_tests.rs"
+item = "shamir-engine::lib::tx::tests::cold_reconcile_lifecycle_tests::supervisor_tests::protected_local_resource_survives_timeout_until_worker_join"
+reason = "R4c: the tx layer becomes the crate shamir-engine-tx: test body follows the move"
+owner = "<wave-R4c>"
