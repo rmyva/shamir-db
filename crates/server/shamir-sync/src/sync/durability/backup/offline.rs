@@ -769,6 +769,7 @@ fn verify_manifest_raw(
     snapshot_dir: &Path,
     raw: &[u8],
 ) -> Result<(ManifestVerifyReport, VerifiedManifest), BackupError> {
+    v2_verify::require_snapshot_catalogue_directory(snapshot_dir)?;
     tracing::trace!(target: "shamir_sync::snapshot_verify", "snapshot manifest loaded");
     if v2_verify::peek_manifest_format_version(raw)
         == Some(online_manifest::MANIFEST_FORMAT_VERSION_V2)

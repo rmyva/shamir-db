@@ -42,22 +42,11 @@ use std::path::{Path, PathBuf};
 
 use shamir_db::engine::db_instance::replay_to::ReplayScope;
 use shamir_db::shamir_db::system_store::{load_replay_scopes, SystemStore, SystemStoreConfig};
-use shamir_db::ShamirDb;
+use shamir_db::{is_reserved_db_name, ShamirDb, RESERVED_DB_NAMES};
 use shamir_types::types::value::QueryValue;
 
 use super::fjall_locks::require_fjall_store;
 use super::RestoreError;
-
-/// Top-level names no repository row may claim (system catalogue, user
-/// directory, server metadata, private cache, counters, audit).
-const RESERVED_TOP_LEVEL: [&str; 6] = [
-    "shamir_db_meta.redb",
-    "users",
-    "server_meta",
-    "cache",
-    "counters",
-    "audit",
-];
 
 /// One captured repository: manifest key split EXACTLY once into
 /// `db/repo`, plus its consistency data (WAL route REQUIRED).
@@ -129,6 +118,56 @@ pub(super) struct PreparedStagedCatalogue {
     pub excluded: BTreeSet<String>,
 }
 
+pub(super) async fn validate_staged_db_names(stage: &Path) -> Result<(), RestoreError> {
+    // Opening the staged catalogue only (never user repositories) makes the check safe pre-publication.
+    let meta_path = stage.join("shamir_db_meta.redb");
+    match std::fs::symlink_metadata(&meta_path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(RestoreError::Io(error)),
+        Ok(metadata) if !metadata.file_type().is_dir() => {
+            return Err(RestoreError::Consistency {
+                repo: "(staged system catalogue)".into(),
+                reason: "staged system catalogue exists but is not a directory".into(),
+            });
+        }
+        Ok(_) => {}
+    }
+    require_fjall_store(&meta_path, "(staged system catalogue)")?;
+    let store = Box::pin(SystemStore::init(SystemStoreConfig::Fjall(meta_path)))
+        .await
+        .map_err(RestoreError::Catalogue)?;
+    let rows = Box::pin(store.load_databases())
+        .await
+        .map_err(RestoreError::Catalogue)?;
+    validate_catalogue_db_name_records(&rows)
+}
+
+const RESERVED_DATABASE_RECOVERY: &str = "is reserved by the server; recover by exporting the existing reserved name with the previous release's offline logical-export (for example, --db users), importing with this release into an absent target with --as-db <non-reserved name>, and starting the new server there. A catalogue rename alone does not restore the physical repository path; if export refuses unsupported content, stay on the previous release";
+
+pub(super) fn validate_catalogue_db_name_records(rows: &[QueryValue]) -> Result<(), RestoreError> {
+    // This mirrors shamir-db's crate-private validate_catalogue_db_names on
+    // the shared predicate; the predicate remains the single source of truth.
+    for row in rows {
+        let name = row
+            .get("name")
+            .and_then(QueryValue::as_str)
+            .ok_or_else(|| {
+                RestoreError::Catalogue(shamir_db::DbError::Validation(
+                    "database catalogue row is missing string name".into(),
+                ))
+            })?;
+        if name == "__system__" {
+            continue;
+        }
+        if is_reserved_db_name(name) {
+            return Err(RestoreError::Catalogue(shamir_db::DbError::Validation(
+                format!("database name '{name}' {RESERVED_DATABASE_RECOVERY}"),
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Phase A. The staged [`SystemStore`] handle drops at the end; the phase's
 /// runtime drains its background tasks before phase B opens the same
 /// staged meta store.
@@ -149,7 +188,7 @@ pub(super) async fn prepare_staged_catalogue(
     let mut routes: BTreeMap<(String, String), PathBuf> = BTreeMap::new();
     let mut wal_routes: Vec<(String, PathBuf)> = Vec::with_capacity(captured.len());
     for repo in captured {
-        reject_reserved_store_dir(repo)?;
+        reject_reserved_store_route(repo)?;
         let store_path = join_manifest_rel(stage, &repo.store_dir);
         require_fjall_store(&store_path, &repo.label())?;
         let store_canonical =
@@ -177,14 +216,7 @@ pub(super) async fn prepare_staged_catalogue(
             });
         }
         let wal_path = join_manifest_rel(stage, &repo.wal.0);
-        if let Some(first) = first_top_level(&wal_path, stage) {
-            if RESERVED_TOP_LEVEL.contains(&first.as_str()) {
-                return Err(RestoreError::Consistency {
-                    repo: repo.label(),
-                    reason: format!("captured wal_dir claims reserved destination '{first}'"),
-                });
-            }
-        }
+        reject_reserved_wal_dir(first_top_level(&wal_path, stage).as_deref(), repo)?;
         let wal_canonical = canonical(&wal_path, &repo.label(), "captured wal_dir")?;
         for (other_label, other_wal) in &wal_routes {
             if *other_wal == wal_canonical
@@ -470,7 +502,44 @@ fn first_top_level(path: &Path, stage: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
-fn reject_reserved_store_dir(repo: &CapturedRepo) -> Result<(), RestoreError> {
+fn allowed_default_main_route(db: &str, repo: &str, route: &str, wal: bool) -> bool {
+    let exact = if wal {
+        "shamir_db_default_main.redb.shamirwal"
+    } else {
+        "shamir_db_default_main.redb"
+    };
+    let protected = [
+        "shamir_db_default_main.redb",
+        "shamir_db_default_main.redb.shamirwal",
+    ];
+    if protected
+        .iter()
+        .any(|name| route.eq_ignore_ascii_case(name))
+    {
+        return route == exact && db == "default" && repo == "main";
+    }
+    false
+}
+
+pub(super) fn reject_reserved_wal_dir(
+    first: Option<&str>,
+    repo: &CapturedRepo,
+) -> Result<(), RestoreError> {
+    let route = repo.wal.0.as_str();
+    if let Some(first) = first {
+        if (RESERVED_DB_NAMES.contains(&first) || is_protected_default_route(route))
+            && !allowed_default_main_route(&repo.db, &repo.repo, route, true)
+        {
+            return Err(RestoreError::Consistency {
+                repo: repo.label(),
+                reason: format!("captured wal_dir claims reserved destination '{first}'"),
+            });
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn reject_reserved_store_route(repo: &CapturedRepo) -> Result<(), RestoreError> {
     match repo
         .store_dir
         .split('/')
@@ -480,10 +549,29 @@ fn reject_reserved_store_dir(repo: &CapturedRepo) -> Result<(), RestoreError> {
             repo: repo.label(),
             reason: "captured store_dir is empty".into(),
         }),
-        Some(c) if RESERVED_TOP_LEVEL.contains(&c) => Err(RestoreError::Consistency {
-            repo: repo.label(),
-            reason: format!("captured store_dir claims reserved destination '{c}'"),
-        }),
+        Some(c)
+            if (RESERVED_DB_NAMES.contains(&c) || is_protected_default_route(&repo.store_dir))
+                && !allowed_default_main_route(&repo.db, &repo.repo, &repo.store_dir, false) =>
+        {
+            Err(RestoreError::Consistency {
+                repo: repo.label(),
+                reason: format!("captured store_dir claims reserved destination '{c}'"),
+            })
+        }
         Some(_) => Ok(()),
     }
+}
+
+fn is_protected_default_route(route: &str) -> bool {
+    [
+        "shamir_db_default_main.redb",
+        "shamir_db_default_main.redb.shamirwal",
+    ]
+    .iter()
+    .any(|name| {
+        route
+            .split('/')
+            .next()
+            .is_some_and(|component| component.eq_ignore_ascii_case(name))
+    })
 }

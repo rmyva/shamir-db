@@ -10,7 +10,7 @@ use shamir_storage::types::{RecordKey, Store};
 use shamir_types::types::value::QueryValue;
 
 use crate::access::{Actor, ResourceMeta};
-use crate::shamir_db::shamir_db::SYSTEM_DB_NAME;
+use crate::shamir_db::shamir_db::{is_reserved_db_name, reserved_db_name_refusal};
 use crate::{DbError, DbResult, ShamirDb};
 
 use super::records_codec::decode_schema_records;
@@ -38,12 +38,12 @@ impl ShamirDb {
         #[cfg(not(feature = "fjall"))]
         let _ = image;
         receipt.validate()?;
-        // The reserved internal name must never become a user database, on
-        // this catalogue-writing path as on create and rename.
-        if db == SYSTEM_DB_NAME || receipt.source_db == SYSTEM_DB_NAME {
-            return Err(DbError::Validation(
-                "database name '__system__' is reserved".into(),
-            ));
+        if is_reserved_db_name(db) || is_reserved_db_name(&receipt.source_db) {
+            return Err(reserved_db_name_refusal(if is_reserved_db_name(db) {
+                db
+            } else {
+                &receipt.source_db
+            }));
         }
         // R1c-4 follow-up defect 2: refuse seed publication onto a database
         // with an in-doubt marker — the install persists a `databases` row

@@ -22,6 +22,54 @@ use crate::sync::durability::backup::open_plain_snapshot_file;
 use crate::sync::durability::backup::ManifestFileEntry;
 
 use super::RestoreError;
+pub(super) fn has_external_staging_location(data_dir: &Path) -> bool {
+    let Ok(target) = canonicalize_target(data_dir) else {
+        return false;
+    };
+    let Some(parent) = target.parent() else {
+        return false;
+    };
+    if parent == target {
+        return false;
+    }
+    let stage_sibling = parent.join(format!("{}.restore_tmp_probe", target.file_name().unwrap_or_default().to_string_lossy()));
+    !stage_sibling.starts_with(&target)
+}
+
+pub(super) fn canonicalize_target(path: &Path) -> std::io::Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let mut candidate = absolute.as_path();
+    let mut suffix = Vec::new();
+    let canonical = loop {
+        match fs::canonicalize(candidate) {
+            Ok(canonical) => break canonical,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let Some(name) = candidate.file_name() else {
+                    return Err(error);
+                };
+                suffix.push(name.to_os_string());
+                candidate = candidate.parent().ok_or(error)?;
+            }
+            Err(error) => return Err(error),
+        }
+    };
+    let mut resolved = canonical;
+    for component in suffix.iter().rev() {
+        resolved.push(component);
+    }
+    #[cfg(windows)]
+    let resolved = {
+        let text = resolved.to_string_lossy();
+        let stripped = text.strip_prefix("\\\\?\\").unwrap_or(&text);
+        PathBuf::from(stripped)
+    };
+    Ok(resolved)
+}
+
 
 /// Verify that every manifest-listed file exists as a regular file under the
 /// staged temp dir and re-hashes to its verified entry (the second line of

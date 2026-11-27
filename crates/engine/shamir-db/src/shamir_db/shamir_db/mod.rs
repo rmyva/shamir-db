@@ -14,7 +14,10 @@ mod tests;
 
 #[cfg(test)]
 pub(crate) use catalog::group_tables_by_repo;
-pub use catalog::{ArtifactKind, ShutdownReport, KIND_FIELD};
+pub(in crate::shamir_db) use catalog::reserved_db_name_refusal;
+pub use catalog::{
+    is_reserved_db_name, ArtifactKind, ShutdownReport, KIND_FIELD, RESERVED_DB_NAMES,
+};
 #[cfg(any(test, feature = "test-util"))]
 pub use catalog::{
     FinalWriteBarrierForTest, SeedCatalogueFlushFaultForTest, TerminalRowSetFaultForTest,

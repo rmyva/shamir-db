@@ -126,6 +126,15 @@ pub fn import_args(input: &Path, target: &Path) -> LogicalImportArgs {
     }
 }
 
+pub fn import_args_as_db(input: &Path, target: &Path, name: &str) -> LogicalImportArgs {
+    LogicalImportArgs {
+        input: input.into(),
+        target: target.into(),
+        schema_only: false,
+        as_db: Some(name.into()),
+    }
+}
+
 /// Drive the offline export driver synchronously; the fixture database must
 /// already be closed.
 pub fn export_now(
@@ -437,6 +446,14 @@ fn row_owner(row: &QueryValue) -> Option<u64> {
 /// database "app" (optionally owned by a logical name), repository "main"
 /// (Fjall, default durability), table "main/rows" and an optional record.
 pub fn handcrafted_bytes(database_owner: Option<&str>, record_key: Option<Vec<u8>>) -> Vec<u8> {
+    handcrafted_bytes_for_database("app", database_owner, record_key)
+}
+
+pub fn handcrafted_bytes_for_database(
+    database_name: &str,
+    database_owner: Option<&str>,
+    record_key: Option<Vec<u8>>,
+) -> Vec<u8> {
     let sections = SectionKind::ORDERED
         .into_iter()
         .map(|section| SectionInventory {
@@ -481,7 +498,7 @@ pub fn handcrafted_bytes(database_owner: Option<&str>, record_key: Option<Vec<u8
         (
             SectionKind::Database,
             vec![PortableItem::Database(DatabaseItem {
-                name: "app".into(),
+                name: database_name.into(),
                 owner: database_owner.map(Into::into),
                 group: None,
                 mode: 0o644,

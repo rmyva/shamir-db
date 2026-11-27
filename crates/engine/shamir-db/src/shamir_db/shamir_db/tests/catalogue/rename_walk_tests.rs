@@ -4,6 +4,10 @@
 //! through `DbTableResolver::resolve_unfenced`, so the fence must not break
 //! ordinary writes on the parent.
 
+use crate::access::{Actor, ResourceMeta};
+use crate::shamir_db::shamir_db::catalog::validate_catalogue_db_names;
+use crate::shamir_db::shamir_db::is_reserved_db_name;
+use crate::shamir_db::system_store::DatabaseIdentity;
 use crate::shamir_db::ShamirDb;
 use shamir_query_builder::batch::Batch;
 use shamir_query_builder::ddl;
@@ -12,7 +16,9 @@ use shamir_query_builder::write;
 use shamir_query_builder::write::doc;
 use shamir_query_builder::write::UpdateReturnMode;
 use shamir_types::mpack;
+use shamir_types::types::common::new_map;
 use shamir_types::types::record_id::RecordId;
+use shamir_types::types::value::QueryValue;
 
 #[tokio::test]
 async fn parent_update_and_delete_succeed_while_child_rename_in_doubt() {
@@ -151,4 +157,203 @@ async fn parent_update_and_delete_succeed_while_child_rename_in_doubt() {
     })
     .await
     .expect("fk walk test exceeded 30 seconds");
+}
+#[test]
+fn reserved_database_names_apply_only_documented_normalization() {
+    // Catches a regression in fixed-name ASCII case folding/trailing-dot-space normalization and generated-shape exactness below.
+    for name in [
+        "users",
+        "Users",
+        "USERS",
+        "users.",
+        "users ",
+        "USERS.",
+        "shamir_db_meta.redb",
+        "__SYSTEM__",
+        "__system__",
+        "Users.",
+        "server_meta",
+        "cache",
+        "counters",
+        "audit",
+        "audit_checkpoint",
+        "api_tokens",
+        "audit.log",
+        "shamir_db_default_main.redb",
+        "bootstrap_token.txt",
+        "format.stamp",
+        ".logical-import-receipt.json",
+        ".shamir.lock",
+        "wire_tables.mpack",
+        "format.stamp.tmp",
+        "shamir_db_meta.redb.shamirwal",
+        "shamir_db_default_main.redb.shamirwal",
+    ] {
+        assert!(is_reserved_db_name(name), "{name:?} should be reserved");
+    }
+    for name in [
+        "users2",
+        "my_users",
+        "audit_log",
+        "users_dir",
+        "cache_server",
+        "server_meta2",
+        "USERS~1",
+        "user",
+        "",
+        "users .x",
+    ] {
+        assert!(!is_reserved_db_name(name), "{name:?} should be accepted");
+    }
+    // Catches broad prefix, case-insensitive, length, character-class, and suffix matching in the generated-shape rules.
+    let hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let hash32 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    for name in [
+        format!("seed-{}", &hash[..63]),
+        format!("seed-{hash}a"),
+        format!("seed-{}g", &hash[..63]),
+        format!("SEED-{hash}"),
+        format!("seed-{}A", &hash[..63]),
+        "seed-".to_owned(),
+        format!("seed-{hash}-attempt-"),
+        format!("seed-{hash}-attempt-x"),
+        format!("seed-{hash}-attempt-01"),
+        format!("seed-{hash}-attempt-007"),
+        format!("seed-{hash}-attempt-1-x"),
+        "audit.log.0000000000000000001".to_owned(),
+        "audit.log.x".to_owned(),
+        "audit.log.0000000000000000000x".to_owned(),
+    ] {
+        assert!(!is_reserved_db_name(&name), "{name:?} should be accepted");
+    }
+    // Catches acceptance of forms that Rust integer parsing tolerates but the generator's Display output never emits.
+    for name in [
+        format!("seed-{hash}-attempt-01"),
+        format!("seed-{hash}-attempt-007"),
+        format!("seed-{hash}-attempt-+1"),
+        format!("seed-{hash}-attempt--1"),
+    ] {
+        assert!(!is_reserved_db_name(&name), "{name:?} should be accepted");
+    }
+    // Catches over-reserving the exclusive u64::MAX range boundary.
+    assert!(!is_reserved_db_name(&format!("seed-{hash}-attempt-18446744073709551615")));
+    // Catches failure to reserve canonical generated attempts, including attempt zero from the generator's 0..u64::MAX range.
+    assert!(is_reserved_db_name(&format!("seed-{hash}-attempt-0")));
+    assert!(is_reserved_db_name(&format!("seed-{hash}-attempt-1")));
+    // Catches missing/over-broad `.seed-` generated export staging shape rules.
+    assert!(is_reserved_db_name(&format!(".seed-{hash32}")));
+    for name in [
+        format!(".seed-{}", &hash32[..31]),
+        format!(".seed-{hash32}a"),
+        format!(".seed-{}g", &hash32[..31]),
+        format!(".seed-{}A", &hash32[..31]),
+        format!("seed-{hash32}"),
+    ] {
+        assert!(!is_reserved_db_name(&name), "{name:?} should be accepted");
+    }
+    // Catches failure to reserve generated names and ensures attempt names use the same exact 64-lowercase-hex prefix.
+    assert!(is_reserved_db_name(&format!("seed-{hash}")));
+    assert!(is_reserved_db_name(&format!("seed-{hash}-attempt-7")));
+    // Catches the fixed-inventory normalization intentionally not extending to generated shapes.
+    assert!(!is_reserved_db_name(&format!("seed-{hash}.")));
+    assert!(!is_reserved_db_name(&format!("seed-{hash}-attempt-7.")));
+    // Catches failure to reserve exactly 20 ASCII digits as generated audit rotation archives.
+    assert!(is_reserved_db_name("audit.log.00000000000000000001"));
+}
+
+#[test]
+fn catalogue_validation_fails_closed_except_for_system_database() {
+    let record = |name: &str| {
+        let mut fields = new_map();
+        fields.insert("name".into(), QueryValue::Str(name.into()));
+        QueryValue::Map(fields)
+    };
+    for name in ["users", "users ", "Users"] {
+        let error = validate_catalogue_db_names(&[record(name)]).unwrap_err();
+        // Catches validation changing from the typed fail-closed error or losing the offending database name.
+        assert!(matches!(error, crate::DbError::Validation(_)));
+        assert!(error.to_string().contains(name));
+    }
+    assert!(validate_catalogue_db_names(&[record("__system__")]).is_ok());
+    assert!(validate_catalogue_db_names(&[record("users2")]).is_ok());
+    assert!(validate_catalogue_db_names(&[]).is_ok());
+}
+
+#[tokio::test]
+async fn rename_refuses_reserved_destination() {
+    let db = ShamirDb::init_memory().await.unwrap();
+    db.create_db("ordinary").await.unwrap();
+    let error = db
+        .rename_db("ordinary", "users")
+        .await
+        .expect_err("reserved destination must be refused");
+    assert!(matches!(error, crate::DbError::Validation(_)));
+    assert!(error.to_string().contains("reserved"));
+}
+#[tokio::test]
+async fn rename_refuses_normalized_reserved_destination_spellings() {
+    let db = ShamirDb::init_memory().await.unwrap();
+    db.create_db("ordinary").await.unwrap();
+    // Exact `__system__`-only checks would accept the normalized reserved spellings.
+    for name in ["Users", "USERS", "users.", "users ", "audit"] {
+        let error = db
+            .rename_db("ordinary", name)
+            .await
+            .expect_err("reserved destination must be refused");
+        assert!(matches!(error, crate::DbError::Validation(_)));
+        assert!(error.to_string().contains("reserved"));
+    }
+}
+
+#[tokio::test]
+async fn create_accepts_non_reserved_names() {
+    let db = ShamirDb::init_memory().await.unwrap();
+    // Prefix/substring matching would incorrectly reject these valid names.
+    for name in ["users2", "my_users", "audit_log"] {
+        db.create_db(name).await.unwrap();
+        assert!(db.has_db(name));
+    }
+}
+
+#[tokio::test]
+async fn rename_from_reserved_name_still_works() {
+    // The live `users` row below is injected with save_database + map inserts, not a repository created by an earlier build; this pins only the from-side guard, not on-disk recovery.
+    let db = ShamirDb::init_memory().await.unwrap();
+    let identity = DatabaseIdentity::new();
+    let mut fields = new_map();
+    fields.insert("name".into(), QueryValue::Str("users".into()));
+    fields.insert("identity".into(), QueryValue::Str(identity.to_string()));
+    let record = QueryValue::Map(fields);
+    db.system_store()
+        .save_database(
+            "users",
+            &record,
+            &ResourceMeta::owned_enforced(Actor::System),
+        )
+        .await
+        .unwrap();
+    db.dbs.insert(
+        "users".to_string(),
+        crate::engine::db_instance::db_instance::DbInstance::new(),
+    );
+    db.database_identities.insert("users".to_string(), identity);
+
+    db.rename_db("users", "users_renamed").await.unwrap();
+
+    assert!(db.has_db("users_renamed"));
+    assert!(!db.has_db("users"));
+}
+
+#[tokio::test]
+async fn create_refuses_reserved_names_with_validation_error() {
+    let db = ShamirDb::init_memory().await.unwrap();
+    for name in ["users", "Users", "USERS", "users."] {
+        let result = db.create_db_as_checked(name, Actor::System).await;
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("reserved name {name:?} must be refused"),
+        };
+        assert!(matches!(error, crate::DbError::Validation(_)));
+        assert!(error.to_string().contains("reserved"));
+    }
 }

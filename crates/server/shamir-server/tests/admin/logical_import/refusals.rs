@@ -11,7 +11,9 @@ use crate::logical_import::common::build_fixture;
 use crate::logical_import::common::export_args;
 use crate::logical_import::common::export_now;
 use crate::logical_import::common::handcrafted_bytes;
+use crate::logical_import::common::handcrafted_bytes_for_database;
 use crate::logical_import::common::import_args;
+use crate::logical_import::common::import_args_as_db;
 use crate::logical_import::common::import_now;
 use crate::logical_import::common::runtime;
 use crate::logical_import::common::write_bytes;
@@ -19,6 +21,159 @@ use crate::logical_import::common::write_bytes;
 /// An artifact whose database owner names an identity that is not exported
 /// fails the preflight coherence check; the target stays absent with no
 /// lock or stage left behind.
+#[test]
+fn reserved_artifact_database_is_refused_before_stage_and_keeps_typed_error() {
+    // Removing the preflight-name guard makes this artifact import proceed into the stage.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let artifact = write_bytes(
+        &root.join("reserved.mpack"),
+        &handcrafted_bytes_for_database("users", None, None),
+    );
+    let target = root.join("target");
+    let error = import_now(&import_args(&artifact, &target), CancellationToken::new()).unwrap_err();
+    assert!(matches!(
+        error,
+        LogicalImportError::Engine(shamir_db::DbError::Validation(_))
+    ));
+    assert!(error.to_string().contains("reserved"));
+    assert!(error.to_string().contains("users"));
+    assert_no_leftovers(&root, &target);
+}
+
+#[test]
+fn reserved_as_db_is_refused_before_lock_creation() {
+    // The planted conflicting lock proves the guard fires before the lock acquisition: with the broken order the run fails with LogicalImportError::Lock instead of the typed refusal, and the guard must not consume the pre-existing lock file.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let artifact = write_bytes(
+        &root.join("app.mpack"),
+        &handcrafted_bytes_for_database("app", None, None),
+    );
+    let target = root.join("target");
+    let lock = root.join("target.import.lock");
+    std::fs::write(&lock, b"held").unwrap();
+    let error = import_now(
+        &import_args_as_db(&artifact, &target, "users"),
+        CancellationToken::new(),
+    )
+    .unwrap_err();
+    assert!(!matches!(&error, LogicalImportError::Lock(_)));
+    assert!(matches!(
+        &error,
+        LogicalImportError::Engine(shamir_db::DbError::Validation(_))
+    ));
+    assert!(error
+        .to_string()
+        .contains("database name 'users' is reserved by the server"));
+    assert_eq!(std::fs::read(&lock).unwrap(), b"held".to_vec());
+}
+
+#[test]
+fn reserved_retry_name_does_not_mutate_existing_target() {
+    // A reserved source name must be refused in the existing-target retry branch before its receipt is read.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let artifact = write_bytes(
+        &root.join("users.mpack"),
+        &handcrafted_bytes_for_database("users", None, None),
+    );
+    let app_artifact = write_bytes(
+        &root.join("app.mpack"),
+        &handcrafted_bytes_for_database("app", None, None),
+    );
+    let target = root.join("target");
+    import_now(
+        &import_args(&app_artifact, &target),
+        CancellationToken::new(),
+    )
+    .unwrap();
+    std::fs::remove_file(target.join(".logical-import-receipt.json")).unwrap();
+    let error = import_now(&import_args(&artifact, &target), CancellationToken::new()).unwrap_err();
+    assert!(matches!(
+        &error,
+        LogicalImportError::Engine(shamir_db::DbError::Validation(_))
+    ));
+    assert!(error
+        .to_string()
+        .contains("database name 'users' is reserved by the server"));
+    assert!(target.join("shamir_db_meta.redb").exists());
+    assert_target_untouched(&root, &target);
+}
+
+#[test]
+fn reserved_source_name_with_safe_override_imports() {
+    // Checking the source name despite a safe --as-db rejects a valid routed import.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let artifact = write_bytes(
+        &root.join("users.mpack"),
+        &handcrafted_bytes_for_database("users", None, None),
+    );
+    let target = root.join("target");
+    let report = import_now(
+        &import_args_as_db(&artifact, &target, "app2"),
+        CancellationToken::new(),
+    )
+    .unwrap();
+    assert_eq!(report.database, "app2");
+    assert!(target.is_dir());
+    let catalogue = runtime().block_on(async {
+        shamir_db::ShamirDb::init(shamir_db::SystemStoreConfig::Fjall(
+            target.join("shamir_db_meta.redb"),
+        ))
+        .await
+        .unwrap()
+    });
+    assert!(runtime()
+        .block_on(catalogue.system_store().load_database("app2"))
+        .unwrap()
+        .is_some());
+    assert!(runtime()
+        .block_on(catalogue.system_store().load_database("users"))
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn empty_existing_target_is_preserved_until_publish() {
+    // Removing an empty target in prepare_target_name loses it on refusal and can discard its permissions.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let valid = write_bytes(
+        &root.join("app.mpack"),
+        &handcrafted_bytes_for_database("app", None, None),
+    );
+    let target = root.join("target");
+    std::fs::create_dir(&target).unwrap();
+    let before = std::fs::metadata(&target).unwrap().permissions();
+    import_now(&import_args(&valid, &target), CancellationToken::new()).unwrap();
+    assert!(target.join(".logical-import-receipt.json").exists());
+    assert_eq!(std::fs::metadata(&target).unwrap().permissions(), before);
+
+    let empty_target = root.join("empty-target");
+    std::fs::create_dir(&empty_target).unwrap();
+    let before_empty = std::fs::metadata(&empty_target).unwrap().permissions();
+    let reserved = write_bytes(
+        &root.join("users.mpack"),
+        &handcrafted_bytes_for_database("users", None, None),
+    );
+    let error = import_now(
+        &import_args(&reserved, &empty_target),
+        CancellationToken::new(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        LogicalImportError::Engine(shamir_db::DbError::Validation(_))
+    ));
+    assert!(empty_target.is_dir());
+    assert_eq!(
+        std::fs::metadata(&empty_target).unwrap().permissions(),
+        before_empty
+    );
+}
+
 #[test]
 fn unresolved_owner_is_refused_with_nothing_published() {
     let dir = tempfile::tempdir().unwrap();

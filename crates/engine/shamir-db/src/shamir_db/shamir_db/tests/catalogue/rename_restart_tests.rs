@@ -1,10 +1,40 @@
+use crate::access::{Actor, ResourceMeta};
 use crate::engine::repo::{BoxRepoFactory, RepoConfig};
+use crate::shamir_db::shamir_db::{is_reserved_db_name, RESERVED_DB_NAMES};
 use crate::shamir_db::{ShamirDb, SystemStoreConfig};
 use crate::types::value::InnerValue;
 use futures::StreamExt;
 use shamir_test_diag::FlakeGuard;
+use shamir_types::types::common::new_map;
 use shamir_types::types::record_id::RecordId;
+use shamir_types::types::value::QueryValue;
 use tokio::runtime::Builder;
+
+/// Not a latency assertion: these tests need the clean shutdown to finish.
+/// Windows CI runners stall every process's fsync for 10+ s at times, so any
+/// wall-clock budget here is a false failure; nextest's per-test timeout is
+/// the hang detector and names the test.
+const BOOT_TEST_FLUSH_BUDGET: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// Re-open the system store expecting a boot rejection, retrying while the
+/// dropped instance still holds the fjall file lock (released lazily after
+/// the drop). Returns the typed rejection.
+async fn boot_rejection(path: std::path::PathBuf) -> crate::DbError {
+    for _ in 0..100 {
+        match ShamirDb::init(SystemStoreConfig::Fjall(path.clone())).await {
+            Ok(_) => panic!("boot must be rejected"),
+            Err(error) => {
+                let message = error.to_string();
+                let lower = message.to_ascii_lowercase();
+                if !lower.contains("lock") && !lower.contains("another process") {
+                    return error;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        }
+    }
+    panic!("fjall lock was not released within the retry window");
+}
 
 async fn rows(table: &crate::engine::table::TableManager) -> Vec<(RecordId, InnerValue)> {
     table
@@ -22,6 +52,39 @@ fn assert_exact_rows(actual: &[(RecordId, InnerValue)], expected: &[(RecordId, I
     for row in expected {
         assert!(actual.contains(row));
     }
+}
+
+#[tokio::test]
+async fn rv_db_reserved_name_persisted_catalogue_is_rejected_on_boot() {
+    // Removing `validate_catalogue_db_names(&db_records)?` from core.rs lets boot succeed and boot_rejection panic; returning any variant other than Validation fails even if its display text is unchanged.
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("system.redb");
+    let db = ShamirDb::init(SystemStoreConfig::Fjall(path.clone()))
+        .await
+        .unwrap();
+    let mut fields = new_map();
+    fields.insert("name".into(), QueryValue::Str("users".into()));
+    let record = QueryValue::Map(fields);
+    db.system_store()
+        .save_database(
+            "users",
+            &record,
+            &ResourceMeta::owned_enforced(Actor::System),
+        )
+        .await
+        .unwrap();
+    db.system_store()
+        .flush_buffers_with_quiesce_timeout(BOOT_TEST_FLUSH_BUDGET)
+        .await
+        .unwrap();
+    drop(db);
+    let error = boot_rejection(path).await;
+    // Catches the boot guard returning a non-Validation refusal with similar wording, and catches dropping the offending name from the diagnostic.
+    assert!(matches!(error, crate::DbError::Validation(_)));
+    assert!(
+        error.to_string().contains("users"),
+        "unexpected boot error: {error}"
+    );
 }
 
 #[test]
@@ -167,4 +230,60 @@ fn in_doubt_rename_reopens_as_exactly_one_catalogued_incarnation() {
         .unwrap()
     });
     drop(runtime);
+}
+
+#[test]
+fn production_reserved_names_cover_real_data_root_entries() {
+    // Catches restart-side drift: the generator emits canonical attempts only, while export staging uses `.seed-` plus 32 lowercase hex digits.
+    let hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    assert!(is_reserved_db_name(&format!("seed-{hash}-attempt-0")));
+    assert!(is_reserved_db_name(&format!(".seed-{}", "b".repeat(32))));
+    for name in [
+        format!("seed-{hash}-attempt-01"),
+        format!("seed-{hash}-attempt-+1"),
+        format!("seed-{hash}-attempt--1"),
+        format!("seed-{hash}-attempt-18446744073709551615"),
+        format!(".seed-{}", "b".repeat(31)),
+        format!(".seed-{}", "B".repeat(32)),
+    ] {
+        assert!(!is_reserved_db_name(&name), "{name:?} is not emitted");
+    }
+    // Catches removing a real fixed system-store name from production or adding a store without updating this fixed-inventory pin.
+    const REAL_DATA_ROOT_ENTRIES: [&str; 20] = [
+        "__system__",
+        "shamir_db_meta.redb",
+        "shamir_db_default_main.redb",
+        "users",
+        "server_meta",
+        "cache",
+        "counters",
+        "audit",
+        "audit_checkpoint",
+        "api_tokens",
+        "audit.log",
+        "bootstrap_token.txt",
+        "format.stamp",
+        ".logical-import-receipt.json",
+        ".shamir.lock",
+        "wire_tables.mpack",
+        "format.stamp.tmp",
+        "shamir_db_meta.redb.shamirwal",
+        "shamir_db_default_main.redb.shamirwal",
+        ".shamir_restore_epoch",
+    ];
+
+    for name in REAL_DATA_ROOT_ENTRIES {
+        assert!(is_reserved_db_name(name), "{name:?} must be reserved");
+        assert!(
+            RESERVED_DB_NAMES.contains(&name),
+            "{name:?} missing from production list"
+        );
+    }
+    for name in ["users2", "my_users", "audit_log", "cache_x"] {
+        assert!(!is_reserved_db_name(name), "{name:?} is a near-miss");
+    }
+    // Catches generated shapes leaking into the equality-pinned fixed inventory; shape admission is covered by the predicate test.
+    assert!(!RESERVED_DB_NAMES
+        .contains(&"seed-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+    assert!(!RESERVED_DB_NAMES.contains(&"audit.log.00000000000000000001"));
 }

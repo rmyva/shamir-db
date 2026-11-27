@@ -40,6 +40,34 @@ fn receipt() -> SeedReceipt {
 }
 
 #[tokio::test]
+async fn reserved_destination_database_is_refused() {
+    // Without the guard, the reserved destination/receipt source reaches the name-mismatch check and is refused as DbError::Storage before catalogue reads, not Validation.
+    let home = ShamirDb::init_memory().await.unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let error = home
+        .check_seed_target("users", "main", &root.path().join("absent"), &receipt())
+        .await
+        .unwrap_err();
+    assert!(matches!(error, crate::DbError::Validation(_)));
+    assert!(error.to_string().contains("reserved"));
+}
+
+#[tokio::test]
+async fn reserved_receipt_source_database_is_refused() {
+    // Without the guard, the reserved destination/receipt source reaches the name-mismatch check and is refused as DbError::Storage before catalogue reads, not Validation.
+    let home = ShamirDb::init_memory().await.unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let mut seed_receipt = receipt();
+    seed_receipt.source_db = "users".into();
+    let error = home
+        .check_seed_target("app", "main", &root.path().join("absent"), &seed_receipt)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, crate::DbError::Validation(_)));
+    assert!(error.to_string().contains("reserved"));
+}
+
+#[tokio::test]
 async fn ordinary_database_without_destination_repo_is_refused_without_schema_changes() {
     let home = ShamirDb::init_memory().await.unwrap();
     let meta = ResourceMeta::owned_enforced(Actor::System);

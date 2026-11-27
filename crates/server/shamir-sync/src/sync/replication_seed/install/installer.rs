@@ -2,7 +2,7 @@ use std::path::Path;
 
 use shamir_db::engine::meta::repo_identity::RepoIdentity;
 use shamir_db::engine::repo::{SeedImageWriter, SeedReceipt, SeedTable};
-use shamir_db::{ShamirDb, SystemStoreConfig};
+use shamir_db::{is_reserved_db_name, ShamirDb, SystemStoreConfig};
 
 use crate::format_stamp::{check_data_dir, EpochPolicy, IgnoreSet, StampMode};
 use crate::replication_seed::codec::{decode, digest, METADATA_LIMIT};
@@ -29,6 +29,12 @@ pub async fn install_subscription(
     manifest_digest: &str,
     subscription: &super::subscription::SeedSubscriptionArgs,
 ) -> Result<SeedReceipt, SeedError> {
+    if is_reserved_db_name(db) {
+        // Before the destination check, the existing target/probe could mask this requested-name refusal.
+        return Err(SeedError::Database(shamir_db::DbError::Validation(
+            format!("database name '{db}' is reserved by the server"),
+        )));
+    }
     subscription.validate()?;
     install_inner(
         data_dir,
@@ -76,6 +82,12 @@ async fn install_inner(
     subscription: Option<&super::subscription::SeedSubscriptionArgs>,
     boundary: impl Fn(u8) -> Result<(), SeedError>,
 ) -> Result<SeedReceipt, SeedError> {
+    if is_reserved_db_name(db) {
+        // Before the destination check, the existing target/probe could mask this requested-name refusal.
+        return Err(SeedError::Database(shamir_db::DbError::Validation(
+            format!("database name '{db}' is reserved by the server"),
+        )));
+    }
     let root = artifact.to_owned();
     let expected = manifest_digest.to_owned();
     let manifest = tokio::task::spawn_blocking(move || {

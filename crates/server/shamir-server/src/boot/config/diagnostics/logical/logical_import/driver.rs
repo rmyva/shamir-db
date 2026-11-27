@@ -9,7 +9,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use sha2::Digest;
-use shamir_db::{ShamirDb, SystemStoreConfig};
+use shamir_db::{is_reserved_db_name, DbError, ShamirDb, SystemStoreConfig};
 use shamir_server_security::user_directory::FjallUserDirectory;
 use shamir_sync::format_stamp::{inspect, StampState};
 use std::io::Read;
@@ -30,6 +30,15 @@ use crate::engine::server::wait_stores_released;
 /// mirrored here): how long we poll for every fjall store under a directory
 /// to drop its lock before failing closed.
 const STORE_RELEASE_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn reject_reserved_name(name: &str) -> Result<(), LogicalImportError> {
+    if is_reserved_db_name(name) {
+        return Err(LogicalImportError::Engine(DbError::Validation(format!(
+            "database name '{name}' is reserved by the server"
+        ))));
+    }
+    Ok(())
+}
 
 /// Summary of a completed (or idempotently accepted) import.
 #[derive(Clone, Debug)]
@@ -52,6 +61,10 @@ pub async fn import(
     args: LogicalImportArgs,
     cancel: CancellationToken,
 ) -> Result<ImportReport, LogicalImportError> {
+    // Reject the override before acquiring the sibling lock; the broken ordering leaves a stale lock.
+    if let Some(name) = args.as_db.as_deref() {
+        reject_reserved_name(name)?;
+    }
     // Exclusive ownership BEFORE the target is inspected.
     let lock = ImportLock::acquire(&args.target)?;
     progress("lock acquired");
@@ -59,14 +72,16 @@ pub async fn import(
         drop(lock);
         return Ok(report);
     }
-    prepare_target_name(&args.target)?;
     let preflight = Preflight::run(&args.input, &args, &cancel)?;
+    let db_name = args.as_db.as_deref().unwrap_or(&preflight.database.name);
+    reject_reserved_name(db_name)?;
     progress(&format!(
         "preflight verified: {} identities, {} repositories, {} tables",
         preflight.identities.len(),
         preflight.repos.len(),
         preflight.tables.len()
     ));
+    prepare_target_name(&args.target)?;
     let stage = ImportStage::prepare(&args.target)?;
     let outcome = import_into_stage(&stage, &args, &preflight, &cancel).await;
     match outcome {
@@ -226,7 +241,29 @@ async fn retry_existing(
             args.target.display()
         )));
     }
+    let mut entries = std::fs::read_dir(&args.target).map_err(|e| {
+        LogicalImportError::Target(format!(
+            "cannot inspect existing target {}: {e}",
+            args.target.display()
+        ))
+    })?;
+    match entries.next() {
+        Some(entry) => {
+            entry.map_err(|e| {
+                LogicalImportError::Target(format!(
+                    "cannot inspect existing target {}: {e}",
+                    args.target.display()
+                ))
+            })?;
+        }
+        None => return Ok(None),
+    }
     let preflight = Preflight::run(&args.input, args, cancel)?;
+    let db_name = args
+        .as_db
+        .clone()
+        .unwrap_or_else(|| preflight.database.name.clone());
+    reject_reserved_name(&db_name)?;
     let receipt = match Receipt::read(&args.target)? {
         Some(receipt) => receipt,
         None => {
@@ -236,10 +273,6 @@ async fn retry_existing(
             )))
         }
     };
-    let db_name = args
-        .as_db
-        .clone()
-        .unwrap_or_else(|| preflight.database.name.clone());
     if !receipt.matches(
         &artifact_sha256(&args.input, cancel)?,
         &preflight.database.name,

@@ -32,6 +32,7 @@ use tempfile::TempDir;
 use crate::sync::durability::backup::offline::{verify_manifest, Manifest, ManifestFileEntry};
 use crate::sync::durability::backup::online::copy_engine::hash_file;
 use crate::sync::durability::backup::online::manifest::BACKUP_META_FILE_NAME;
+use crate::sync::durability::backup::restore::staged_listing::{canonicalize_target, has_external_staging_location};
 use crate::sync::durability::backup::restore::{restore_impl, RestoreError};
 use crate::sync::durability::backup::snapshot_lease;
 
@@ -139,9 +140,78 @@ fn dir_names(dir: &Path) -> Vec<String> {
     names
 }
 
-// ---------------------------------------------------------------------------
-// Copy-gate binding tests (round-2 finding 1), consolidated here from the
-// former `copy_binding/` subfolder to keep this folder within the 7-entry
+#[test]
+fn staging_guard_uses_canonical_target_not_lexical_parent() {
+    // Catches the lexical-parent guard: `<temp>/x/..` resolves to `<temp>` and must stage beside that canonical target.
+    let root = TempDir::new().expect("temp root");
+    let x = root.path().join("x");
+    fs::create_dir(&x).expect("create path component before ..");
+    let spelled = x.join("..");
+    assert_eq!(canonicalize_target(&spelled).expect("canonicalize alias"), root.path().canonicalize().expect("canonical root"));
+    assert!(has_external_staging_location(&spelled));
+
+    // Catches accepting a filesystem-root target, whose canonical form has no external parent.
+    let canonical_root = root.path().ancestors().last().expect("filesystem root");
+    assert!(!has_external_staging_location(canonical_root));
+}
+
+#[test]
+fn aliased_target_refusal_never_stages_inside_its_canonical_target() {
+    // Catches staging under the lexical `<temp>/x/..` spelling before a reserved staged catalogue refuses publication.
+    let root = TempDir::new().expect("temp root");
+    let x = root.path().join("x");
+    fs::create_dir(&x).expect("create path component before ..");
+    let source = root.path().join("source");
+    fs::create_dir_all(source.join("payload")).expect("source payload");
+    fs::write(source.join("payload/keeper.bin"), LISTED_BYTES).expect("source payload file");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("catalogue runtime");
+    runtime.block_on(async {
+        let store = shamir_db::shamir_db::system_store::SystemStore::init(
+            shamir_db::shamir_db::system_store::SystemStoreConfig::Fjall(
+                source.join("shamir_db_meta.redb"),
+            ),
+        )
+        .await
+        .expect("initialize source catalogue");
+        let mut record = shamir_types::types::common::new_map();
+        record.insert("name".to_string(), shamir_types::types::value::QueryValue::Str("users".into()));
+        store
+            .save_database(
+                "users",
+                &shamir_types::types::value::QueryValue::Map(record),
+                &shamir_db::access::ResourceMeta::default(),
+            )
+            .await
+            .expect("inject reserved catalogue row");
+        drop(store);
+    });
+    drop(runtime);
+    let destination = root.path().join("snapshots");
+    fs::create_dir_all(&destination).expect("snapshot destination");
+    let snapshot = crate::sync::durability::backup::backup(&source, &destination)
+        .expect("backup source with reserved catalogue")
+        .dest_dir;
+
+    let target_spelling = x.join("..");
+    let resolved_target = canonicalize_target(&target_spelling).expect("resolve target");
+    let error = restore_impl(&snapshot, &target_spelling, true, |_| Ok(()), || {})
+        .expect_err("reserved catalogue row must refuse restore");
+    assert!(matches!(error, RestoreError::Catalogue(_)));
+    assert!(
+        fs::read_dir(&resolved_target)
+            .expect("read canonical target")
+            .all(|entry| !entry
+                .expect("directory entry")
+                .file_name()
+                .to_string_lossy()
+                .contains(".restore_tmp_")),
+        "a refused aliased restore must not leave staging inside the resolved target"
+    );
+}
+
 // cap. They target the step-3 walk's binding to the VERIFIED manifest in the
 // same pass and its refusal of unlisted regular files, so the published
 // restore covers exactly what verification covered. The deterministic
@@ -659,4 +729,13 @@ fn managed_snapshot_lease_blocks_retention_until_the_refusal_releases_it() {
 
     assert_staged_file_missing(err, root.path());
     assert_target_and_siblings_clean(root.path(), &data_dir);
+}
+
+/// Catches staging inside the live root, which makes pre-swap refusals write into the target.
+#[test]
+fn staging_location_rejects_root_paths_but_allows_normal_targets() {
+    assert!(!has_external_staging_location(Path::new("C:/")));
+    assert!(!has_external_staging_location(Path::new("/")));
+    let normal_target = std::env::temp_dir().join("restore-target");
+    assert!(has_external_staging_location(&normal_target));
 }

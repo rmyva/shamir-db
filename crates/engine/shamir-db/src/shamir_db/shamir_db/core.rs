@@ -414,6 +414,7 @@ impl ShamirDb {
         }
         // Load existing databases; `__system__` is reserved internally.
         let db_records = shamir.system_store.load_databases().await?;
+        super::catalog::validate_catalogue_db_names(&db_records)?;
         for record in &db_records {
             if let Some(name) = record["name"].as_str() {
                 if name != SYSTEM_DB_NAME {

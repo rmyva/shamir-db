@@ -23,6 +23,7 @@ use shamir_query_types::durability::DurabilityOverride;
 
 use super::super::SYSTEM_DB_NAME;
 use super::super::{ShamirDb, ShutdownReport};
+use crate::shamir_db::shamir_db::{is_reserved_db_name, reserved_db_name_refusal};
 
 /// One shared budget for quiescing and checkpointing every repository. Sized like
 /// the server's shutdown budget: a slow fsync on a loaded runner must not turn
@@ -113,10 +114,8 @@ impl ShamirDb {
         // create/rename/drop. Lock order is db_create_lock then control.
         let _control = self.lock_replication_control().await;
 
-        if name == SYSTEM_DB_NAME {
-            return Err(DbError::Validation(
-                "database name '__system__' is reserved".into(),
-            ));
+        if is_reserved_db_name(name) {
+            return Err(reserved_db_name_refusal(name));
         }
         // Idempotent duplicate: return the ORIGINAL live instance.
         // `get_db` clones the Arc out of the DashMap (no guard held across
@@ -303,10 +302,8 @@ impl ShamirDb {
         let Some((identity, _lifecycle)) = reservation else {
             return Err(DbError::NotFound(format!("Database '{}' not found", from)).into());
         };
-        if to == SYSTEM_DB_NAME {
-            return Err(
-                DbError::Validation("database name '__system__' is reserved".into()).into(),
-            );
+        if is_reserved_db_name(to) {
+            return Err(reserved_db_name_refusal(to).into());
         }
         // Destination must be free both in-memory and in the catalogue.
         if self.has_db(to) {
