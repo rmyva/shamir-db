@@ -30,7 +30,9 @@ use shamir_db::engine::table::TableConfig;
 use shamir_db::ShamirDb;
 
 use shamir_query_builder::batch::Batch;
+use shamir_query_builder::cursor::{create_cursor, fetch_next};
 use shamir_query_builder::doc;
+use shamir_query_builder::query::Query;
 use shamir_query_builder::wire::admin::get_record;
 use shamir_query_builder::write::insert;
 use shamir_query_types::read::QueryRecord;
@@ -112,20 +114,34 @@ async fn build_handler(query_limits: QueryLimitsCap) -> ShamirDbHandler {
     .expect("open store must complete within the 120s bound")
     .expect("open store");
 
+    let handler = ShamirDbHandler::new(Arc::new(shamir))
+        .with_cursor_limits(CursorLimitsCap::UNLIMITED)
+        .with_query_limits(query_limits);
+    let owner = Actor::User(principal64([0xAB; 16]));
     let mut b = Batch::new();
     b.id(1);
     b.insert(
         "seed_k000",
         insert("items").row(doc! { "id" => "k000", "v" => 0_i64 }),
     );
-    shamir
-        .execute_as(owner, "app", &b.build())
-        .await
-        .expect("seed row");
-
-    ShamirDbHandler::new(Arc::new(shamir))
-        .with_cursor_limits(CursorLimitsCap::UNLIMITED)
-        .with_query_limits(query_limits)
+    let response = tokio::time::timeout(
+        CALL_TIMEOUT,
+        handler.db().execute_as(owner, "app", &b.build()),
+    )
+    .await
+    .expect("seed row within bound")
+    .expect("seed row");
+    match response
+        .results
+        .get("seed_k000")
+        .and_then(|result| result.records.first())
+    {
+        Some(QueryRecord::Inserted(record)) => {
+            record.id.expect("seed id");
+        }
+        other => panic!("expected inserted seed, got {other:?}"),
+    }
+    handler
 }
 
 /// Send a wire request through the REAL `RequestHandler::handle`,
@@ -141,6 +157,10 @@ async fn send(handler: &ShamirDbHandler, session: &Session, req: DbRequest) -> D
     .expect("handle must complete within the 120s bound")
     .expect("handle must not error at the protocol level");
     rmp_serde::from_slice(&resp_bytes).expect("decode response")
+}
+
+fn cursor_create_req() -> DbRequest {
+    create_cursor("app", Query::with_repo("main", "items").build(), 10)
 }
 
 /// Insert one row through the ENGINE's real `execute_as` path and return
@@ -201,6 +221,29 @@ fn audit_writer() -> (Arc<CapturedAudit>, Arc<AuditChainWriter>) {
         captured.clone(),
     ));
     (captured, writer)
+}
+
+fn captured_entries(captured: &CapturedAudit) -> Vec<AuditEntry> {
+    captured.0.lock().expect("audit mutex").clone()
+}
+
+fn assert_refused_event(entries: &[AuditEntry], operation: &str, outcome: &str) {
+    assert_eq!(entries.len(), 1, "one refusal must yield exactly one event");
+    let entry = &entries[0];
+    assert_eq!(entry.event, operation);
+    assert_eq!(entry.result, outcome);
+    assert_eq!(entry.transport, "tcp");
+    let details: serde_json::Value = rmp_serde::from_slice(&entry.details_canonical_msgpack)
+        .expect("decode names-only refusal details");
+    let object = details.as_object().expect("refusal details object");
+    let mut keys: Vec<_> = object.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["class", "db", "outcome", "repo", "table"]);
+    assert_eq!(object["class"], "security");
+    assert_eq!(object["db"], "app");
+    assert_eq!(object["repo"], "main");
+    assert_eq!(object["table"], "items");
+    assert_eq!(object["outcome"], outcome);
 }
 
 /// Test-owned capture for slow-query WARN events, isolated from other tests.
@@ -266,18 +309,9 @@ async fn send_captured(
         .await
 }
 
-// ---------------------------------------------------------------------------
-// Durable audit + slow-query record for the typed point read.
-// ---------------------------------------------------------------------------
+// durable audit + slow-query record for the typed point read.
 
-/// One successful `get_record` emits exactly ONE durable audit record whose
-/// payload carries the scope NAMES only — never the record value, the typed
-/// key or any caller literal.
-///
-/// Catches: a missing enqueue (zero records), an enqueue on refusal paths,
-/// a second record for the same read, and any payload field beyond
-/// db/repo/table (especially the returned value or the seeded payload
-/// literal).
+/// Discriminates a successful point read's unchanged `ok` observability event from any Security refusal event.
 #[tokio::test]
 async fn get_record_emits_one_names_only_audit_record() {
     let handler = build_handler(QueryLimitsCap::UNLIMITED).await;
@@ -297,7 +331,7 @@ async fn get_record_emits_one_names_only_audit_record() {
         handler.cancel_refusal_audit().drain().await,
         "audit queue did not drain"
     );
-    let entries = captured.0.lock().expect("audit mutex");
+    let entries = captured_entries(&captured);
     assert_eq!(
         entries.len(),
         1,
@@ -306,6 +340,7 @@ async fn get_record_emits_one_names_only_audit_record() {
     let entry = &entries[0];
     assert_eq!(entry.event, "get_record");
     assert_eq!(entry.result, "ok");
+    assert!(!entries.iter().any(|entry| entry.result == "security"));
     assert_eq!(entry.user, session.username);
     assert_eq!(&entry.session_id_prefix[..], &session.session_id[..8]);
 
@@ -332,11 +367,10 @@ async fn get_record_emits_one_names_only_audit_record() {
     );
 }
 
-/// A refused point read leaves the durable audit chain untouched: a non-owner
-/// is stopped by the table gate BEFORE the success observer, so the refusal
-/// emits neither the `ok` audit record nor the `slow query` WARN observation.
+/// Catches the old no-security/one-record behavior with two refusals, and
+/// detects scope or outcome leakage in each emitted refusal record.
 #[tokio::test]
-async fn get_record_refusal_emits_no_audit_record() {
+async fn get_record_refusal_emits_one_security_audit_record() {
     let handler = build_handler(QueryLimitsCap::UNLIMITED).await;
     let storage_id = insert_row_and_get_storage_id(&handler, "k001").await;
 
@@ -370,31 +404,151 @@ async fn get_record_refusal_emits_no_audit_record() {
         let resp = send(&handler, &session, request).await;
         match resp {
             DbResponse::Error { code, message } => responses.push((code, message)),
-            other => panic!("expected unknown_table for unavailable table, got {other:?}"),
+            other => panic!("expected unavailable-table refusal, got {other:?}"),
         }
-        assert!(
-            captured.0.lock().expect("audit mutex").is_empty(),
-            "each refused point read must leave the audit chain untouched"
-        );
     }
-    assert_eq!(responses[0].0, "unknown_table");
-    assert_eq!(responses[0].1, "table is unavailable");
     assert_eq!(
-        responses[0], responses[1],
-        "refusals must be indistinguishable"
+        responses,
+        vec![
+            (
+                "unknown_table".to_owned(),
+                "table is unavailable".to_owned()
+            ),
+            (
+                "unknown_table".to_owned(),
+                "table is unavailable".to_owned()
+            ),
+        ],
+        "both unavailable-table refusals must be indistinguishable"
     );
 
     assert!(
         handler.cancel_refusal_audit().drain().await,
         "audit queue did not drain"
     );
+    let entries = captured_entries(&captured);
+    assert_eq!(
+        entries.len(),
+        2,
+        "both refusals must emit one security event"
+    );
+    let mut table_names = Vec::new();
+    for entry in &entries {
+        assert_eq!(entry.event, "get_record");
+        assert_eq!(entry.result, "unknown_table");
+        let details: serde_json::Value = rmp_serde::from_slice(&entry.details_canonical_msgpack)
+            .expect("decode names-only refusal details");
+        let object = details.as_object().expect("refusal details object");
+        let mut keys: Vec<_> = object.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["class", "db", "outcome", "repo", "table"]);
+        assert_eq!(object["class"], "security");
+        assert_eq!(object["db"], "app");
+        assert_eq!(object["repo"], "main");
+        assert_eq!(object["outcome"], "unknown_table");
+        let table = object["table"]
+            .as_str()
+            .expect("refusal table name must be a string");
+        assert!(matches!(table, "absent" | "items"));
+        table_names.push(table.to_owned());
+    }
+    table_names.sort_unstable();
+    assert_eq!(table_names, ["absent", "items"]);
+}
+
+/// Discriminates successful cursor creation (no Security event) from refusal auditing.
+#[tokio::test]
+async fn successful_cursor_creation_emits_no_security_refusal_event() {
+    let handler = build_handler(QueryLimitsCap::UNLIMITED).await;
+    let (captured, writer) = audit_writer();
+    let handler = handler.with_audit_writer(writer);
+    assert!(matches!(
+        send(&handler, &alice_session(), cursor_create_req()).await,
+        DbResponse::CursorPage { .. }
+    ));
     assert!(
-        captured.0.lock().expect("audit mutex").is_empty(),
-        "refused point reads must not emit an audit record"
+        handler.cancel_refusal_audit().drain().await,
+        "queue drain bounded"
+    );
+    assert!(captured_entries(&captured)
+        .iter()
+        .all(|entry| entry.result != "security"));
+}
+
+/// Discriminates creation refusal auditing by query-version refusal and checks exact event scope/result.
+#[tokio::test]
+async fn create_cursor_refusal_emits_security_event() {
+    let handler = build_handler(QueryLimitsCap::UNLIMITED).await;
+    let (captured, writer) = audit_writer();
+    let handler = handler.with_audit_writer(writer);
+    let mut request = cursor_create_req();
+    if let DbRequest::CreateCursor { query_version, .. } = &mut request {
+        *query_version = u32::MAX;
+    }
+    let response = send(&handler, &alice_session(), request).await;
+    assert!(
+        matches!(response, DbResponse::Error { ref code, .. } if code == "unsupported_query_version")
+    );
+    assert!(
+        handler.cancel_refusal_audit().drain().await,
+        "queue drain bounded"
+    );
+    assert_refused_event(
+        &captured_entries(&captured),
+        "create_cursor",
+        "unsupported_query_version",
     );
 }
 
-/// The typed point read logs the same `slow query` WARN the batch path does:
+/// Discriminates FetchNext registry lookup refusal from read-success handling; metadata uses safe names only when no cursor exists.
+#[tokio::test]
+async fn fetch_next_registry_refusal_emits_security_event() {
+    let handler = build_handler(QueryLimitsCap::UNLIMITED).await;
+    let (captured, writer) = audit_writer();
+    let handler = handler.with_audit_writer(writer);
+    let response = send(&handler, &alice_session(), fetch_next(0_u64, None)).await;
+    assert!(matches!(response, DbResponse::Error { ref code, .. } if code == "cursor_not_found"));
+    assert!(
+        handler.cancel_refusal_audit().drain().await,
+        "queue drain bounded"
+    );
+    let entries = captured_entries(&captured);
+    assert_eq!(entries.len(), 1);
+    let entry = &entries[0];
+    assert_eq!(entry.event, "fetch_next");
+    assert_eq!(entry.result, "cursor_not_found");
+    let details: serde_json::Value =
+        rmp_serde::from_slice(&entry.details_canonical_msgpack).expect("details");
+    let object = details.as_object().expect("details object");
+    assert_eq!(object["class"], "security");
+    assert_eq!(object["db"], "unknown");
+    assert_eq!(object["repo"], "unknown");
+    assert_eq!(object["table"], "unknown");
+    assert_eq!(object["outcome"], "cursor_not_found");
+}
+
+/// Discriminates read refusal auditing from the unrelated cursor-cancel path.
+#[tokio::test]
+async fn cursor_cancel_emits_no_refused_read_event() {
+    let handler = build_handler(QueryLimitsCap::UNLIMITED).await;
+    let (captured, writer) = audit_writer();
+    let handler = handler.with_audit_writer(writer);
+    let response = send(
+        &handler,
+        &alice_session(),
+        DbRequest::CancelCursor {
+            cursor_id: shamir_query_types::wire::CursorId(77),
+        },
+    )
+    .await;
+    assert!(matches!(response, DbResponse::CursorClosed { .. }));
+    assert!(
+        handler.cancel_refusal_audit().drain().await,
+        "queue drain bounded"
+    );
+    assert!(captured_entries(&captured).is_empty());
+}
+
 /// threshold 0 stays silent and a crossed threshold emits one record for
 /// `db="app"` with `queries=1`.
 ///

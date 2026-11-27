@@ -30,7 +30,7 @@
 //! `[u8; 32] → Arc<AtomicUsize>`, a live open-count per session that
 //! `register` increments (rejecting over-cap) and `remove` decrements.
 
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -307,6 +307,9 @@ pub struct Cursor {
     /// by [`FetchLease`]'s `Drop`. See that method's doc comment for the
     /// ordering argument this whole mechanism rests on.
     in_flight: AtomicU32,
+    /// Set by the winning terminal transition before it waits for `state`;
+    /// fetches check this flag after acquiring the state lock.
+    terminal: AtomicBool,
     /// R4b-1: safe activity metadata (see [`CursorActivity`]) stamped by the
     /// `CreateCursor` handler via [`Cursor::with_activity`]. `None` on
     /// cursors built without it (existing constructor callers, most tests) —
@@ -350,6 +353,7 @@ impl Cursor {
             created_at: Instant::now(),
             last_activity_nanos: AtomicU64::new(0),
             in_flight: AtomicU32::new(0),
+            terminal: AtomicBool::new(false),
             activity: None,
         }
     }
@@ -377,6 +381,18 @@ impl Cursor {
     /// The mutable pagination bookmark — lock it to run a `FetchNext`.
     pub fn state(&self) -> &tokio::sync::Mutex<CursorState> {
         &self.state
+    }
+
+    /// Whether a terminal close has won for this cursor.
+    pub(crate) fn is_terminal(&self) -> bool {
+        self.terminal.load(Ordering::Acquire)
+    }
+
+    /// Claim the one terminal-close transition for this cursor.
+    pub(crate) fn begin_terminal_close(&self) -> bool {
+        self.terminal
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
     }
 
     /// The MVCC version every `FetchNext` reads at.

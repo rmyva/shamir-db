@@ -22,6 +22,8 @@ use super::keyset::{
 use crate::db_handler::cursor_support::{authorize_cursor_read, resolve_repo};
 use crate::db_handler::handler::{error_code, session_actor, DbResponse, ShamirDbHandler};
 use crate::db_handler::operator_state::table_unavailable_response;
+use crate::engine::db_handler::repo_audit::enqueue_refused_read_audit;
+
 use crate::db_handler::visibility_handlers::quarantine_cursor_error;
 
 /// Outcome of [`fetch_offset_page`]: the up-to-`effective_page_size` rows
@@ -94,9 +96,27 @@ impl ShamirDbHandler {
         id: u64,
         cursor: &std::sync::Arc<crate::cursor_registry::Cursor>,
     ) {
+        if !cursor.begin_terminal_close() {
+            // Another terminal transition won and owns the cleanup; CancelCursor stays idempotent.
+            return;
+        }
+        let _state = cursor.state().lock().await;
         #[cfg(test)]
         self.cursor_registry.pause_before_remove(id).await;
         self.cursor_registry.remove_identity(id, cursor);
+    }
+
+    async fn remove_cursor_identity_locked(
+        &self,
+        id: u64,
+        cursor: &std::sync::Arc<crate::cursor_registry::Cursor>,
+    ) -> bool {
+        #[cfg(test)]
+        self.cursor_registry.pause_before_remove(id).await;
+        if !cursor.begin_terminal_close() {
+            return false;
+        }
+        self.cursor_registry.remove_identity(id, cursor).is_some()
     }
 
     /// FG-5b FETCH_NEXT — look up the cursor, re-run the pinned read at the
@@ -139,6 +159,44 @@ impl ShamirDbHandler {
     /// `tests/cursor_handler_tests.rs` for the behavior this decision
     /// preserves.
     pub(in crate::engine::db_handler) async fn fetch_next(
+        &self,
+        session: &Session,
+        cursor_id: CursorId,
+        page_size: Option<u32>,
+    ) -> DbResponse {
+        let response = self.fetch_next_inner(session, cursor_id, page_size).await;
+        let (db, repo, table) = match self
+            .cursor_registry
+            .get_owned(cursor_id.0, &session.session_id)
+        {
+            Ok(cursor) => (
+                cursor.db().to_owned(),
+                cursor.repo().to_owned(),
+                cursor
+                    .activity()
+                    .map(|meta| meta.table.clone())
+                    .unwrap_or_default(),
+            ),
+            Err(_) => (
+                "unknown".to_owned(),
+                "unknown".to_owned(),
+                "unknown".to_owned(),
+            ),
+        };
+        if let (Some(audit), DbResponse::Error { code, .. }) = (&self.audit, &response) {
+            drop(enqueue_refused_read_audit(
+                &self.cancel_refusal_audit,
+                audit,
+                session,
+                "fetch_next",
+                (&db, &repo, &table),
+                code,
+            ));
+        }
+        response
+    }
+
+    async fn fetch_next_inner(
         &self,
         session: &Session,
         cursor_id: CursorId,
@@ -195,8 +253,11 @@ impl ShamirDbHandler {
             });
         }
 
+        // Test-only pause lets a close win after this lookup but before state lock acquisition.
+        #[cfg(test)]
+        self.fetch_before_state_lock_pause().await;
         let mut state = cursor.state().lock().await;
-        if state.exhausted {
+        if cursor.is_terminal() || state.exhausted {
             drop(state);
             return DbResponse::Error {
                 code: "cursor_not_found".into(),
@@ -249,7 +310,8 @@ impl ShamirDbHandler {
         if let Err(e) =
             authorize_cursor_read(&self.db, &actor, cursor.db(), cursor.repo(), &table_name).await
         {
-            self.cursor_registry.remove_identity(cursor_id.0, &cursor);
+            self.remove_cursor_identity_locked(cursor_id.0, &cursor)
+                .await;
             drop(state);
             if error_code(&e) == "unknown_table" {
                 return table_unavailable_response();
@@ -268,17 +330,20 @@ impl ShamirDbHandler {
             Err(parent) => return error_response(&parent),
         };
         let Some(authorized_config) = repo.table_config(&table_name) else {
-            self.cursor_registry.remove_identity(cursor_id.0, &cursor);
+            self.remove_cursor_identity_locked(cursor_id.0, &cursor)
+                .await;
             drop(state);
             return table_unavailable_response();
         };
         let Some(authorized_registration) = repo.table_registration(&table_name) else {
-            self.cursor_registry.remove_identity(cursor_id.0, &cursor);
+            self.remove_cursor_identity_locked(cursor_id.0, &cursor)
+                .await;
             drop(state);
             return table_unavailable_response();
         };
         if !repo.has_table(&table_name) {
-            self.cursor_registry.remove_identity(cursor_id.0, &cursor);
+            self.remove_cursor_identity_locked(cursor_id.0, &cursor)
+                .await;
             drop(state);
             return table_unavailable_response();
         }
@@ -289,7 +354,8 @@ impl ShamirDbHandler {
         // convention is the access-denied path above: the cursor is removed
         // (closed) before returning the error.
         if let Some(e) = quarantine_cursor_error(&self.db, cursor.db(), cursor.repo()) {
-            self.cursor_registry.remove_identity(cursor_id.0, &cursor);
+            self.remove_cursor_identity_locked(cursor_id.0, &cursor)
+                .await;
             drop(state);
             return error_response(&e);
         }
@@ -315,7 +381,8 @@ impl ShamirDbHandler {
             Err(e) => {
                 let wrapped = wrap_table_lookup_err(&self.db, cursor.db(), cursor.repo(), e);
                 if error_code(&wrapped) == "unknown_table" {
-                    self.cursor_registry.remove_identity(cursor_id.0, &cursor);
+                    self.remove_cursor_identity_locked(cursor_id.0, &cursor)
+                        .await;
                     drop(state);
                     return table_unavailable_response();
                 }
@@ -329,25 +396,29 @@ impl ShamirDbHandler {
         let repo = match resolve_repo(&self.db, cursor.db(), cursor.repo()) {
             Ok(repo) => repo,
             Err(_) => {
-                self.cursor_registry.remove_identity(cursor_id.0, &cursor);
+                self.remove_cursor_identity_locked(cursor_id.0, &cursor)
+                    .await;
                 drop(state);
                 return table_unavailable_response();
             }
         };
         let Some(current_config) = repo.table_config(&table_name) else {
-            self.cursor_registry.remove_identity(cursor_id.0, &cursor);
+            self.remove_cursor_identity_locked(cursor_id.0, &cursor)
+                .await;
             drop(state);
             return table_unavailable_response();
         };
         let Some(current_registration) = repo.table_registration(&table_name) else {
-            self.cursor_registry.remove_identity(cursor_id.0, &cursor);
+            self.remove_cursor_identity_locked(cursor_id.0, &cursor)
+                .await;
             drop(state);
             return table_unavailable_response();
         };
         if current_config.store_id != authorized_config.store_id
             || !authorized_registration.same_registration(&current_registration)
         {
-            self.cursor_registry.remove_identity(cursor_id.0, &cursor);
+            self.remove_cursor_identity_locked(cursor_id.0, &cursor)
+                .await;
             drop(state);
             return error_response(&BatchError::query_coded(
                 "",
@@ -675,29 +746,21 @@ impl ShamirDbHandler {
         if force_offset_mode {
             state.mode = PaginationMode::Offset;
         }
-        drop(state);
-        cursor.bump_activity();
-
         if !has_more {
-            #[cfg(test)]
-            self.cursor_registry.pause_before_remove(cursor_id.0).await;
-            // The terminal response is safe to expose only if this fetch
-            // wins removal of the exact cursor it just exhausted. A concurrent
-            // close/session cleanup may remove it after `exhausted` is
-            // published; in that case do not return the already-built page
-            // after the cursor has been closed.
-            if self
-                .cursor_registry
-                .remove_identity(cursor_id.0, &cursor)
-                .is_none()
+            // Hold the state lock through the terminal flag and registry removal.
+            if !self
+                .remove_cursor_identity_locked(cursor_id.0, &cursor)
+                .await
             {
-                // The page bytes were stashed for the wire path above; a lost removal
-                // race must not send them — `RequestHandler::handle` prefers stashed
-                // bytes over the returned error response.
+                drop(state);
+                // The page bytes were stashed for the wire path above; a lost
+                // terminal race must not send them.
                 drop(crate::byte_budget::take_stashed_serialized_response());
                 return error_response(&BatchError::CursorNotFound { cursor_id });
             }
         }
+        drop(state);
+        cursor.bump_activity();
 
         // The SAME value already serialized above — not rebuilt, so it can
         // never accidentally diverge from what was stashed.

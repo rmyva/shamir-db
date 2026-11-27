@@ -1,4 +1,4 @@
-//! Wire-level oracle for the terminal-fetch serialized-response stash.
+//! Discriminates terminal fetch stash leakage and a cancel that fails to claim terminal during final-page removal.
 //!
 //! The 1,000,000-byte budget is finite (so `budget_active` is true) but far
 //! above the few-hundred-byte page; `CursorLimitsCap::UNLIMITED` leaves
@@ -100,18 +100,31 @@ async fn losing_terminal_fetch_discards_the_stashed_page_on_the_wire() {
             tokio::time::timeout(CALL_TIMEOUT, reached.wait())
                 .await
                 .expect("fetch reaches terminal-removal pause");
-            assert!(matches!(
-                tokio::time::timeout(
-                    CALL_TIMEOUT,
-                    send(&handler, &session, cancel_cursor(cursor_id))
-                )
-                .await
-                .expect("close within bound"),
-                DbResponse::CursorClosed { .. }
-            ));
+            let cursor = handler
+                .cursor_registry()
+                .get_owned(cursor_id.0, &session.session_id)
+                .expect("cursor remains registered while fetch is paused");
+            let close_handler = handler.clone();
+            let close = tokio::spawn(async move {
+                send(&close_handler, &alice_session(), cancel_cursor(cursor_id)).await
+            });
+            tokio::time::timeout(CALL_TIMEOUT, async {
+                while !cursor.is_terminal() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("cancel claims terminal flag before fetch resumes");
             tokio::time::timeout(CALL_TIMEOUT, resume.wait())
                 .await
                 .expect("resume within bound");
+            assert!(matches!(
+                tokio::time::timeout(CALL_TIMEOUT, close)
+                    .await
+                    .expect("close joins")
+                    .expect("close task"),
+                DbResponse::CursorClosed { .. }
+            ));
         },
     );
     match fetch_result {

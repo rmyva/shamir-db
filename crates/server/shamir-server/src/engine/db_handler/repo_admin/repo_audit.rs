@@ -900,70 +900,10 @@ pub(super) fn enqueue_shape_reset_audit(
     })
 }
 
-/// Payload of a successful typed read: scope names only.
-#[derive(serde::Serialize)]
-struct TypedReadAuditDetails<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    db: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    repo: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    table: Option<&'a str>,
-}
-
-/// Best-effort, detached audit append for a successful typed read. Uses the
-/// same bounded queue, admission/share accounting, clock and session-prefix
-/// fields as [`enqueue_shape_reset_audit`]; only the operation label and the
-/// names-only payload differ.
-///
-/// `operation` is the stable label (`status` / `get_record`), `db` is the read
-/// scope's database name (the server-wide `status` passes an empty name, which
-/// is omitted from the payload), and `repo_table` is `Some` for a table-scoped
-/// read. The status word is the fixed
-/// `ok`: this is called only on the success path, so a refusal is never
-/// audited. The payload carries names only — never a record value, key, filter
-/// or caller literal. Admitted as [`AuditEventClass::Observability`]: it is
-/// high-volume, best-effort telemetry, confined to the reserved observability
-/// part of the cap and share.
-pub(super) fn enqueue_typed_read_audit(
-    queue: &Arc<CancelRefusalAudit>,
-    audit: &Arc<AuditChainWriter>,
-    session: &Session,
-    operation: &'static str,
-    db: &str,
-    repo_table: Option<(&str, &str)>,
-) -> Option<JoinHandle<()>> {
-    let db = (!db.is_empty()).then_some(db);
-    let (repo, table) = match repo_table {
-        Some((repo, table)) => (Some(repo), Some(table)),
-        None => (None, None),
-    };
-    let details = match rmp_serde::to_vec_named(&TypedReadAuditDetails { db, repo, table }) {
-        Ok(details) => details,
-        Err(error) => {
-            // No reservation was taken, so this path must record the dropped
-            // observability job itself.
-            let dropped = queue.record_drop(AuditEventClass::Observability);
-            tracing::error!(
-                %error,
-                class = AuditEventClass::Observability.label(),
-                dropped,
-                "audit append skipped: typed read encoding failed"
-            );
-            return None;
-        }
-    };
-    spawn_detached_audit(DetachedAuditJob {
-        queue,
-        audit,
-        session,
-        operation,
-        details,
-        class: AuditEventClass::Observability,
-        dropped_message: "typed read audit job dropped before append completed",
-        rejected_message: "audit append rejected typed read",
-    })
-}
+#[path = "support/refused_read_audit.rs"]
+mod refused_read_audit;
+pub(in crate::engine::db_handler) use refused_read_audit::enqueue_refused_read_audit;
+pub(in crate::engine::db_handler) use refused_read_audit::enqueue_typed_read_audit;
 
 pub(super) fn repo_audit_observer(
     audit: Arc<AuditChainWriter>,

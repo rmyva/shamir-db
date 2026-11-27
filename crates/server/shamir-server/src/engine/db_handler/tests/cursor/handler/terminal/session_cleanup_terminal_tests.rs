@@ -1,4 +1,4 @@
-//! Session-disconnect cleanup racing a terminal cursor fetch.
+//! Discriminates terminal-page return after session cleanup removes its cursor without taking the cursor lock.
 
 use std::sync::Arc;
 use std::time::Duration;

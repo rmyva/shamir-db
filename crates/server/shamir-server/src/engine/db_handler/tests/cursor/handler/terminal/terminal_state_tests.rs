@@ -1,4 +1,4 @@
-//! Deterministic terminal-page removal race coverage.
+//! Discriminates removal outside the state lock and terminal fetches that can return a page after cancel wins.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -51,18 +51,31 @@ async fn concurrent_close_prevents_final_page_from_returning_after_removal() {
             tokio::time::timeout(CALL_TIMEOUT, reached.wait())
                 .await
                 .expect("fetch reaches terminal-removal pause");
-            assert!(matches!(
-                tokio::time::timeout(
-                    CALL_TIMEOUT,
-                    send(&handler, &session, cancel_cursor(cursor_id))
-                )
-                .await
-                .expect("close within bound"),
-                DbResponse::CursorClosed { .. }
-            ));
+            let cursor = handler
+                .cursor_registry()
+                .get_owned(cursor_id.0, &session.session_id)
+                .expect("cursor remains registered while fetch is paused");
+            let close_handler = handler.clone();
+            let close = tokio::spawn(async move {
+                send(&close_handler, &alice_session(), cancel_cursor(cursor_id)).await
+            });
+            tokio::time::timeout(CALL_TIMEOUT, async {
+                while !cursor.is_terminal() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("cancel claims terminal flag before fetch resumes");
             tokio::time::timeout(CALL_TIMEOUT, resume.wait())
                 .await
                 .expect("resume within bound");
+            assert!(matches!(
+                tokio::time::timeout(CALL_TIMEOUT, close)
+                    .await
+                    .expect("close joins")
+                    .expect("close task"),
+                DbResponse::CursorClosed { .. }
+            ));
         },
     );
     match fetch_result {
@@ -90,21 +103,28 @@ async fn second_fetch_cannot_observe_or_report_the_final_page_twice() {
             tokio::time::timeout(CALL_TIMEOUT, reached.wait())
                 .await
                 .expect("first fetch reaches terminal-removal pause");
-            match tokio::time::timeout(
-                CALL_TIMEOUT,
-                send(&handler, &session, fetch_next(cursor_id, Some(1))),
-            )
-            .await
-            .expect("second fetch completes within bound")
+            let second_handler = handler.clone();
+            let second = tokio::spawn(async move {
+                send(
+                    &second_handler,
+                    &alice_session(),
+                    fetch_next(cursor_id, Some(1)),
+                )
+                .await
+            });
+            tokio::time::timeout(CALL_TIMEOUT, resume.wait())
+                .await
+                .expect("resume within bound");
+            match tokio::time::timeout(CALL_TIMEOUT, second)
+                .await
+                .expect("second fetch joins")
+                .expect("second fetch task")
             {
                 DbResponse::Error { code, .. } => assert_eq!(code, "cursor_not_found"),
                 other => {
                     panic!("serialized exhausted fetch must not return another page: {other:?}")
                 }
             }
-            tokio::time::timeout(CALL_TIMEOUT, resume.wait())
-                .await
-                .expect("resume within bound");
         },
     );
     match first {
