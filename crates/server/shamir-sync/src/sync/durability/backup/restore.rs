@@ -775,8 +775,12 @@ mod staging_location_tests {
     /// Catches staging inside the live root, which makes pre-swap refusals write into the target.
     #[test]
     fn rejects_root_paths_but_allows_normal_targets() {
-        assert!(!super::has_external_staging_location(std::path::Path::new("C:/")));
-        assert!(!super::has_external_staging_location(std::path::Path::new("/")));
+        assert!(!super::has_external_staging_location(std::path::Path::new(
+            "C:/"
+        )));
+        assert!(!super::has_external_staging_location(std::path::Path::new(
+            "/"
+        )));
         let normal_target = std::env::temp_dir().join("restore-target");
         assert!(super::has_external_staging_location(&normal_target));
     }

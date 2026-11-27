@@ -148,11 +148,14 @@ pub(super) fn validate_catalogue_db_name_records(rows: &[QueryValue]) -> Result<
     // This mirrors shamir-db's crate-private validate_catalogue_db_names on
     // the shared predicate; the predicate remains the single source of truth.
     for row in rows {
-        let name = row.get("name").and_then(QueryValue::as_str).ok_or_else(|| {
-            RestoreError::Catalogue(shamir_db::DbError::Validation(
-                "database catalogue row is missing string name".into(),
-            ))
-        })?;
+        let name = row
+            .get("name")
+            .and_then(QueryValue::as_str)
+            .ok_or_else(|| {
+                RestoreError::Catalogue(shamir_db::DbError::Validation(
+                    "database catalogue row is missing string name".into(),
+                ))
+            })?;
         if name == "__system__" {
             continue;
         }
@@ -509,7 +512,10 @@ fn allowed_default_main_route(db: &str, repo: &str, route: &str, wal: bool) -> b
         "shamir_db_default_main.redb",
         "shamir_db_default_main.redb.shamirwal",
     ];
-    if protected.iter().any(|name| route.eq_ignore_ascii_case(name)) {
+    if protected
+        .iter()
+        .any(|name| route.eq_ignore_ascii_case(name))
+    {
         return route == exact && db == "default" && repo == "main";
     }
     false

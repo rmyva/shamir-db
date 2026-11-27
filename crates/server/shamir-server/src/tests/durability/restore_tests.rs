@@ -51,10 +51,19 @@ fn production_restore_probe_refuses_real_server_meta_lock_then_allows_restore() 
 
     let error = restore(&snapshot, &data_dir, false).expect_err("held lock must refuse restore");
     assert!(matches!(error, RestoreError::ServerRunning(ref path) if path == &data_dir));
-    assert_eq!(fs::read(data_dir.join("original.txt")).unwrap(), b"original");
-    assert!(!fs::read_dir(root.path()).unwrap().filter_map(Result::ok).any(|entry| {
-        entry.file_name().to_string_lossy().contains(".restore_tmp_")
-    }));
+    assert_eq!(
+        fs::read(data_dir.join("original.txt")).unwrap(),
+        b"original"
+    );
+    assert!(!fs::read_dir(root.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .contains(".restore_tmp_")
+        }));
 
     drop(held_meta);
     restore(&snapshot, &data_dir, false).expect("restore proceeds once the lock is released");

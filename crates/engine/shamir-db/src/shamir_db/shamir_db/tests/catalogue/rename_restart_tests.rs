@@ -269,8 +269,7 @@ fn production_reserved_names_cover_real_data_root_entries() {
         assert!(!is_reserved_db_name(name), "{name:?} is a near-miss");
     }
     // Catches generated shapes leaking into the equality-pinned fixed inventory; shape admission is covered by the predicate test.
-    assert!(!RESERVED_DB_NAMES.contains(&
-        "seed-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    ));
+    assert!(!RESERVED_DB_NAMES
+        .contains(&"seed-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
     assert!(!RESERVED_DB_NAMES.contains(&"audit.log.00000000000000000001"));
 }

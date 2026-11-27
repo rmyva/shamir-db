@@ -425,10 +425,15 @@ fn public_restore_catalogue_presence_matrix_v1_and_v2_offline() {
                 .expect_err("invalid catalogue must refuse");
             assert!(matches!(
                 error,
-                RestoreError::Catalogue(_) | RestoreError::Consistency { .. }
+                RestoreError::Catalogue(_)
+                    | RestoreError::Consistency { .. }
                     | RestoreError::ManifestVerification(_)
             ));
-            assert_eq!(recursive_listing(&target), before, "v{version} refusal changed target");
+            assert_eq!(
+                recursive_listing(&target),
+                before,
+                "v{version} refusal changed target"
+            );
         }
     }
 }

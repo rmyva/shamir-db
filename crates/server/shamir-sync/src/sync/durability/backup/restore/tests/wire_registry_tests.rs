@@ -143,16 +143,38 @@ fn default_main_route_exception_is_exact() {
             assert!(super::super::catalogue::reject_reserved_store_route(&repo).is_err());
         }
         if wal_route.starts_with("shamir_db") {
-            assert!(super::super::catalogue::reject_reserved_wal_dir(Some(wal_first), &repo).is_err());
+            assert!(
+                super::super::catalogue::reject_reserved_wal_dir(Some(wal_first), &repo).is_err()
+            );
         }
     }
 
     // Case-insensitive protected-shape detection refuses aliases that would collide on a case-insensitive volume.
     for (db, repo_name, store_dir, wal_route) in [
-        ("default", "main", "SHAMIR_DB_DEFAULT_MAIN.REDB", "ordinary/wal"),
-        ("other", "else", "Shamir_Db_Default_Main.Redb", "ordinary/wal"),
-        ("default", "main", "ordinary/store", "Shamir_Db_Default_Main.Redb.shamirwal"),
-        ("other", "else", "ordinary/store", "Shamir_Db_Default_Main.Redb.shamirwal"),
+        (
+            "default",
+            "main",
+            "SHAMIR_DB_DEFAULT_MAIN.REDB",
+            "ordinary/wal",
+        ),
+        (
+            "other",
+            "else",
+            "Shamir_Db_Default_Main.Redb",
+            "ordinary/wal",
+        ),
+        (
+            "default",
+            "main",
+            "ordinary/store",
+            "Shamir_Db_Default_Main.Redb.shamirwal",
+        ),
+        (
+            "other",
+            "else",
+            "ordinary/store",
+            "Shamir_Db_Default_Main.Redb.shamirwal",
+        ),
     ] {
         let repo = super::super::catalogue::CapturedRepo {
             db: db.into(),
@@ -249,11 +271,13 @@ fn nameless_catalogue_database_row_is_typed_corruption() {
     // Catches silently skipping malformed decoded rows, which could hide corrupted catalogue state.
     let mut row = shamir_types::types::common::new_map();
     row.insert("other".to_string(), QueryValue::Str("value".to_string()));
-    let error = super::super::catalogue::validate_catalogue_db_name_records(&[
-        QueryValue::Map(row),
-    ])
-    .expect_err("nameless row is catalogue corruption");
-    assert!(matches!(error, RestoreError::Catalogue(shamir_db::DbError::Validation(_))));
+    let error =
+        super::super::catalogue::validate_catalogue_db_name_records(&[QueryValue::Map(row)])
+            .expect_err("nameless row is catalogue corruption");
+    assert!(matches!(
+        error,
+        RestoreError::Catalogue(shamir_db::DbError::Validation(_))
+    ));
 }
 
 #[tokio::test]
