@@ -28,6 +28,17 @@ impl Drainer {
         Ok(())
     }
 
+    /// Test seam: the startup-seed suite lives in the facade test tree.
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    pub async fn test_seed_startup(
+        &self,
+        repo: &RepoCore,
+        entries: Vec<shamir_wal::WalEntryV2>,
+    ) -> DbResult<()> {
+        self.seed_startup(repo, entries).await
+    }
+
     /// CRIT-2 (#436): re-check every version in `pending_unsafe` against the
     /// CURRENT interner hwm (dropping any that are now confirmed safe), then
     /// compute the truncation ceiling as `min(durable_watermark,
