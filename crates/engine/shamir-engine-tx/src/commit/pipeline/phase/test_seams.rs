@@ -152,7 +152,7 @@ pub static TEST_INDEX_BATCH_BUMP_APPLY_HOOK: std::sync::OnceLock<
 
 /// R2a follow-up 3: repository-scoped, one-shot gate that detaches the
 /// marker save into a non-abortable task inside `persist_markers` (see
-/// [`orphan_marker_park_save`]). Process-global (per-test process
+/// `orphan_marker_park_save`). Process-global (per-test process
 /// isolation).
 #[cfg(any(test, feature = "test-util"))]
 pub struct OrphanMarkerSaveHook {

@@ -123,6 +123,14 @@ fn envelope(run: &super::harness::ShellRun, case: &str) -> serde_json::Value {
     record(run, case)
 }
 
+/// The audit log the running fixture server owns (relative to the data directory).
+const AUDIT_LOG: &str = "audit.log";
+
+/// Current bytes of the fixture server's audit log; an absent file reads as empty.
+fn audit_log_bytes(root: &std::path::Path) -> Vec<u8> {
+    std::fs::read(root.join(AUDIT_LOG)).unwrap_or_default()
+}
+
 /// Hash every regular file below `root` into relative-path → hex digest.
 fn hash_tree(root: &std::path::Path) -> std::collections::BTreeMap<String, String> {
     let mut hashes = std::collections::BTreeMap::new();
@@ -152,6 +160,11 @@ fn collect_hashes(
                 .expect("data file below the data directory")
                 .to_string_lossy()
                 .replace('\\', "/");
+            if relative == AUDIT_LOG {
+                // The live fixture server appends to its audit log on its own
+                // flush schedule: that file is checked as append-only instead.
+                continue;
+            }
             let digest = match std::fs::read(&path) {
                 Ok(bytes) => hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&bytes)),
                 // Windows: the running fixture server holds a byte-range lock
@@ -273,6 +286,7 @@ fn explained_commands_change_nothing_on_disk() {
     let fixture = super::harness::boot("explained_commands_change_nothing_on_disk");
     let data_dir = super::harness::secure_fixture::data_dir(&fixture).to_path_buf();
     let before = hash_tree(&data_dir);
+    let audit_before = audit_log_bytes(&data_dir);
     assert!(
         !before.is_empty(),
         "the fixture data directory must hold files to hash"
@@ -287,6 +301,13 @@ fn explained_commands_change_nothing_on_disk() {
     assert_eq!(
         before, after,
         "an explained command changed the fixture data directory"
+    );
+    // The live server may APPEND to its audit log between the two reads (a
+    // delayed flush on a loaded runner); an explained command must not rewrite
+    // what was already there.
+    assert!(
+        audit_log_bytes(&data_dir).starts_with(&audit_before),
+        "an explained command rewrote the audit log prefix"
     );
 }
 

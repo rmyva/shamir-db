@@ -281,7 +281,7 @@ fn settled_sample(gate: &shamir_tx::RepoTxGate, version: u64) -> VisibilityState
 ///   common case under any non-pathological load, so a steady committer pays
 ///   nothing.
 /// * **Brake (only under pressure):** once `gap > high`, the committer wakes
-///   the drainer and parks on the gate's durable-progress [`Notify`], re-checking
+///   the drainer and parks on the gate's durable-progress `Notify`, re-checking
 ///   the gap each time the drain makes progress. It resumes the instant the gap
 ///   drops below the LOW watermark `high / 2` (hysteresis: braking to exactly
 ///   `high` would re-trigger on the very next commit and thrash; draining down
@@ -300,7 +300,7 @@ fn settled_sample(gate: &shamir_tx::RepoTxGate, version: u64) -> VisibilityState
 /// leaves `durable_watermark` frozen, so the gap never closes and the parking
 /// loop would wait forever. To make a stuck drain a DEGRADATION (more RAM) and
 /// never a HANG, the loop is bounded by a wall-clock budget
-/// ([`BACKPRESSURE_MAX_WAIT`]). When the budget is exhausted it logs a warning
+/// (`BACKPRESSURE_MAX_WAIT`). When the budget is exhausted it logs a warning
 /// and RETURNS (proceeds without backpressure). Correctness is untouched — the
 /// data is already committed and observable; only the overlay-bounding promise
 /// is relaxed under a faulted drain, which is the right trade (never wedge a

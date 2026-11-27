@@ -16,7 +16,7 @@ use crate::tx_outcome::{MaterializationState, TxOutcome};
 
 const DEFAULT_MAX_TX_LIFETIME: std::time::Duration = std::time::Duration::from_secs(300); // 5 min
 
-/// Test-only override for [`DEFAULT_MAX_TX_LIFETIME`].
+/// Test-only override for `DEFAULT_MAX_TX_LIFETIME`.
 ///
 /// `Instant::now() - Duration::from_secs(N)` (the natural way to simulate an
 /// old tx) panics on overflow if the process/host has been up for less than

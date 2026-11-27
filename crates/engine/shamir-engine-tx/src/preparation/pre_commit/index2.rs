@@ -28,7 +28,7 @@ pub static TEST_REDERIVE_PRE_TX_READ_FAILURE: std::sync::OnceLock<
     std::sync::Arc<RederivePreTxReadFailHook>,
 > = std::sync::OnceLock::new();
 
-/// Test-only one-shot failure injector for [`read_pre_tx_bytes`]. See
+/// Test-only one-shot failure injector for `read_pre_tx_bytes`. See
 /// [`TEST_REDERIVE_PRE_TX_READ_FAILURE`]'s doc for the rationale.
 #[cfg(any(test, feature = "test-util"))]
 #[derive(Debug, Default)]

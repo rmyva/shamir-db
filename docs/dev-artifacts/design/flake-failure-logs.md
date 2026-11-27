@@ -94,3 +94,4 @@ diagnostics stay because the class (timing, ports, OS differences) can recur.
 
 A test is added to the table when it flakes; the fix for a new flake includes adopting the
 guard.
+| `explained_commands_change_nothing_on_disk` (shell maintenance explain) | shamir-server `tests/admin/shell/maintenance/explain/explain.rs` | OBSERVED on Windows (engine-cut-tx full tier): the content hash of `audit.log` changed between the two reads although the shell opens nothing for an explained command; the only writer is the RUNNING fixture server (its audit flush landed inside the window on a 17 s test). Fixed in the test: the live server's audit log is no longer content-hashed but checked as append-only (the old bytes must stay a prefix); every other file is still hashed whole. The failure message already prints both full maps. |
