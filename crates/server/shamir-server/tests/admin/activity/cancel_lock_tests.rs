@@ -799,7 +799,7 @@ fn cancel_tx_never_removes_replacement_under_stale_authorization() {
             assert!(fixture.handler.tx_registry().is_empty());
 
             let bob = fixture.user("stale_bob", 2);
-            let (bob_ctx, bob_snapshot) = fixture
+            let (bob_ctx, bob_snapshot, _bob_repo) = fixture
                 .handler
                 .db()
                 .tx_begin_as(Actor::User(principal64(bob.user_id)), DB, REPO, "snapshot")

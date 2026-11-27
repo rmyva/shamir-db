@@ -383,7 +383,7 @@ async fn run() {
     // the production `TxRegistry::begin_commit` path. The registry's
     // `Committing` reservation makes `cancel_tx` answer `already_committing`
     // while the guard is held.
-    let (parked_tx, parked_snapshot) = db
+    let (parked_tx, parked_snapshot, _repo) = db
         .tx_begin_as(owner_actor.clone(), "app", "main", "snapshot")
         .await
         .expect("begin parked transaction");

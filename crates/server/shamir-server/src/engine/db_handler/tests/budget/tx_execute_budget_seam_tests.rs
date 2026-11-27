@@ -41,7 +41,7 @@ async fn fixture(lifetime: Duration) -> (ShamirDbHandler, Session, u64) {
     )
     .await
     .expect("add repo");
-    let (tx, snapshot) = db
+    let (tx, snapshot, _repo) = db
         .tx_begin_as(owner, "app", "main", "snapshot")
         .await
         .expect("begin real transaction");

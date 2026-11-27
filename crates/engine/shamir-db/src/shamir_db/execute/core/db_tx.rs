@@ -111,6 +111,7 @@ impl ShamirDb {
         (
             crate::engine::tx::TxContext,
             crate::engine::tx::SnapshotGuard,
+            crate::engine::repo::RepoInstance,
         ),
         BatchError,
     > {
@@ -129,6 +130,7 @@ impl ShamirDb {
         (
             crate::engine::tx::TxContext,
             crate::engine::tx::SnapshotGuard,
+            crate::engine::repo::RepoInstance,
         ),
         BatchError,
     > {
@@ -177,7 +179,7 @@ impl ShamirDb {
                     code: None,
                 })?;
         tx.set_actor(actor);
-        Ok((tx, guard))
+        Ok((tx, guard, repo))
     }
 
     /// EXECUTE: run one batch inside an already-open interactive tx, WITHOUT

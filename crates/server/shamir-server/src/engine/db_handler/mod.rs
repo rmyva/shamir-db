@@ -16,6 +16,8 @@ mod native_handler;
 mod operator_state;
 #[path = "repo_admin/repo_audit.rs"]
 mod repo_audit;
+#[path = "repo_admin/support/tx_binding.rs"]
+mod tx_binding;
 #[path = "repo_admin/tx_handlers.rs"]
 mod tx_handlers;
 
