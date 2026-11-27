@@ -18,7 +18,7 @@ use crate::common::crypto::{try_random_array, Ed25519Keypair, HmacTag};
 use crate::common::error::{Error, Result};
 use crate::common::fake_blob::FakeBlob;
 use crate::common::identity::{
-    build_challenge_identity_input, build_identity_input, sign_identity,
+    build_challenge_identity_input, build_identity_input, sign_identity, ChallengeIdentityTransport,
 };
 use crate::common::kdf_params::KdfParams;
 use crate::common::scram::{build_server_signature, verify_client_proof, ClientProof};
@@ -228,13 +228,12 @@ impl<'a> ServerHandshake<'a> {
             &self.auth_init.client_nonce,
             &self.server_nonce,
             &view.salt,
-            view.kdf_params.memory_kb,
-            view.kdf_params.time,
-            view.kdf_params.parallelism,
-            view.kdf_params.argon2_version,
-            self.transport_kind,
-            self.auth_init.binding_mode,
-            &self.tls_exporter_or_zeros,
+            view.kdf_params,
+            ChallengeIdentityTransport {
+                transport_kind: self.transport_kind,
+                binding_mode: self.auth_init.binding_mode,
+                tls_exporter_or_zeros: &self.tls_exporter_or_zeros,
+            },
         );
         view.server_pub_key = Some(key);
         view.challenge_sig = Some(sign_identity(&snapshot.current_signer, &input));

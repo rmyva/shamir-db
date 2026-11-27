@@ -27,7 +27,7 @@ use crate::common::crypto::{argon2id, ed25519_verify_strict, Ed25519Keypair};
 use crate::common::domain_tags::TICKET_V1;
 use crate::common::fake_blob::FakeBlob;
 use crate::common::identity::{
-    build_challenge_identity_input, build_identity_input, sign_identity,
+    build_challenge_identity_input, build_identity_input, sign_identity, ChallengeIdentityTransport,
 };
 use crate::common::kdf_params::KdfParams;
 use crate::common::rotation::build_rotate_event_input;
@@ -515,13 +515,17 @@ fn challenge_identity_v2_matches_independent_vector() {
         &hex_to_array(&input.client_nonce_hex),
         &hex_to_array(&input.server_nonce_hex),
         &hex_to_array(&input.salt_hex),
-        input.memory_kb,
-        input.time,
-        input.parallelism,
-        input.argon2_version,
-        TransportKind::from_u8(input.transport_kind).unwrap(),
-        BindingMode::from_u8(input.binding_mode).unwrap(),
-        &hex_to_array(&input.tls_exporter_hex),
+        KdfParams {
+            memory_kb: input.memory_kb,
+            time: input.time,
+            parallelism: input.parallelism,
+            argon2_version: input.argon2_version,
+        },
+        ChallengeIdentityTransport {
+            transport_kind: TransportKind::from_u8(input.transport_kind).unwrap(),
+            binding_mode: BindingMode::from_u8(input.binding_mode).unwrap(),
+            tls_exporter_or_zeros: &hex_to_array(&input.tls_exporter_hex),
+        },
     );
     assert_eq!(
         transcript.len(),

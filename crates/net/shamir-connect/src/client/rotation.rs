@@ -35,7 +35,7 @@ pub struct RotationRecovery {
 pub const ROTATION_MAX_TRANSITION_NS: u64 = 7 * ns::DAY + ns::HOUR; // 7d + 1h skew
 
 /// Check the shared rotation deadline bounds. Narrowly exposed for challenge verification.
-pub(crate) fn verify_rotation_window(transition_until_ns: u64, now_ns: u64) -> Result<()> {
+pub(super) fn verify_rotation_window(transition_until_ns: u64, now_ns: u64) -> Result<()> {
     if transition_until_ns <= now_ns
         || transition_until_ns > now_ns.saturating_add(ROTATION_MAX_TRANSITION_NS)
     {

@@ -165,8 +165,8 @@ impl Error {
                 retry_after: *retry_after,
             },
             Error::UnsupportedVersion => Error::UnsupportedVersion,
-            Error::HandshakeVersionMismatch => Error::HandshakeVersionMismatch,
-            Error::ChallengeLayout => Error::ChallengeLayout,
+            Error::HandshakeVersionMismatch => Error::AuthFailed,
+            Error::ChallengeLayout => Error::AuthFailed,
             Error::BootstrapFailed => Error::BootstrapFailed,
             Error::AuthFailed => Error::AuthFailed,
             // Internal failure causes: explicitly collapsed to the generic

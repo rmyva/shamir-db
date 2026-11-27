@@ -10,6 +10,7 @@ use zeroize::Zeroizing;
 
 use crate::common::bootstrap_message::build_bootstrap_input;
 use crate::common::crypto::Ed25519Keypair;
+use crate::common::error::Error;
 use crate::common::kdf_params::KdfParams;
 use crate::common::time::UnixNanos;
 use crate::common::types::{limits, TransportKind};
@@ -149,12 +150,88 @@ pub struct ChallengeRotationWire {
 impl ChallengeRotationWire {
     /// Encode as a positional three-element MessagePack array.
     pub fn encode(&self) -> crate::common::error::Result<Vec<u8>> {
+        if self.previous_pub.len() != 32 || self.rotation_proof.len() != 64 {
+            return Err(crate::common::error::Error::ChallengeLayout);
+        }
         rmp_serde::to_vec(self).map_err(|_| crate::common::error::Error::ChallengeLayout)
     }
 
-    /// Decode a positional three-element MessagePack array.
+    /// Decode only the exact marker-level positional wire layout.
     pub fn decode(bytes: &[u8]) -> crate::common::error::Result<Self> {
-        rmp_serde::from_slice(bytes).map_err(|_| crate::common::error::Error::ChallengeLayout)
+        fn byte(input: &[u8], pos: &mut usize) -> Option<u8> {
+            let value = *input.get(*pos)?;
+            *pos = pos.checked_add(1)?;
+            Some(value)
+        }
+        fn take<'a>(input: &'a [u8], pos: &mut usize, len: usize) -> Option<&'a [u8]> {
+            let end = pos.checked_add(len)?;
+            let value = input.get(*pos..end)?;
+            *pos = end;
+            Some(value)
+        }
+        fn bin<'a>(input: &'a [u8], pos: &mut usize, expected: usize) -> Option<&'a [u8]> {
+            let marker = byte(input, pos)?;
+            let len = match marker {
+                0xc4 => usize::from(byte(input, pos)?),
+                0xc5 => usize::from(u16::from_be_bytes(take(input, pos, 2)?.try_into().ok()?)),
+                0xc6 => usize::try_from(u32::from_be_bytes(take(input, pos, 4)?.try_into().ok()?))
+                    .ok()?,
+                _ => return None,
+            };
+            if len != expected {
+                return None;
+            }
+            take(input, pos, len)
+        }
+        fn uint(input: &[u8], pos: &mut usize) -> Option<u64> {
+            match byte(input, pos)? {
+                n @ 0x00..=0x7f => Some(u64::from(n)),
+                0xcc => Some(u64::from(byte(input, pos)?)),
+                0xcd => Some(u64::from(u16::from_be_bytes(
+                    take(input, pos, 2)?.try_into().ok()?,
+                ))),
+                0xce => Some(u64::from(u32::from_be_bytes(
+                    take(input, pos, 4)?.try_into().ok()?,
+                ))),
+                0xcf => Some(u64::from_be_bytes(take(input, pos, 8)?.try_into().ok()?)),
+                _ => None,
+            }
+        }
+
+        let invalid = || Error::ChallengeLayout;
+        let mut pos = 0usize;
+        let marker = byte(bytes, &mut pos).ok_or_else(invalid)?;
+        let count = match marker {
+            0x90..=0x9f => usize::from(marker & 0x0f),
+            0xdc => usize::from(u16::from_be_bytes(
+                take(bytes, &mut pos, 2)
+                    .ok_or_else(invalid)?
+                    .try_into()
+                    .map_err(|_| invalid())?,
+            )),
+            0xdd => usize::try_from(u32::from_be_bytes(
+                take(bytes, &mut pos, 4)
+                    .ok_or_else(invalid)?
+                    .try_into()
+                    .map_err(|_| invalid())?,
+            ))
+            .map_err(|_| invalid())?,
+            _ => return Err(invalid()),
+        };
+        if count != 3 {
+            return Err(invalid());
+        }
+        let previous_pub = bin(bytes, &mut pos, 32).ok_or_else(invalid)?.to_vec();
+        let transition_until_ns = uint(bytes, &mut pos).ok_or_else(invalid)?;
+        let rotation_proof = bin(bytes, &mut pos, 64).ok_or_else(invalid)?.to_vec();
+        if pos != bytes.len() {
+            return Err(invalid());
+        }
+        Ok(Self {
+            previous_pub,
+            transition_until_ns,
+            rotation_proof,
+        })
     }
 
     /// Check byte field lengths and convert to the validated payload.

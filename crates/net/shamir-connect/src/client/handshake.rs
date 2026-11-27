@@ -24,7 +24,7 @@ use crate::common::crypto::{constant_time_eq, sha256, try_random_array};
 use crate::common::error::{Error, Result};
 use crate::common::identity::{
     build_challenge_identity_input, build_identity_input,
-    verify_challenge_identity as verify_signature, verify_identity,
+    verify_challenge_identity as verify_signature, verify_identity, ChallengeIdentityTransport,
 };
 use crate::common::kdf_params::{validate_client_kdf_safe, KdfParams};
 use crate::common::password::WipeOnDrop;
@@ -230,13 +230,12 @@ impl ClientHandshake {
             &self.client_nonce,
             &challenge.challenge.server_nonce,
             &challenge.challenge.salt,
-            challenge.challenge.kdf_params.memory_kb,
-            challenge.challenge.kdf_params.time,
-            challenge.challenge.kdf_params.parallelism,
-            challenge.challenge.kdf_params.argon2_version,
-            self.transport_kind,
-            self.binding_mode,
-            &self.tls_exporter_or_zeros,
+            challenge.challenge.kdf_params,
+            ChallengeIdentityTransport {
+                transport_kind: self.transport_kind,
+                binding_mode: self.binding_mode,
+                tls_exporter_or_zeros: &self.tls_exporter_or_zeros,
+            },
         );
         if !verify_signature(&key, &input, &sig) {
             return Err(Error::ServerIdentityChanged);

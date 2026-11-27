@@ -22,20 +22,25 @@ use crate::common::crypto::{ed25519_verify_strict, sha256, Ed25519Keypair};
 use crate::common::domain_tags::{CHALLENGE_ID_V1, IDENTITY_V1, RESUME_PROOF_V1};
 use crate::common::types::{BindingMode, TransportKind};
 
+/// Transport-binding inputs for the challenge identity transcript.
+#[derive(Debug, Clone, Copy)]
+pub struct ChallengeIdentityTransport<'a> {
+    /// Transport protocol used for this challenge.
+    pub transport_kind: TransportKind,
+    /// Negotiated channel-binding mode.
+    pub binding_mode: BindingMode,
+    /// TLS exporter bytes, or all zeroes when unavailable.
+    pub tls_exporter_or_zeros: &'a [u8; 32],
+}
+
 /// Build the canonical challenge-identity transcript (§3.1).
-#[allow(clippy::too_many_arguments)]
 pub fn build_challenge_identity_input(
     server_pub_key: &[u8; 32],
     client_nonce: &[u8; 32],
     server_nonce: &[u8; 32],
     salt: &[u8; 16],
-    memory_kb: u32,
-    time: u32,
-    parallelism: u32,
-    argon2_version: u8,
-    transport_kind: TransportKind,
-    binding_mode: BindingMode,
-    tls_exporter_or_zeros: &[u8; 32],
+    kdf_params: crate::common::kdf_params::KdfParams,
+    transport: ChallengeIdentityTransport<'_>,
 ) -> Vec<u8> {
     let mut out = Vec::with_capacity(181);
     out.extend_from_slice(CHALLENGE_ID_V1);
@@ -43,13 +48,13 @@ pub fn build_challenge_identity_input(
     out.extend_from_slice(client_nonce);
     out.extend_from_slice(server_nonce);
     out.extend_from_slice(salt);
-    out.extend_from_slice(&memory_kb.to_be_bytes());
-    out.extend_from_slice(&time.to_be_bytes());
-    out.extend_from_slice(&parallelism.to_be_bytes());
-    out.push(argon2_version);
-    out.push(transport_kind.as_u8());
-    out.push(binding_mode.as_u8());
-    out.extend_from_slice(tls_exporter_or_zeros);
+    out.extend_from_slice(&kdf_params.memory_kb.to_be_bytes());
+    out.extend_from_slice(&kdf_params.time.to_be_bytes());
+    out.extend_from_slice(&kdf_params.parallelism.to_be_bytes());
+    out.push(kdf_params.argon2_version);
+    out.push(transport.transport_kind.as_u8());
+    out.push(transport.binding_mode.as_u8());
+    out.extend_from_slice(transport.tls_exporter_or_zeros);
     out
 }
 
