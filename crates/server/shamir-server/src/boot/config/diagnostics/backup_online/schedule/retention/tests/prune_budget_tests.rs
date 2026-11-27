@@ -708,3 +708,49 @@ fn only_the_cancel_marker_classifies_as_cancelled() {
         Refusal::Unverifiable
     ));
 }
+
+/// Oracle: the cancellation token is armed ONLY when the verifier's per-chunk
+/// hash loop consults it (`Budget::cancelled`), so the observed `Cancelled`
+/// can only be produced by `classify_verifier_error` mapping the verifier's
+/// typed `HashCancelled` error. Broken implementations caught: (1) a result
+/// that comes from an early cancellation checkpoint instead of the classifier
+/// — every checkpoint sees an uncancelled token here, so a pass that lost the
+/// verifier's probe wiring (or answers `Cancelled` from the
+/// pre-verification checkpoint) never produces the refusal below;
+/// (2) a classifier that ignores the cancelled state — `HashCancelled` then
+/// maps to `Incomplete`/`Unverifiable` and the first assertion fails.
+#[test]
+fn a_cancellation_armed_inside_the_hash_classifies_as_cancelled() {
+    let (_temp, root) = private_root();
+    let older = copy_with_payload(&root, "20200101_000001", 1, Some(OWNER), b"");
+    let fresh = copy_with_payload(&root, "20200101_000002", 2, None, &[0u8; 64 << 10]);
+    let cancel = CancelFlag::default();
+    let mut budget = Budget::with_probe_arming(&cancel, u64::MAX);
+    let mut outcome = RetentionOutcome::default();
+    let refusal = prune_inner(
+        &root,
+        &fresh,
+        OWNER,
+        &BackupRetentionConfig { keep_last: 1 },
+        &BTreeSet::new(),
+        &mut budget,
+        &mut outcome,
+    );
+    assert!(
+        matches!(refusal, Err(Refusal::Cancelled)),
+        "a cancellation armed inside the hash loop must surface as the \
+         classifier's Cancelled, not an early checkpoint's"
+    );
+    assert!(outcome.adopted.is_empty());
+    assert_eq!(
+        (outcome.deleted, outcome.failed, outcome.untouched),
+        (0, 0, None),
+        "the classifier refusal happens before any deletion or publication"
+    );
+    assert!(older.exists());
+    assert!(fresh.exists());
+    assert!(
+        sidecar(&fresh).get("scheduled_retention").is_none(),
+        "the classifier refusal precedes fresh-copy tagging"
+    );
+}

@@ -25,6 +25,8 @@ pub(super) struct Budget<'a> {
     cancel: &'a CancelFlag,
     entries_left: usize,
     bytes_left: u64,
+    #[cfg(test)]
+    arm_on_probe: bool,
 }
 
 impl<'a> Budget<'a> {
@@ -37,6 +39,22 @@ impl<'a> Budget<'a> {
             cancel,
             entries_left: PASS_ENTRIES,
             bytes_left,
+            #[cfg(test)]
+            arm_on_probe: false,
+        }
+    }
+
+    /// Test-only: the cancellation probe arms the flag the first time it is
+    /// consulted, so the pass's checkpoints see an uncancelled token and only
+    /// the consumer of the probe (the verifier's per-chunk hash loop) can
+    /// produce a cancellation.
+    #[cfg(test)]
+    pub(super) fn with_probe_arming(cancel: &'a CancelFlag, bytes_left: u64) -> Self {
+        Self {
+            cancel,
+            entries_left: PASS_ENTRIES,
+            bytes_left,
+            arm_on_probe: true,
         }
     }
 
@@ -51,6 +69,10 @@ impl<'a> Budget<'a> {
     /// a long streaming hash can poll it between chunks instead of only at
     /// the pass's coarse checkpoints.
     pub(super) fn cancelled(&self) -> bool {
+        #[cfg(test)]
+        if self.arm_on_probe {
+            self.cancel.cancel();
+        }
         self.cancel.is_cancelled()
     }
 

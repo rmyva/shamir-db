@@ -257,8 +257,6 @@ pub struct ShamirDbHandler {
     // the response byte budget is unbounded or reserves zero bytes.
     owned_mutation_slots: Arc<Semaphore>,
     owned_mutation_tasks: Arc<MutationTasks>,
-    /// Counts requests decoded by the raw native request path only; token REST and WebSocket decode separately and are not counted. Production has no reader; cost is one Relaxed add per native request.
-    pub(in crate::engine::db_handler) decoded_requests: Arc<std::sync::atomic::AtomicU64>,
     /// R4b-3 — per-server cancellation outcome counters (one fixed slot
     /// per `CancelOutcome`), backing the `shamir_cancellations_total`
     /// family. Shared across all clones of the handler (`Arc`).
@@ -354,7 +352,6 @@ impl ShamirDbHandler {
             allow_self_service: true,
             session_store: None,
             activity_requests: Arc::new(ActivityRequests::new()),
-            decoded_requests: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             cancel_counters: Arc::new(CancelCounters::new()),
             next_request_exec_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             maintenance: None,
@@ -399,7 +396,6 @@ impl ShamirDbHandler {
             allow_self_service: true,
             session_store: None,
             activity_requests: Arc::new(ActivityRequests::new()),
-            decoded_requests: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             cancel_counters: Arc::new(CancelCounters::new()),
             next_request_exec_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             maintenance: None,
@@ -574,8 +570,8 @@ impl RequestHandler for ShamirDbHandler {
                         .map_err(|encode_err| format!("response encode: {}", encode_err));
                 }
             };
-            self.decoded_requests
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            #[cfg(test)]
+            self.begin_pause.note_decoded_request();
             self.handle_decoded_with_request_id(session, request, conn, request_id)
                 .await
         })
