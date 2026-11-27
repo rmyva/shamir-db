@@ -134,14 +134,6 @@ impl ShamirDbHandler {
                 message: err.to_string(),
             };
         }
-        let pre = self
-            .db
-            .get_db(db_name)
-            .and_then(|db| db.get_repo(repo_name));
-        let pre_gate = match &pre {
-            Some(repo) => repo.tx_gate().await.ok(),
-            None => None,
-        };
         #[cfg(test)]
         self.begin_pause.pause().await;
         // `ShamirDb::tx_begin_as` still speaks the wire-string vocabulary;
@@ -150,7 +142,7 @@ impl ShamirDbHandler {
             .db
             .tx_begin_as(actor, db_name, repo_name, iso.as_str())
             .await;
-        let (tx, guard) = match begin {
+        let (tx, guard, repo) = match begin {
             Ok(pair) => pair,
             Err(e) => {
                 return DbResponse::Error {
@@ -160,23 +152,6 @@ impl ShamirDbHandler {
             }
         };
 
-        let post_repo = self
-            .db
-            .get_db(db_name)
-            .and_then(|db| db.get_repo(repo_name));
-        let post_gate = match &post_repo {
-            Some(repo) => repo.tx_gate().await.ok(),
-            None => None,
-        };
-        let bound = match (&pre_gate, &post_gate) {
-            (Some(a), Some(b)) if Arc::ptr_eq(a, b) => post_repo,
-            _ => None,
-        };
-        if bound.is_none() {
-            drop(tx);
-            drop(guard);
-            return server_busy_response();
-        }
         let handle = tx.tx_id.0;
         let snapshot_version = tx.snapshot_version;
         let it = InteractiveTx::new(
@@ -187,13 +162,9 @@ impl ShamirDbHandler {
             db_name.to_string(),
             repo_name.to_string(),
             INTERACTIVE_TX_MAX_LIFETIME,
-            super::activity::tx_abort_release(bound.clone()),
-        );
-        let it = if let Some(inst) = bound {
-            it.with_bound_repo(inst)
-        } else {
-            it
-        };
+            super::activity::tx_abort_release(Some(repo.clone())),
+        )
+        .with_bound_repo(repo);
         // The release-tail owner is bound by the registry at registration
         // (`TxRegistry::register_activity`), never by the caller.
         match self.tx_registry.register_activity(
@@ -477,6 +448,24 @@ impl ShamirDbHandler {
                         r,
                         it.repo()
                     ),
+                };
+            }
+        }
+
+        if let Some(bound_repo) = it.bound_repo() {
+            if let Some(reason) = super::tx_binding::tx_execute_binding_refusal(
+                &self.db,
+                db_name,
+                it.repo(),
+                bound_repo,
+            )
+            .await
+            {
+                self.tx_registry.remove_owned(tx_handle, &it);
+                drop(it);
+                return DbResponse::Error {
+                    code: "tx_wrong_repo".into(),
+                    message: reason,
                 };
             }
         }

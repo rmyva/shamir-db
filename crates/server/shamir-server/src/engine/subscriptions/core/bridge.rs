@@ -491,7 +491,7 @@ pub(crate) async fn bridge_task(
                 #[cfg(test)]
                 bridge_snapshot_cut_tests::pause(0, 0).await;
                 for (ri, repo) in repos.iter().enumerate() {
-                    let (mut tx, guard) = match db
+                    let (mut tx, guard, _) = match db
                         .tx_begin_as(actor.clone(), &db_name, repo, "snapshot")
                         .await
                     {

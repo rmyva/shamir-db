@@ -428,7 +428,7 @@ async fn t10_tx_reads_refused_while_quarantined() {
     seed_row(&shamir).await;
 
     // Open the tx while `main` is still healthy.
-    let (mut tx, _guard) = shamir.tx_begin("testdb", "main", "snapshot").await.unwrap();
+    let (mut tx, _guard, _) = shamir.tx_begin("testdb", "main", "snapshot").await.unwrap();
     quarantine(&shamir, "sub", "prof", "main").await;
 
     // BEGIN on the quarantined repo is refused.
@@ -450,7 +450,8 @@ async fn t10_tx_reads_refused_while_quarantined() {
     assert_eq!(err.code(), Some("resync_required"));
 
     // The healthy, non-replicated `side` repo is unaffected.
-    let (mut tx_side, _guard_side) = shamir.tx_begin("testdb", "side", "snapshot").await.unwrap();
+    let (mut tx_side, _guard_side, _) =
+        shamir.tx_begin("testdb", "side", "snapshot").await.unwrap();
     let mut b_side = Batch::new();
     b_side.id(11);
     b_side.query("r", Query::with_repo("side", "users"));

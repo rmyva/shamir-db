@@ -358,7 +358,7 @@ async fn run() {
     // One real interactive transaction, parked in the ACTUAL tx
     // registry of the production handler (opened directly on the boot
     // DB, registered the same way the wire tx path does).
-    let (tx, snapshot) = db
+    let (tx, snapshot, _) = db
         .tx_begin_as(owner, "app", "main", "snapshot")
         .await
         .expect("begin real transaction");

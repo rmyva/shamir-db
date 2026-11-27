@@ -473,7 +473,7 @@ async fn park_tx(
     owner_actor: &Actor,
     session: &Session,
 ) -> u64 {
-    let (tx, snapshot) = db
+    let (tx, snapshot, repo) = db
         .tx_begin_as(owner_actor.clone(), "app", "main", "snapshot")
         .await
         .expect("begin transaction");
@@ -491,7 +491,8 @@ async fn park_tx(
                 "main".into(),
                 Duration::from_secs(3_600),
                 handler.tx_abort_release("app", "main"),
-            ),
+            )
+            .with_bound_repo(repo),
         )
         .expect("park transaction");
     handle

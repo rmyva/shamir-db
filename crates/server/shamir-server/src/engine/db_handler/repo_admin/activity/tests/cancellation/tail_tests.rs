@@ -76,7 +76,7 @@ async fn fixture() -> (Arc<ShamirDb>, ShamirDbHandler, Actor) {
 }
 
 async fn parked(handler: &ShamirDbHandler, db: &ShamirDb, owner: &Actor, who: &Session) -> u64 {
-    let (ctx, snapshot) = db
+    let (ctx, snapshot, _) = db
         .tx_begin_as(owner.clone(), "app", "main", "snapshot")
         .await
         .unwrap();
@@ -563,7 +563,7 @@ async fn foreign_cancel_tx_removed_committing_reservation_answers_finished() {
         reached.wait().await;
         drop(committing);
         drop(tx);
-        let (replacement_ctx, replacement_snapshot) = db
+        let (replacement_ctx, replacement_snapshot, _) = db
             .tx_begin_as(owner_actor.clone(), "app", "main", "snapshot")
             .await
             .unwrap();
@@ -783,7 +783,7 @@ async fn stale_cancel_does_not_remove_reused_handle() {
         reached.wait().await;
         let removed = base.tx_registry().remove(id).expect("remove busy tx");
         let replacement_owner = session(3, 3, false);
-        let (replacement_ctx, replacement_snapshot) = db
+        let (replacement_ctx, replacement_snapshot, _) = db
             .tx_begin_as(owner_actor.clone(), "app", "main", "snapshot")
             .await
             .unwrap();
@@ -914,7 +914,7 @@ async fn cancel_release_survives_the_abort_of_the_cancel_dispatch() {
                 let _ = finished.send(());
             })
         });
-        let (ctx, snapshot) = db
+        let (ctx, snapshot, _) = db
             .tx_begin_as(owner_actor, "app", "main", "snapshot")
             .await
             .unwrap();

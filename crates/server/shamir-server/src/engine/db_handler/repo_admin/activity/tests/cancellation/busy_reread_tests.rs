@@ -54,17 +54,17 @@ async fn fixture() -> (Arc<ShamirDb>, ShamirDbHandler, Actor) {
 }
 
 async fn parked(handler: &ShamirDbHandler, db: &ShamirDb, owner: &Actor, who: &Session) -> u64 {
-    let (ctx, snapshot) = db
+    let (tx, snapshot, repo) = db
         .tx_begin_as(owner.clone(), "app", "main", "snapshot")
         .await
         .unwrap();
-    let id = ctx.tx_id.0;
+    let id = tx.tx_id.0;
     handler
         .tx_registry()
         .register_activity(
             id,
             InteractiveTx::new(
-                ctx,
+                tx,
                 snapshot,
                 who.session_id,
                 who.user_id,
@@ -72,7 +72,8 @@ async fn parked(handler: &ShamirDbHandler, db: &ShamirDb, owner: &Actor, who: &S
                 "main".into(),
                 Duration::from_secs(3_600),
                 handler.tx_abort_release("app", "main"),
-            ),
+            )
+            .with_bound_repo(repo),
             who.activity_handle(),
             Arc::from(who.username.as_str()),
         )
@@ -99,7 +100,66 @@ async fn wire_cancel(handler: &ShamirDbHandler, caller: &Session, id: u64) -> Db
     rmp_serde::from_slice(&result).unwrap()
 }
 
-/// Kills mutant `busy_committing_recheck_identity_omitted`: the held context
+/// remove_identity is tested directly because the cancel path obtains its expected Arc
+/// atomically from peek; this directly probes the registry's substitution guard.
+/// Removing Arc::ptr_eq in remove_identity makes this test fail because cancel removes the
+/// parked transaction and its subsequent executable read returns tx_not_found.
+#[tokio::test]
+async fn remove_identity_refuses_a_substituted_transaction_arc() {
+    let diag = FlakeGuard::with_watchdog(
+        "remove_identity_refuses_a_substituted_transaction_arc",
+        TIMEOUT,
+    );
+    tokio::time::timeout(TIMEOUT, async {
+        let (db, handler, owner_actor) = fixture().await;
+        let owner = session(1, 1, false);
+        let id = parked(&handler, &db, &owner_actor, &owner).await;
+        let parked = handler
+            .tx_registry()
+            .get_owned(id, &owner.session_id)
+            .unwrap();
+        let (other_ctx, other_snapshot, _) = db
+            .tx_begin_as(owner_actor, "app", "main", "snapshot")
+            .await
+            .unwrap();
+        let other = Arc::new(InteractiveTx::new(
+            other_ctx,
+            other_snapshot,
+            owner.session_id,
+            owner.user_id,
+            "app".into(),
+            "main".into(),
+            Duration::from_secs(3_600),
+            handler.tx_abort_release("app", "main"),
+        ));
+        assert!(!Arc::ptr_eq(&parked, &other));
+        assert!(matches!(
+            handler.tx_registry().remove_identity(id, &other),
+            TxParkedState::Gone
+        ));
+        assert!(matches!(
+            handler.tx_registry().peek(id),
+            TxParkedState::Open(_)
+        ));
+        let response = handler
+            .tx_execute(
+                &owner,
+                CURRENT_QUERY_LANG_VERSION,
+                "app",
+                id,
+                Batch::new().build(),
+            )
+            .await;
+        assert!(
+            matches!(response, DbResponse::TxBatch { .. }),
+            "parked transaction was changed: {response:?}"
+        );
+    })
+    .await
+    .expect("identity scenario timed out");
+    diag.mark("substituted identity refused");
+}
+
 /// guard forces cancel's try_lock to fail and enter the busy re-read; a DIFFERENT
 /// committing transaction under the same handle must answer already_finished, not already_committing.
 #[tokio::test]
@@ -128,7 +188,7 @@ async fn busy_reread_of_different_committing_transaction_answers_finished() {
         reached.wait().await;
         let committing = base.tx_registry().begin_commit(id, &tx).unwrap();
         drop(committing);
-        let (replacement_ctx, replacement_snapshot) = db
+        let (replacement_ctx, replacement_snapshot, _) = db
             .tx_begin_as(owner_actor.clone(), "app", "main", "snapshot")
             .await
             .unwrap();

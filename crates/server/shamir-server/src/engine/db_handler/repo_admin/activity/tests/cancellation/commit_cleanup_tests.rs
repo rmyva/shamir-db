@@ -197,7 +197,7 @@ async fn manual_locked(
     let table = db.get_table(DB, REPO, TABLE).await.unwrap();
     let token = table.table_token();
     let mvcc = table.mvcc_store_for_test().unwrap();
-    let (ctx, snapshot) = db
+    let (ctx, snapshot, _) = db
         .tx_begin_as(owner_actor.clone(), DB, REPO, "pessimistic")
         .await
         .unwrap();
@@ -408,7 +408,54 @@ async fn drop_before_the_pipeline_releases() {
     guard.mark("cleanup owned release");
 }
 
-/// Engine releases lock-only commit locks; cleanup releaser stays unused. Current-thread runtime. Kills double-release-after-success.
+/// A pessimistic TxExecute writer waits on the held key, then performs a real write after rollback.
+/// The MVCC lock implementation waits (it does not return a conflict), so this scenario bounds
+/// the wait and asserts the second writer's actual successful batch after release.
+#[tokio::test]
+async fn pessimistic_writer_proceeds_after_owner_rollback() {
+    let guard =
+        FlakeGuard::with_watchdog("pessimistic_writer_proceeds_after_owner_rollback", TIMEOUT);
+    tokio::time::timeout(TIMEOUT, async {
+        let (db, handler, actor) = fixture().await;
+        let owner = session(1, 1, true);
+        let key = seed_row(&handler, &session(9, 9, true), 1).await;
+        let (_, mvcc) = storage(&handler).await;
+        let baseline = mvcc.locks_len();
+        let id = manual_locked(
+            &db,
+            &handler,
+            &actor,
+            &owner,
+            key,
+            release_real(&db, Arc::new(AtomicUsize::new(0))),
+        )
+        .await;
+        let pending = spawn_waiter(&Arc::new(handler.clone()), session(2, 2, true), 1);
+        tokio::task::yield_now().await;
+        assert!(
+            !pending.is_finished(),
+            "second writer must be waiting for A's exclusive lock"
+        );
+        assert!(matches!(
+            wire(
+                &handler,
+                &owner,
+                DbRequest::TxRollback {
+                    db: DB.into(),
+                    tx_handle: id
+                }
+            )
+            .await,
+            DbResponse::TxRolledBack { .. }
+        ));
+        expect_waiter_proceeds(pending).await;
+        wait_for_lock_release(&mvcc, baseline).await;
+    })
+    .await
+    .expect("pessimistic writer scenario timed out");
+    guard.mark("blocked writer succeeded after rollback");
+}
+
 #[tokio::test]
 async fn successful_commit_never_calls_the_releaser() {
     let guard = FlakeGuard::with_watchdog("successful_commit_never_calls_the_releaser", TIMEOUT);
@@ -423,9 +470,11 @@ async fn successful_commit_never_calls_the_releaser() {
     guard.mark("successful commit avoided cleanup releaser");
 }
 
-/// Begin binds the repository the context opened on: a rename+recreate during
-/// the begin seam leaves no transaction and answers server_busy. Kills the
-/// bind-post-resolved-repo mutant (identity compare omitted).
+/// Begin parks the repository the context really opened on: a rename+recreate
+/// during the begin seam no longer fails BEGIN (the facade returns the opened
+/// instance, no second lookup by name); the later TxExecute binding check is
+/// what refuses the swapped repository. Kills a BEGIN that still answers
+/// server_busy from a post-open name lookup.
 #[tokio::test]
 async fn begin_binds_the_repository_it_opened_on() {
     let guard = FlakeGuard::with_watchdog("begin_binds_the_repository_it_opened_on", TIMEOUT);
@@ -454,9 +503,23 @@ async fn begin_binds_the_repository_it_opened_on() {
         .await
         .unwrap();
         resume.wait().await;
-        assert!(
-            matches!(task.await.unwrap(), DbResponse::Error { code, .. } if code == "server_busy")
-        );
+        let first_handle = match task.await.unwrap() {
+            DbResponse::TxOpened { tx_handle, .. } => tx_handle,
+            response => panic!("begin across the swap must park the opened instance: {response:?}"),
+        };
+        assert!(!handler.tx_registry().is_empty());
+        assert!(matches!(
+            wire(
+                &handler,
+                &owner,
+                DbRequest::TxRollback {
+                    db: DB.into(),
+                    tx_handle: first_handle,
+                },
+            )
+            .await,
+            DbResponse::TxRolledBack { .. }
+        ));
         assert!(handler.tx_registry().is_empty());
 
         let tx_handle = match wire(&handler, &owner, begin_request()).await {
@@ -479,7 +542,7 @@ async fn begin_binds_the_repository_it_opened_on() {
     })
     .await
     .expect("begin scenario timeout");
-    guard.mark("begin kept its resolved repository binding");
+    guard.mark("begin parked the repository it opened on");
 }
 
 /// Bound repository survives rename and releases its row lock. Default current-thread runtime, matching tx_release_tests. Kills by-name-commit and commit-does-not-release.

@@ -48,7 +48,7 @@ async fn fixture(lifetime: Duration) -> (ShamirDbHandler, Session, u64) {
     )
     .await
     .expect("add repo");
-    let (tx, snapshot) = db
+    let (tx, snapshot, repo) = db
         .tx_begin_as(owner, "app", "main", "snapshot")
         .await
         .expect("begin real transaction");
@@ -71,7 +71,8 @@ async fn fixture(lifetime: Duration) -> (ShamirDbHandler, Session, u64) {
                 "main".into(),
                 lifetime,
                 handler.tx_abort_release("app", "main"),
-            ),
+            )
+            .with_bound_repo(repo),
         )
         .expect("park transaction");
     (handler, session, handle)
@@ -144,7 +145,147 @@ where
         .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
 }
 
-/// Inferred red before W7: the valid read executes despite a zero lifetime.
+/// A dropped repository name refuses a bound TxExecute and consumes the handle.
+/// Reverting to the name-only check would let this execution reach the detached store.
+#[test]
+fn tx_execute_refuses_when_bound_repository_name_no_longer_resolves() {
+    on_big_stack(|| async {
+        let (handler, session, original_handle) = fixture(Duration::from_secs(300)).await;
+        assert!(matches!(
+            handler.tx_rollback(&session, "app", original_handle).await,
+            DbResponse::TxRolledBack { .. }
+        ));
+        let handle = match handler
+            .tx_begin(&session, CURRENT_QUERY_LANG_VERSION, "app", "main", None)
+            .await
+        {
+            DbResponse::TxOpened { tx_handle, .. } => tx_handle,
+            other => panic!("begin failed: {other:?}"),
+        };
+        assert!(handler.db().remove_repo("app", "main").await.unwrap());
+
+        match execute(&handler, &session, handle, read("items")).await {
+            DbResponse::Error { code, message } => {
+                assert_eq!(code, "tx_wrong_repo");
+                assert!(message.contains("changed since the transaction began"));
+            }
+            other => panic!("expected repository binding refusal, got {other:?}"),
+        }
+        match execute(&handler, &session, handle, read("items")).await {
+            DbResponse::Error { code, .. } => assert_eq!(code, "tx_not_found"),
+            other => panic!("binding refusal did not remove transaction: {other:?}"),
+        }
+    });
+}
+
+/// Replacing the repository under the same name refuses a bound TxExecute.
+/// Reverting to name-only checking makes the old handle execute against the replacement.
+#[test]
+fn tx_execute_refuses_replacement_repo_and_unchanged_repo_control_works() {
+    on_big_stack(|| async {
+        let (handler, session, initial) = fixture(Duration::from_secs(300)).await;
+        handler.tx_rollback(&session, "app", initial).await;
+        let handle = match handler
+            .tx_begin(&session, CURRENT_QUERY_LANG_VERSION, "app", "main", None)
+            .await
+        {
+            DbResponse::TxOpened { tx_handle, .. } => tx_handle,
+            other => panic!("begin failed: {other:?}"),
+        };
+        let original = handler
+            .db()
+            .get_db("app")
+            .unwrap()
+            .get_repo("main")
+            .unwrap();
+        let original_gate = original.tx_gate().await.unwrap();
+        handler
+            .db()
+            .rename_repo_as("app", "main", "old", Actor::System)
+            .await
+            .unwrap();
+        let owner = Actor::User(principal64(session.user_id));
+        handler
+            .db()
+            .add_repo_as(
+                "app",
+                RepoConfig::new("main", BoxRepoFactory::in_memory())
+                    .add_table(TableConfig::new("items")),
+                owner,
+            )
+            .await
+            .unwrap();
+        let replacement = handler
+            .db()
+            .get_db("app")
+            .unwrap()
+            .get_repo("main")
+            .unwrap();
+        assert!(!Arc::ptr_eq(
+            &original_gate,
+            &replacement.tx_gate().await.unwrap()
+        ));
+        match execute(&handler, &session, handle, read("items")).await {
+            DbResponse::Error { code, message } => {
+                assert_eq!(code, "tx_wrong_repo");
+                assert!(message.contains("changed since the transaction began"));
+            }
+            other => panic!("expected replacement binding refusal, got {other:?}"),
+        }
+        let fresh = match handler
+            .tx_begin(&session, CURRENT_QUERY_LANG_VERSION, "app", "main", None)
+            .await
+        {
+            DbResponse::TxOpened { tx_handle, .. } => tx_handle,
+            other => panic!("fresh begin failed: {other:?}"),
+        };
+        assert!(matches!(
+            execute(&handler, &session, fresh, read("items")).await,
+            DbResponse::TxBatch { .. }
+        ));
+    });
+}
+
+/// The returned repo is the pre-swap instance resolved when BEGIN opens its tx.
+/// This memory fixture distinguishes replacement objects through tx_gate pointer identity.
+#[test]
+fn tx_begin_returns_the_instance_used_for_open() {
+    on_big_stack(|| async {
+        let (handler, session, initial) = fixture(Duration::from_secs(300)).await;
+        handler.tx_rollback(&session, "app", initial).await;
+        let db = handler.db();
+        let before = db.get_db("app").unwrap().get_repo("main").unwrap();
+        let before_gate = before.tx_gate().await.unwrap();
+        let (_tx, _guard, returned) = db
+            .tx_begin_as(Actor::System, "app", "main", "snapshot")
+            .await
+            .unwrap();
+        assert!(Arc::ptr_eq(
+            &before_gate,
+            &returned.tx_gate().await.unwrap()
+        ));
+        db.rename_repo_as("app", "main", "old", Actor::System)
+            .await
+            .unwrap();
+        db.add_repo_as(
+            "app",
+            RepoConfig::new("main", BoxRepoFactory::in_memory())
+                .add_table(TableConfig::new("items")),
+            Actor::System,
+        )
+        .await
+        .unwrap();
+        let current = db.get_db("app").unwrap().get_repo("main").unwrap();
+        assert!(!Arc::ptr_eq(
+            &before_gate,
+            &current.tx_gate().await.unwrap()
+        ));
+        assert!(Arc::ptr_eq(
+            &before_gate,
+            &returned.tx_gate().await.unwrap()
+        ));
+    });
+}
 #[test]
 fn zero_lifetime_rejects_execute_removes_handle_and_frees_session() {
     on_big_stack(|| async {
