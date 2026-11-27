@@ -10,6 +10,7 @@ use zeroize::Zeroizing;
 
 use crate::common::bootstrap_message::build_bootstrap_input;
 use crate::common::crypto::Ed25519Keypair;
+use crate::common::error::Error;
 use crate::common::kdf_params::KdfParams;
 use crate::common::time::UnixNanos;
 use crate::common::types::{limits, TransportKind};
@@ -130,6 +131,134 @@ pub struct IdentityRotationEvent {
     pub recipient_session_id: [u8; 32],
     /// Ed25519 signature by previous priv over the canonical input.
     pub signed_by_old: [u8; 64],
+}
+
+/// Positional challenge-identity rotation chain (exactly three MessagePack elements).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChallengeRotationWire {
+    /// Previously pinned public key (32-byte MessagePack bin).
+    #[serde(with = "serde_bytes")]
+    pub previous_pub: Vec<u8>,
+    /// End of the overlap in Unix nanoseconds.
+    pub transition_until_ns: u64,
+    /// Proof by the previous key (64-byte MessagePack bin).
+    #[serde(with = "serde_bytes")]
+    pub rotation_proof: Vec<u8>,
+}
+
+impl ChallengeRotationWire {
+    /// Encode as a positional three-element MessagePack array.
+    pub fn encode(&self) -> crate::common::error::Result<Vec<u8>> {
+        if self.previous_pub.len() != 32 || self.rotation_proof.len() != 64 {
+            return Err(crate::common::error::Error::ChallengeLayout);
+        }
+        rmp_serde::to_vec(self).map_err(|_| crate::common::error::Error::ChallengeLayout)
+    }
+
+    /// Decode only the exact marker-level positional wire layout.
+    pub fn decode(bytes: &[u8]) -> crate::common::error::Result<Self> {
+        fn byte(input: &[u8], pos: &mut usize) -> Option<u8> {
+            let value = *input.get(*pos)?;
+            *pos = pos.checked_add(1)?;
+            Some(value)
+        }
+        fn take<'a>(input: &'a [u8], pos: &mut usize, len: usize) -> Option<&'a [u8]> {
+            let end = pos.checked_add(len)?;
+            let value = input.get(*pos..end)?;
+            *pos = end;
+            Some(value)
+        }
+        fn bin<'a>(input: &'a [u8], pos: &mut usize, expected: usize) -> Option<&'a [u8]> {
+            let marker = byte(input, pos)?;
+            let len = match marker {
+                0xc4 => usize::from(byte(input, pos)?),
+                0xc5 => usize::from(u16::from_be_bytes(take(input, pos, 2)?.try_into().ok()?)),
+                0xc6 => usize::try_from(u32::from_be_bytes(take(input, pos, 4)?.try_into().ok()?))
+                    .ok()?,
+                _ => return None,
+            };
+            if len != expected {
+                return None;
+            }
+            take(input, pos, len)
+        }
+        fn uint(input: &[u8], pos: &mut usize) -> Option<u64> {
+            match byte(input, pos)? {
+                n @ 0x00..=0x7f => Some(u64::from(n)),
+                0xcc => Some(u64::from(byte(input, pos)?)),
+                0xcd => Some(u64::from(u16::from_be_bytes(
+                    take(input, pos, 2)?.try_into().ok()?,
+                ))),
+                0xce => Some(u64::from(u32::from_be_bytes(
+                    take(input, pos, 4)?.try_into().ok()?,
+                ))),
+                0xcf => Some(u64::from_be_bytes(take(input, pos, 8)?.try_into().ok()?)),
+                _ => None,
+            }
+        }
+
+        let invalid = || Error::ChallengeLayout;
+        let mut pos = 0usize;
+        let marker = byte(bytes, &mut pos).ok_or_else(invalid)?;
+        let count = match marker {
+            0x90..=0x9f => usize::from(marker & 0x0f),
+            0xdc => usize::from(u16::from_be_bytes(
+                take(bytes, &mut pos, 2)
+                    .ok_or_else(invalid)?
+                    .try_into()
+                    .map_err(|_| invalid())?,
+            )),
+            0xdd => usize::try_from(u32::from_be_bytes(
+                take(bytes, &mut pos, 4)
+                    .ok_or_else(invalid)?
+                    .try_into()
+                    .map_err(|_| invalid())?,
+            ))
+            .map_err(|_| invalid())?,
+            _ => return Err(invalid()),
+        };
+        if count != 3 {
+            return Err(invalid());
+        }
+        let previous_pub = bin(bytes, &mut pos, 32).ok_or_else(invalid)?.to_vec();
+        let transition_until_ns = uint(bytes, &mut pos).ok_or_else(invalid)?;
+        let rotation_proof = bin(bytes, &mut pos, 64).ok_or_else(invalid)?.to_vec();
+        if pos != bytes.len() {
+            return Err(invalid());
+        }
+        Ok(Self {
+            previous_pub,
+            transition_until_ns,
+            rotation_proof,
+        })
+    }
+
+    /// Check byte field lengths and convert to the validated payload.
+    pub fn into_payload(self) -> crate::common::error::Result<ChallengeRotationPayload> {
+        Ok(ChallengeRotationPayload {
+            previous_pub: self
+                .previous_pub
+                .try_into()
+                .map_err(|_| crate::common::error::Error::ChallengeLayout)?,
+            transition_until_ns: self.transition_until_ns,
+            rotation_proof: self
+                .rotation_proof
+                .try_into()
+                .map_err(|_| crate::common::error::Error::ChallengeLayout)?,
+        })
+    }
+}
+
+/// Validated challenge rotation chain payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChallengeRotationPayload {
+    /// Previous public identity key.
+    pub previous_pub: [u8; 32],
+    /// Overlap deadline in Unix nanoseconds.
+    pub transition_until_ns: u64,
+    /// Previous-key signature over the rotation chain.
+    pub rotation_proof: [u8; 64],
 }
 
 /// Wire view: `rotation_in_progress` payload embedded in `auth_ok` for

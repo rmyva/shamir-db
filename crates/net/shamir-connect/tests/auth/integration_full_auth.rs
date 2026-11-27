@@ -17,6 +17,48 @@ use shamir_connect::server::{
     SESSION_MAX_AGE_NS,
 };
 
+#[test]
+fn legacy_challenge_path_keeps_original_fields_and_no_v2_identity() {
+    // Discriminates against populating v2 fields on the legacy v1 path or changing existing challenge values.
+    let secrets = fixed_secrets();
+    let policy = ListenerPolicy::new(BindingMode::TlsExporter);
+    let params = fast_kdf();
+    let auth_init = AuthInitView {
+        user: NormalizedUsername::from_raw("alice").unwrap(),
+        client_nonce: [0x31; 32],
+        binding_mode: BindingMode::TlsExporter,
+        version: 1,
+    };
+    let user = UserRecord {
+        salt: [0x42; 16],
+        stored_key: shamir_connect::common::crypto::StoredKey([0x53; 32]),
+        server_key: [0x64; 32].into(),
+        kdf_params: params,
+        tickets_invalid_before_ns: 0,
+    };
+    let server = ServerHandshake::new(
+        policy,
+        TransportKind::Tcp,
+        &secrets,
+        auth_init,
+        [0x75; 32],
+        KdfParams::DEFAULT,
+        |_user| Some(user),
+    )
+    .unwrap();
+
+    let baseline = server.challenge();
+    let challenge = server.challenge();
+    assert_eq!(challenge.salt, baseline.salt);
+    assert_eq!(challenge.kdf_params, baseline.kdf_params);
+    assert_eq!(challenge.server_nonce, baseline.server_nonce);
+    assert_eq!(challenge.salt, [0x42; 16]);
+    assert_eq!(challenge.kdf_params, params);
+    assert!(challenge.server_pub_key.is_none());
+    assert!(challenge.challenge_sig.is_none());
+    assert!(challenge.challenge_rotation.is_none());
+}
+
 /// Fast Argon2id params (real defaults take ~2s; tests use minimum).
 fn fast_kdf() -> KdfParams {
     KdfParams {

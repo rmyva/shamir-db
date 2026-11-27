@@ -16,17 +16,23 @@
 //!  - **TOFU pin check** — `SHA256(server_pub_key) == pinned_hash`
 //!  - **Ed25519 strict verify** — `verify_strict(server_pub, identity_input, identity_sig)`
 
-use crate::client::rotation::{verify_rotation_in_progress, RotationRecovery};
+use crate::client::rotation::{
+    verify_rotation_in_progress, verify_rotation_window, RotationRecovery,
+};
 use crate::common::auth_message::{AuthMessage, AuthMessageInputs};
 use crate::common::crypto::{constant_time_eq, sha256, try_random_array};
 use crate::common::error::{Error, Result};
-use crate::common::identity::{build_identity_input, verify_identity};
+use crate::common::identity::{
+    build_challenge_identity_input, build_identity_input,
+    verify_challenge_identity as verify_signature, verify_identity, ChallengeIdentityTransport,
+};
 use crate::common::kdf_params::{validate_client_kdf_safe, KdfParams};
 use crate::common::password::WipeOnDrop;
+use crate::common::rotation::build_rotation_proof_input;
 use crate::common::scram::{build_client_proof, build_server_signature, ClientProof, DerivedKeys};
 use crate::common::types::{limits, BindingMode, ProtocolVersion, TransportKind};
 use crate::common::username::NormalizedUsername;
-use crate::common::wire::RotationInProgressPayload;
+use crate::common::wire::{ChallengeRotationPayload, RotationInProgressPayload};
 
 /// Server-supplied challenge fields.
 #[derive(Debug, Clone)]
@@ -37,6 +43,20 @@ pub struct ServerChallenge {
     pub kdf_params: KdfParams,
     /// Server-side per-handshake CSPRNG nonce.
     pub server_nonce: [u8; limits::SERVER_NONCE_BYTES],
+}
+
+/// v2 challenge identity data. Kept separate so existing v1 `ServerChallenge`
+/// struct literals and call sites remain source-compatible.
+#[derive(Debug, Clone)]
+pub struct ServerChallengeV2 {
+    /// The original challenge fields.
+    pub challenge: ServerChallenge,
+    /// v2 signer public key.
+    pub server_pub_key: Option<[u8; 32]>,
+    /// v2 signature over challenge identity transcript.
+    pub challenge_sig: Option<[u8; 64]>,
+    /// Optional v2 rotation chain.
+    pub challenge_rotation: Option<ChallengeRotationPayload>,
 }
 
 /// Server-supplied auth_ok fields the client needs to verify.
@@ -191,6 +211,59 @@ impl ClientHandshake {
             binding_mode: self.binding_mode.as_u8(),
             version: ProtocolVersion::V1.as_u8(),
         }
+    }
+
+    /// Verify signed challenge identity before any password derivation.
+    pub fn verify_challenge_identity(
+        &self,
+        challenge: &ServerChallengeV2,
+        now_ns: u64,
+    ) -> Result<[u8; 32]> {
+        let key = challenge
+            .server_pub_key
+            .ok_or(Error::ServerIdentityChanged)?;
+        let sig = challenge
+            .challenge_sig
+            .ok_or(Error::ServerIdentityChanged)?;
+        let input = build_challenge_identity_input(
+            &key,
+            &self.client_nonce,
+            &challenge.challenge.server_nonce,
+            &challenge.challenge.salt,
+            challenge.challenge.kdf_params,
+            ChallengeIdentityTransport {
+                transport_kind: self.transport_kind,
+                binding_mode: self.binding_mode,
+                tls_exporter_or_zeros: &self.tls_exporter_or_zeros,
+            },
+        );
+        if !verify_signature(&key, &input, &sig) {
+            return Err(Error::ServerIdentityChanged);
+        }
+        let key_hash = sha256(&key);
+        if let Some(pin) = self.pinned_hash {
+            if constant_time_eq(&pin, &key_hash) {
+                return Ok(key);
+            }
+            let chain = challenge
+                .challenge_rotation
+                .as_ref()
+                .ok_or(Error::ServerIdentityChanged)?;
+            if !constant_time_eq(&pin, &sha256(&chain.previous_pub)) {
+                return Err(Error::ServerIdentityChanged);
+            }
+            let proof_input =
+                build_rotation_proof_input(&chain.previous_pub, &key, chain.transition_until_ns);
+            if !crate::common::crypto::ed25519_verify_strict(
+                &chain.previous_pub,
+                &proof_input,
+                &chain.rotation_proof,
+            ) {
+                return Err(Error::ServerIdentityChanged);
+            }
+            verify_rotation_window(chain.transition_until_ns, now_ns)?;
+        }
+        Ok(key)
     }
 
     /// Process the server's `challenge`, derive Argon2id material, build proof.

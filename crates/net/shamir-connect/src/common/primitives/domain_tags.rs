@@ -22,6 +22,9 @@ pub const CHGPW_V1: &[u8] = b"SHAMIR-CHGPW-v1";
 /// `identity_input` prefix (spec §5.2.4).
 pub const IDENTITY_V1: &[u8] = b"SHAMIR-IDENTITY-v1";
 
+/// Challenge identity signature prefix (SCRAM-PIN-ORDER §3.1).
+pub const CHALLENGE_ID_V1: &[u8] = b"SHAMIR-CHALLENGE-ID-v1";
+
 /// Bootstrap challenge signature prefix (spec §11.3.3).
 pub const BOOTSTRAP_V1: &[u8] = b"SHAMIR-BOOTSTRAP-v1";
 

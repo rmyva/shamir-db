@@ -19,8 +19,44 @@
 
 use crate::common::auth_message::AuthMessage;
 use crate::common::crypto::{ed25519_verify_strict, sha256, Ed25519Keypair};
-use crate::common::domain_tags::{IDENTITY_V1, RESUME_PROOF_V1};
+use crate::common::domain_tags::{CHALLENGE_ID_V1, IDENTITY_V1, RESUME_PROOF_V1};
 use crate::common::types::{BindingMode, TransportKind};
+
+/// Transport-binding inputs for the challenge identity transcript.
+#[derive(Debug, Clone, Copy)]
+pub struct ChallengeIdentityTransport<'a> {
+    /// Transport protocol used for this challenge.
+    pub transport_kind: TransportKind,
+    /// Negotiated channel-binding mode.
+    pub binding_mode: BindingMode,
+    /// TLS exporter bytes, or all zeroes when unavailable.
+    pub tls_exporter_or_zeros: &'a [u8; 32],
+}
+
+/// Build the canonical challenge-identity transcript (§3.1).
+pub fn build_challenge_identity_input(
+    server_pub_key: &[u8; 32],
+    client_nonce: &[u8; 32],
+    server_nonce: &[u8; 32],
+    salt: &[u8; 16],
+    kdf_params: crate::common::kdf_params::KdfParams,
+    transport: ChallengeIdentityTransport<'_>,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(181);
+    out.extend_from_slice(CHALLENGE_ID_V1);
+    out.extend_from_slice(&sha256(server_pub_key));
+    out.extend_from_slice(client_nonce);
+    out.extend_from_slice(server_nonce);
+    out.extend_from_slice(salt);
+    out.extend_from_slice(&kdf_params.memory_kb.to_be_bytes());
+    out.extend_from_slice(&kdf_params.time.to_be_bytes());
+    out.extend_from_slice(&kdf_params.parallelism.to_be_bytes());
+    out.push(kdf_params.argon2_version);
+    out.push(transport.transport_kind.as_u8());
+    out.push(transport.binding_mode.as_u8());
+    out.extend_from_slice(transport.tls_exporter_or_zeros);
+    out
+}
 
 /// Build the canonical `identity_input` byte string for signing/verification.
 pub fn build_identity_input(
@@ -63,6 +99,15 @@ pub fn resume_proof_message(client_nonce: &[u8; 32], tls_exporter: &[u8; 32]) ->
     out.extend_from_slice(client_nonce);
     out.extend_from_slice(tls_exporter);
     out
+}
+
+/// Verify a challenge identity signature using strict Ed25519 verification.
+pub fn verify_challenge_identity(
+    server_pub_key: &[u8; 32],
+    input: &[u8],
+    signature: &[u8; 64],
+) -> bool {
+    ed25519_verify_strict(server_pub_key, input, signature)
 }
 
 /// Server: sign the `identity_input` with the server Ed25519 priv key.
