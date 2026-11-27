@@ -287,15 +287,22 @@ pub(crate) async fn drain_connections(
     joined
 }
 
-pub(in crate::engine::server) fn report_unsubmitted_release_probe(
-    report: &mut ShutdownReport,
-    reason: &str,
-) {
+fn report_unsubmitted_release_probe(report: &mut ShutdownReport, reason: &str) {
     report.add_error(format!(
         "store release could not be verified: no probe result was obtained; no probe was started / {reason}; \
          whether every store released its directory lock is UNKNOWN; an immediate relaunch of the same \
          data directory can fail with `Locked`"
     ));
+}
+
+/// NEW item (rust-guard: an EXISTING item's visibility must not widen): the
+/// owner-drain store-release outcome reporter calls the private probe
+/// reporter through this wrapper instead of widening it.
+pub(in crate::engine::server) fn report_unsubmitted_release_probe_for_owner(
+    report: &mut ShutdownReport,
+    reason: &str,
+) {
+    report_unsubmitted_release_probe(report, reason);
 }
 
 impl ServerHandle {

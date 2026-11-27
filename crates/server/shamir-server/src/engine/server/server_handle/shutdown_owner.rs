@@ -263,7 +263,7 @@ pub(crate) fn report_store_release_outcome(
             // retry after a completed held observation is StillLocked;
             // abort stops only a queued probe, not a running filesystem call.
             tracing::warn!("shutdown: release probe deadline expired before submission");
-            super::core::report_unsubmitted_release_probe(
+            super::core::report_unsubmitted_release_probe_for_owner(
                 report,
                 "the deadline expired before submission",
             );
