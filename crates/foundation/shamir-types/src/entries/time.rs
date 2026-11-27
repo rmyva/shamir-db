@@ -15,7 +15,7 @@ pub fn local_minute_of_day() -> u32 {
     minute_of_day(jiff::Zoned::now())
 }
 
-fn minute_of_day(now: jiff::Zoned) -> u32 {
+pub(super) fn minute_of_day(now: jiff::Zoned) -> u32 {
     u32::from(now.hour() as u8) * 60 + u32::from(now.minute() as u8)
 }
 

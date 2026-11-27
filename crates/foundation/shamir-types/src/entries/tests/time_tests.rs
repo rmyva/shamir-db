@@ -8,15 +8,24 @@ fn system_time_zone_is_resolvable_not_utc_fallback() {
     // so this test fails on any runner where the fallback would trigger.
     assert!(jiff::tz::TimeZone::try_system().is_ok());
     let instant = jiff::Timestamp::from_second(1_700_000_000).unwrap();
-    let zone = jiff::tz::TimeZone::system();
-    let local = super::minute_of_day(instant.to_zoned(zone.clone()));
-    let explicit = super::minute_of_day(instant.to_zoned(zone));
-    let utc = super::minute_of_day(instant.to_zoned(jiff::tz::TimeZone::UTC));
-    assert_eq!(local, explicit);
-    assert!(local < 1440 && utc < 1440);
-    let minute_delta = (i32::from(local) - i32::from(utc)).rem_euclid(1440);
-    assert!(minute_delta <= 14 * 60);
-    assert_eq!(minute_delta % 1, 0);
+    let system_zone = jiff::tz::TimeZone::system();
+    let system_zoned = instant.to_zoned(system_zone.clone());
+    let explicit_system = super::super::time::minute_of_day(system_zoned.clone());
+    let system_result =
+        super::super::time::minute_of_day(instant.to_zoned(jiff::tz::TimeZone::system()));
+    let new_york = jiff::tz::TimeZone::get("America/New_York").unwrap();
+    let explicit_new_york = super::super::time::minute_of_day(instant.to_zoned(new_york));
+    let utc_zoned = instant.to_zoned(jiff::tz::TimeZone::UTC);
+    let utc = super::super::time::minute_of_day(utc_zoned);
+    assert_eq!(system_result, explicit_system);
+    assert_eq!(explicit_new_york, 17 * 60 + 13);
+    let offset_seconds = system_zoned.offset().seconds();
+    assert_eq!(offset_seconds.rem_euclid(60), 0);
+    assert!((-26 * 60 * 60..=26 * 60 * 60).contains(&offset_seconds));
+    assert_eq!(
+        explicit_system as i32,
+        (utc as i32 + offset_seconds / 60).rem_euclid(1440)
+    );
 }
 
 #[test]

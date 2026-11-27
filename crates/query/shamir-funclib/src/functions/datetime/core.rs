@@ -168,13 +168,24 @@ fn validate_pattern(pattern: &str) -> Result<(), ScalarError> {
             }
             continue;
         }
+        // Numeric widths are supported only for the three fractional forms.
+        // Consume all digits before deciding, so no digit-led directive can
+        // fall through to the ordinary specifier set below.
         let mut width = 0usize;
+        let mut has_width = false;
+        let mut leading_zero = false;
         while spec.is_ascii_digit() {
-            width = width * 10 + usize::from(spec as u8 - b'0');
+            if !has_width {
+                leading_zero = spec == '0';
+            }
+            has_width = true;
+            width = width
+                .saturating_mul(10)
+                .saturating_add(usize::from(spec as u8 - b'0'));
             spec = chars.next().ok_or_else(invalid)?;
         }
-        if width > 0 {
-            if spec != 'f' || pad || alternate || !matches!(width, 3 | 6 | 9) {
+        if has_width {
+            if leading_zero || spec != 'f' || pad || alternate || !matches!(width, 3 | 6 | 9) {
                 return Err(invalid());
             }
             continue;
