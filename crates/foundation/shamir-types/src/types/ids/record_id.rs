@@ -142,7 +142,7 @@ impl RecordId {
     }
 }
 
-/// Converts system time to Unix microseconds with chrono-compatible rounding.
+/// Converts system time to Unix microseconds using the existing floor/ceiling rounding rules.
 pub(crate) fn unix_micros_from_system_time(t: SystemTime) -> i64 {
     t.duration_since(UNIX_EPOCH)
         .map(|duration| i64::try_from(duration.as_micros()).unwrap_or(i64::MAX))

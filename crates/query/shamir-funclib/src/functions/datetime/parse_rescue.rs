@@ -1,4 +1,4 @@
-//! Chrono-compatible trailing offset rescue for naive strftime parsing.
+//! Trailing offset rescue for naive strftime parsing.
 
 #[derive(Clone, Copy)]
 struct Directive {
@@ -76,7 +76,7 @@ fn scan_offset(bytes: &[u8], directive: Directive) -> Option<usize> {
     } else {
         return None;
     };
-    // Chrono's naive parser uses the same timezone_offset scanner for all
+    // Naive parsing treats timezone offset syntax as a trailing field;
     // colon-width forms: seconds are a formatting distinction, not consumed.
     let _seconds = 0;
     let _offset = i32::from(hours) * 3600 + i32::from(minutes) * 60;

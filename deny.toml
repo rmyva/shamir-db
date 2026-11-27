@@ -65,17 +65,6 @@ ignore = [
     # project — deliberately deferred, not silently ignored. Revisit when
     # that migration is scheduled.
     { id = "RUSTSEC-2025-0141", reason = "bincode is unmaintained (maintainer safety incident); no safe upgrade exists (3.0.0 is a deliberate tombstone); migration off bincode is a separate, deferred project touching on-disk WAL/snapshot/interner formats" },
-    # chrono 0.4.x — RUSTSEC-2026-0543 marks the crate unmaintained (all
-    # versions affected, "No safe upgrade is available"; the advisory names
-    # `jiff` and `time` as alternatives). It is a pure "unmaintained" notice,
-    # not a vulnerability or unsoundness report. chrono is used in a handful of
-    # places (record-id timestamps in shamir-types, the datetime scalar
-    # functions of shamir-funclib, the date/time format rules of the schema
-    # validator); replacing it changes parsing/formatting semantics of
-    # user-visible datetime functions and needs its own parity-tested project —
-    # deliberately deferred, not silently ignored. Revisit when that migration
-    # is scheduled, and drop this entry with it.
-    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained (no safe upgrade exists); a pure unmaintained notice with no known vulnerability; migration to time/jiff changes datetime function semantics and is a separate, deferred, parity-tested project" },
 ]
 
 [licenses]

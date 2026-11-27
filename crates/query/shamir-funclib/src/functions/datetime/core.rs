@@ -25,19 +25,16 @@
 use crate::registry::{
     arg_i64, arg_str, v_bool, v_int, v_str, FnEntry, ScalarError, ScalarRegistry,
 };
-use jiff::{civil::DateTime as CivilDateTime, tz::TimeZone, Timestamp};
+use jiff::{civil::DateTime as CivilDateTime, Timestamp};
 
-/// Chrono 0.4.44's `NaiveDate` limits are -262143-01-01 through
-/// 262142-12-31. These are the inclusive epoch-millisecond bounds accepted by
-/// `DateTime<Utc>::from_timestamp_millis`.
-const CHRONO_MIN_TIMESTAMP_MILLIS: i64 = -8_334_601_228_800_000;
-const CHRONO_MAX_TIMESTAMP_MILLIS: i64 = 8_210_266_876_799_999;
-
-fn ensure_chrono_timestamp_range(ms: i64) -> Result<(), ScalarError> {
-    if (CHRONO_MIN_TIMESTAMP_MILLIS..=CHRONO_MAX_TIMESTAMP_MILLIS).contains(&ms) {
+/// Ensure the UTC civil year containing `ms` is in Jiff's -9999..=9999 range.
+fn ensure_civil_year_range(ms: i64, code: &'static str) -> Result<(), ScalarError> {
+    let days = ms.div_euclid(86_400_000);
+    let (year, _, _) = civil_from_days(days);
+    if (-9999..=9999).contains(&year) {
         Ok(())
     } else {
-        Err(ScalarError::builtin("out_of_range"))
+        Err(ScalarError::builtin(code))
     }
 }
 
@@ -56,7 +53,7 @@ struct CalendarFields {
 
 impl CalendarFields {
     fn from_millis(ms: i64) -> Result<Self, ScalarError> {
-        ensure_chrono_timestamp_range(ms)?;
+        ensure_civil_year_range(ms, "out_of_range")?;
         const DAY_MILLIS: i64 = 86_400_000;
         let days = ms.div_euclid(DAY_MILLIS);
         let day_millis = ms.rem_euclid(DAY_MILLIS);
@@ -107,17 +104,17 @@ fn checked_calendar_start(days: i64) -> Result<i64, ScalarError> {
     let millis = days
         .checked_mul(86_400_000)
         .ok_or_else(|| ScalarError::builtin("out_of_range"))?;
-    ensure_chrono_timestamp_range(millis)?;
+    ensure_civil_year_range(millis, "out_of_range")?;
     Ok(millis)
 }
 
 fn start_of_calendar_day(ms: i64) -> Result<i64, ScalarError> {
-    ensure_chrono_timestamp_range(ms)?;
+    ensure_civil_year_range(ms, "out_of_range")?;
     checked_calendar_start(ms.div_euclid(86_400_000))
 }
 
 fn start_of_calendar_week(ms: i64) -> Result<i64, ScalarError> {
-    ensure_chrono_timestamp_range(ms)?;
+    ensure_civil_year_range(ms, "out_of_range")?;
     let days = ms.div_euclid(86_400_000);
     checked_calendar_start(days - (days + 3).rem_euclid(7))
 }
@@ -128,7 +125,7 @@ fn start_of_calendar_month(ms: i64) -> Result<i64, ScalarError> {
 }
 
 fn start_of_calendar_year(ms: i64, fields: CalendarFields) -> Result<i64, ScalarError> {
-    ensure_chrono_timestamp_range(ms)?;
+    ensure_civil_year_range(ms, "out_of_range")?;
     checked_calendar_start(days_from_civil(fields.year, 1, 1))
 }
 
@@ -171,6 +168,9 @@ fn validate_pattern(pattern: &str) -> Result<(), ScalarError> {
             }
             continue;
         }
+        if matches!(spec, '1'..='9') {
+            return Err(invalid());
+        }
         if spec == '.' {
             if pad || alternate {
                 return Err(invalid());
@@ -203,7 +203,7 @@ fn validate_pattern(pattern: &str) -> Result<(), ScalarError> {
     Ok(())
 }
 
-fn chrono_format(pattern: &str, ms: i64) -> Result<String, ScalarError> {
+fn compatible_format(pattern: &str, ms: i64) -> Result<String, ScalarError> {
     let f = CalendarFields::from_millis(ms)?;
     let year = f.year;
     let ordinal = days_from_civil(year, f.month, f.day) - days_from_civil(year, 1, 1) + 1;
@@ -296,6 +296,9 @@ fn chrono_format(pattern: &str, ms: i64) -> Result<String, ScalarError> {
             width_text.push(chars.next().ok_or_else(|| ScalarError::builtin("parse"))?);
         }
         let width = width_text.parse::<usize>().unwrap_or(0);
+        if width > 9 {
+            return Err(ScalarError::builtin("parse"));
+        }
         let mut precision = None;
         let mut auto_precision = false;
         if chars.peek() == Some(&'.') {
@@ -562,7 +565,7 @@ fn parse_rfc3339_millis(input: &str) -> Result<i64, ScalarError> {
         .and_then(|v| v.checked_add(fraction_nanos / 1_000_000))
         .and_then(|v| if leap { v.checked_add(1_000) } else { Some(v) })
         .ok_or_else(|| ScalarError::builtin("out_of_range"))?;
-    ensure_chrono_timestamp_range(millis)?;
+    ensure_civil_year_range(millis, "out_of_range")?;
     Ok(millis)
 }
 
@@ -699,11 +702,24 @@ pub fn register(reg: &mut ScalarRegistry) {
                             .map_err(|_| ScalarError::builtin("parse"))?
                     }
                 };
-                let timestamp = parsed
-                    .to_zoned(TimeZone::UTC)
-                    .map(|zoned| zoned.timestamp())
-                    .map_err(|_| ScalarError::builtin("out_of_range"))?;
-                Ok(v_int(timestamp_millis(timestamp)?))
+                let date = parsed.date();
+                let time = parsed.time();
+                let days = days_from_civil(
+                    i32::from(date.year()),
+                    i32::from(date.month()),
+                    i32::from(date.day()),
+                );
+                let millis = days
+                    .checked_mul(86_400_000)
+                    .and_then(|value| value.checked_add(i64::from(time.hour()) * 3_600_000))
+                    .and_then(|value| value.checked_add(i64::from(time.minute()) * 60_000))
+                    .and_then(|value| value.checked_add(i64::from(time.second()) * 1_000))
+                    .and_then(|value| {
+                        value.checked_add(i64::from(time.subsec_nanosecond() / 1_000_000))
+                    })
+                    .ok_or_else(|| ScalarError::builtin("parse"))?;
+                ensure_civil_year_range(millis, "parse")?;
+                Ok(v_int(millis))
             },
             2,
             Some(2),
@@ -715,9 +731,9 @@ pub fn register(reg: &mut ScalarRegistry) {
             |a| {
                 let millis = arg_i64(a, 0)?;
                 let pattern = arg_str(a, 1)?;
-                ensure_chrono_timestamp_range(millis)?;
+                ensure_civil_year_range(millis, "out_of_range")?;
                 validate_pattern(pattern)?;
-                chrono_format(pattern, millis).map(v_str)
+                compatible_format(pattern, millis).map(v_str)
             },
             2,
             Some(2),
@@ -825,13 +841,13 @@ pub fn register(reg: &mut ScalarRegistry) {
         FnEntry::pure(
             |a| {
                 let timestamp = arg_i64(a, 0)?;
-                ensure_chrono_timestamp_range(timestamp)?;
+                ensure_civil_year_range(timestamp, "out_of_range")?;
                 let seconds = arg_i64(a, 1)?;
                 let millis = seconds
                     .checked_mul(1000)
                     .and_then(|delta| timestamp.checked_add(delta))
                     .ok_or_else(|| ScalarError::builtin("out_of_range"))?;
-                ensure_chrono_timestamp_range(millis)?;
+                ensure_civil_year_range(millis, "out_of_range")?;
                 Ok(v_int(millis))
             },
             2,
@@ -843,13 +859,13 @@ pub fn register(reg: &mut ScalarRegistry) {
         FnEntry::pure(
             |a| {
                 let timestamp = arg_i64(a, 0)?;
-                ensure_chrono_timestamp_range(timestamp)?;
+                ensure_civil_year_range(timestamp, "out_of_range")?;
                 let days = arg_i64(a, 1)?;
                 let millis = days
                     .checked_mul(86_400_000)
                     .and_then(|delta| timestamp.checked_add(delta))
                     .ok_or_else(|| ScalarError::builtin("out_of_range"))?;
-                ensure_chrono_timestamp_range(millis)?;
+                ensure_civil_year_range(millis, "out_of_range")?;
                 Ok(v_int(millis))
             },
             2,
@@ -924,16 +940,4 @@ pub fn register(reg: &mut ScalarRegistry) {
 
 fn div_floor(n: i64, d: i64) -> i64 {
     n.div_euclid(d)
-}
-
-fn timestamp_millis(timestamp: Timestamp) -> Result<i64, ScalarError> {
-    // Chrono timestamp_millis floors negative instants and truncates fractional
-    // milliseconds; Jiff's seconds and subsecond fields are signed/consistent.
-    timestamp
-        .as_second()
-        .checked_mul(1_000)
-        .and_then(|millis| {
-            millis.checked_add(timestamp.subsec_nanosecond().div_euclid(1_000_000) as i64)
-        })
-        .ok_or_else(|| ScalarError::builtin("out_of_range"))
 }

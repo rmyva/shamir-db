@@ -7,12 +7,10 @@ mod tests {
     use std::thread;
     use std::time::{Duration, UNIX_EPOCH};
 
-    /// Pins the committed WIP conversion formula. Chrono's `Utc::now().timestamp_micros()`
-    /// panicked on a pre-epoch clock, so the ceiling-negative fallback is the
-    /// round-1 sanctioned behavior, not chrono parity; positive values retain
-    /// chrono-floor parity.
+    /// Pins the committed SystemTime conversion formula. A pre-epoch clock uses
+    /// the ceiling-negative fallback; positive values retain floor semantics.
     #[test]
-    fn unix_micros_conversion_matches_chrono_rounding() {
+    fn unix_micros_conversion_is_pinned() {
         use crate::types::ids::record_id::unix_micros_from_system_time;
         assert_eq!(
             unix_micros_from_system_time(UNIX_EPOCH + Duration::new(1_234_567_890, 123_456_789)),

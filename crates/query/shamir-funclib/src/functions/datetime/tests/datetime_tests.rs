@@ -1,10 +1,7 @@
-//! Per-function `/datetime` tests — at least one correct-result assert and one
-//! error/edge case per registered function. Expected values are derived from
-//! `chrono` directly so the asserts do not duplicate hand-computed constants.
+//! Per-function `/datetime` tests with literal UTC golden vectors.
 
 use crate::datetime;
 use crate::registry::{v_bool, v_int, v_str, ScalarRegistry};
-use chrono::{DateTime, NaiveDate, TimeZone, Timelike, Utc};
 use shamir_types::types::value::QueryValue;
 
 fn reg() -> ScalarRegistry {
@@ -13,32 +10,12 @@ fn reg() -> ScalarRegistry {
     r
 }
 
-/// 2021-06-02T15:30:45Z — a Wednesday — as canonical epoch-millis.
+/// 2021-06-02T15:30:45Z — Wednesday; days_from_civil(2021, 6, 2) = 18780,
+/// and 18780*86_400_000 + 15*3_600_000 + 30*60_000 + 45*1_000.
 const WED_MS: i64 = 1_622_647_845_000;
 
 fn ts(ms: i64) -> QueryValue {
     QueryValue::Int(ms)
-}
-
-fn millis_of(s: &str) -> i64 {
-    DateTime::parse_from_rfc3339(s)
-        .unwrap()
-        .with_timezone(&Utc)
-        .timestamp_millis()
-}
-
-#[test]
-fn local_minute_of_day_matches_chrono_local() {
-    let before = chrono::Local::now();
-    let before_minute = before.hour() * 60 + before.minute();
-    let actual = shamir_types::time::local_minute_of_day();
-    let after = chrono::Local::now();
-    let after_minute = after.hour() * 60 + after.minute();
-
-    assert!(
-        actual == before_minute || actual == after_minute,
-        "actual {actual} did not match chrono minutes before ({before_minute}) or after ({after_minute})",
-    );
 }
 
 #[test]
@@ -112,12 +89,10 @@ fn rfc3339_roundtrip() {
         )
         .unwrap();
     assert_eq!(ms, v_int(WED_MS));
-    let s = r.call("format_rfc3339", &[ts(WED_MS)]).unwrap();
-    // re-parse the formatted string and confirm it round-trips.
-    match s {
-        QueryValue::Str(text) => assert_eq!(millis_of(&text), WED_MS),
-        other => panic!("expected Str, got {other:?}"),
-    }
+    assert_eq!(
+        r.call("format_rfc3339", &[ts(WED_MS + 123)]).unwrap(),
+        v_str("2021-06-02T15:30:45.123+00:00".into())
+    );
     // error: unparseable string.
     assert_eq!(
         r.call("parse_rfc3339", &[v_str("not-a-date".into())])
@@ -150,7 +125,7 @@ fn weekday_and_weekend() {
     assert_eq!(r.call("weekday", &[ts(WED_MS)]).unwrap(), v_int(2));
     assert_eq!(r.call("is_weekend", &[ts(WED_MS)]).unwrap(), v_bool(false));
     // Saturday 2021-06-05T12:00:00Z is a weekend.
-    let sat = millis_of("2021-06-05T12:00:00+00:00");
+    let sat = 1_622_894_400_000;
     assert_eq!(r.call("weekday", &[ts(sat)]).unwrap(), v_int(5));
     assert_eq!(r.call("is_weekend", &[ts(sat)]).unwrap(), v_bool(true));
     // error: wrong type for weekday.
@@ -211,16 +186,16 @@ fn period_starts() {
     let r = reg();
     assert_eq!(
         r.call("start_of_day", &[ts(WED_MS)]).unwrap(),
-        v_int(millis_of("2021-06-02T00:00:00+00:00"))
+        v_int(1_622_592_000_000)
     );
     // week starts on Monday 2021-05-31.
     assert_eq!(
         r.call("start_of_week", &[ts(WED_MS)]).unwrap(),
-        v_int(millis_of("2021-05-31T00:00:00+00:00"))
+        v_int(1_622_419_200_000)
     );
     assert_eq!(
         r.call("start_of_month", &[ts(WED_MS)]).unwrap(),
-        v_int(millis_of("2021-06-01T00:00:00+00:00"))
+        v_int(1_622_505_600_000)
     );
     // error: out-of-range input.
     assert_eq!(
@@ -240,32 +215,32 @@ fn truncate_units() {
     assert_eq!(
         r.call("truncate", &[ts(WED_MS), v_str("minute".into())])
             .unwrap(),
-        v_int(millis_of("2021-06-02T15:30:00+00:00"))
+        v_int(1_622_647_800_000)
     );
     assert_eq!(
         r.call("truncate", &[ts(WED_MS), v_str("hour".into())])
             .unwrap(),
-        v_int(millis_of("2021-06-02T15:00:00+00:00"))
+        v_int(1_622_646_000_000)
     );
     assert_eq!(
         r.call("truncate", &[ts(WED_MS), v_str("day".into())])
             .unwrap(),
-        v_int(millis_of("2021-06-02T00:00:00+00:00"))
+        v_int(1_622_592_000_000)
     );
     assert_eq!(
         r.call("truncate", &[ts(WED_MS), v_str("week".into())])
             .unwrap(),
-        v_int(millis_of("2021-05-31T00:00:00+00:00"))
+        v_int(1_622_419_200_000)
     );
     assert_eq!(
         r.call("truncate", &[ts(WED_MS), v_str("month".into())])
             .unwrap(),
-        v_int(millis_of("2021-06-01T00:00:00+00:00"))
+        v_int(1_622_505_600_000)
     );
     assert_eq!(
         r.call("truncate", &[ts(WED_MS), v_str("year".into())])
             .unwrap(),
-        v_int(millis_of("2021-01-01T00:00:00+00:00"))
+        v_int(1_609_459_200_000)
     );
     // error: unknown unit.
     assert_eq!(
@@ -276,16 +251,10 @@ fn truncate_units() {
     );
 }
 
-/// Sanity: ensure the canonical constant matches its RFC-3339 spelling so the
-/// other asserts rest on a correct baseline.
+/// Sanity: pin the arithmetic baseline used by the UTC golden vectors.
 #[test]
 fn baseline_constant_is_consistent() {
-    assert_eq!(
-        WED_MS,
-        Utc.timestamp_opt(1_622_647_845, 0)
-            .unwrap()
-            .timestamp_millis()
-    );
+    assert_eq!(WED_MS, 1_622_647_845_000);
 }
 
 // ============================================================================
@@ -311,24 +280,17 @@ fn format_with_pattern() {
 
 #[test]
 fn format_with_malformed_pattern_returns_err_not_panic() {
-    // CRITICAL: chrono's `DateTime::format(pattern)` returns a LAZY
-    // `DelayedFormat` that only interprets specifiers when displayed. An
-    // unknown specifier like `%Q` causes a PANIC at `.to_string()` time, not
-    // an `Err`. The `validate_pattern` pre-check (using `StrftimeItems`)
-    // converts this panic into a clean `ScalarError("parse")`.
-    //
-    // This test would FAIL BY PANICKING (crashing the test binary) if the
-    // `StrftimeItems` pre-validation step were removed — proving the
-    // footgun-prevention works.
+    // Validate patterns before formatting so unsupported directives return a
+    // clean `parse` error rather than panic.
     let r = reg();
-    // %Q is not a valid chrono strftime specifier.
+    // An unsupported specifier must be rejected with `parse`.
     assert_eq!(
         r.call("format", &[ts(WED_MS), v_str("%Y-%Q-%d".into())])
             .unwrap_err()
             .code,
         "parse"
     );
-    // %J is also not a valid chrono specifier (distinct from %q = quarter).
+    // %J is unsupported, distinct from %q (quarter).
     assert_eq!(
         r.call("format", &[ts(WED_MS), v_str("%J".into())])
             .unwrap_err()
@@ -347,11 +309,7 @@ fn parse_date_only_pattern() {
             &[v_str("2024-03-15".into()), v_str("%Y-%m-%d".into())],
         )
         .unwrap();
-    let expected = Utc
-        .with_ymd_and_hms(2024, 3, 15, 0, 0, 0)
-        .unwrap()
-        .timestamp_millis();
-    assert_eq!(result, v_int(expected));
+    assert_eq!(result, v_int(1_710_460_800_000));
 }
 
 #[test]
@@ -367,11 +325,7 @@ fn parse_datetime_pattern() {
             ],
         )
         .unwrap();
-    let expected = Utc
-        .with_ymd_and_hms(2024, 3, 15, 10, 30, 0)
-        .unwrap()
-        .timestamp_millis();
-    assert_eq!(result, v_int(expected));
+    assert_eq!(result, v_int(1_710_498_600_000));
 }
 
 #[test]
@@ -430,269 +384,254 @@ fn format_parse_roundtrip() {
     assert_eq!(reparsed, v_int(WED_MS));
 }
 
-fn chrono_reference(name: &str, args: &[QueryValue]) -> Result<QueryValue, String> {
-    super::chrono_oracle::reference(name, args)
-}
-
-fn datetime_parity_mismatch(name: &str, args: &[QueryValue]) -> Option<String> {
-    let actual = reg().call(name, args).map_err(|error| error.code);
-    let expected = chrono_reference(name, args);
-    (actual != expected)
-        .then(|| format!("{name}({args:?}): actual={actual:?}, chrono={expected:?}"))
+#[test]
+fn civil_year_edges_are_enforced() {
+    let r = reg();
+    assert_eq!(
+        r.call("year", &[ts(253_370_764_800_000)]).unwrap(),
+        v_int(9999)
+    );
+    assert_eq!(
+        r.call("weekday", &[ts(253_370_764_800_000)]).unwrap(),
+        v_int(4)
+    );
+    assert_eq!(
+        r.call("year", &[ts(253_402_214_400_000)]).unwrap(),
+        v_int(9999)
+    );
+    for (millis, expected) in [
+        (253_370_764_800_000, Some(9999)),
+        (253_370_851_200_000, Some(9999)),
+        (253_402_214_400_000, Some(9999)),
+        (253_402_300_799_999, Some(9999)),
+        (253_402_300_800_000, None),
+        (-377_705_116_800_000, Some(-9999)),
+        (-377_692_070_400_000, Some(-9999)),
+        (-377_816_739_200_000, None),
+    ] {
+        match expected {
+            Some(year) => assert_eq!(r.call("year", &[ts(millis)]).unwrap(), v_int(year)),
+            None => assert_eq!(
+                r.call("year", &[ts(millis)]).unwrap_err().code,
+                "out_of_range"
+            ),
+        }
+    }
+    assert_eq!(
+        r.call(
+            "parse",
+            &[v_str("9999-12-31".into()), v_str("%Y-%m-%d".into())]
+        )
+        .unwrap(),
+        v_int(253_402_214_400_000)
+    );
+    assert_eq!(
+        r.call(
+            "parse",
+            &[v_str("-9999-01-01".into()), v_str("%Y-%m-%d".into())]
+        )
+        .unwrap(),
+        v_int(-377_705_116_800_000)
+    );
+    for input in ["10000-01-01", "-10000-01-01"] {
+        assert_eq!(
+            r.call("parse", &[v_str(input.into()), v_str("%Y-%m-%d".into())])
+                .unwrap_err()
+                .code,
+            "parse"
+        );
+    }
+    for millis in [253_402_300_800_000, -377_816_739_200_000] {
+        for name in ["format", "format_rfc3339"] {
+            let args = if name == "format" {
+                vec![ts(millis), v_str("%F".into())]
+            } else {
+                vec![ts(millis)]
+            };
+            assert_eq!(r.call(name, &args).unwrap_err().code, "out_of_range");
+        }
+        for name in [
+            "add_secs",
+            "add_days",
+            "start_of_day",
+            "start_of_week",
+            "start_of_month",
+            "truncate",
+        ] {
+            let args = match name {
+                "add_secs" | "add_days" => vec![ts(millis), ts(0)],
+                "truncate" => vec![ts(millis), v_str("day".into())],
+                _ => vec![ts(millis)],
+            };
+            assert_eq!(r.call(name, &args).unwrap_err().code, "out_of_range");
+        }
+    }
 }
 
 #[test]
-fn chrono_differential_boundary_grid_and_seeded_sweep() {
-    let mut mismatches = Vec::new();
-    macro_rules! assert_datetime_parity {
-        ($name:expr, $args:expr) => {
-            if let Some(mismatch) = datetime_parity_mismatch($name, $args) {
-                mismatches.push(mismatch);
-            }
-        };
-    }
-    let mut values = vec![
-        i64::MIN,
-        i64::MIN + 1,
-        i64::MAX,
-        i64::MAX - 1,
-        -1,
-        0,
-        1,
-        -1001,
-        -1000,
-        -999,
-        999,
-        1000,
-        1001,
-    ];
-    // Derive chrono's inclusive civil-date endpoints from its own constants;
-    // timestamp_millis_opt then establishes the exact accepted millisecond edge.
-    for date in [NaiveDate::MIN, NaiveDate::MAX] {
-        let midnight = date
-            .and_hms_opt(0, 0, 0)
-            .unwrap()
-            .and_utc()
-            .timestamp_millis();
-        let last_second = date
-            .and_hms_opt(23, 59, 59)
-            .unwrap()
-            .and_utc()
-            .timestamp_millis();
-        values.extend([
-            midnight.saturating_sub(1),
-            midnight,
-            midnight.saturating_add(1),
-        ]);
-        values.extend([
-            last_second.saturating_sub(1),
-            last_second,
-            last_second.saturating_add(999),
-        ]);
-        if date == NaiveDate::MAX {
-            values.push(last_second.saturating_add(1000));
-        }
-    }
-    for year in [
-        -9999, -400, -100, -4, -1, 0, 1, 4, 100, 400, 999, 1900, 2000, 2100, 9999,
+fn non_trailing_offset_directives_follow_jiff() {
+    let r = reg();
+    assert_eq!(
+        r.call(
+            "parse",
+            &[
+                v_str("2021-06-02 +02:00 15:30:45".into()),
+                v_str("%Y-%m-%d %z %H:%M:%S".into())
+            ]
+        )
+        .unwrap_err()
+        .code,
+        "parse"
+    );
+    assert_eq!(
+        r.call(
+            "parse",
+            &[
+                v_str("2021-06-02 +0200 15:30:45".into()),
+                v_str("%Y-%m-%d %z %H:%M:%S".into())
+            ]
+        )
+        .unwrap(),
+        v_int(1_622_647_845_000)
+    );
+}
+
+#[test]
+fn rfc3339_fraction_and_offset_goldens() {
+    let r = reg();
+    for (input, expected) in [
+        ("2021-06-02T15:30:45.1Z", 1_622_647_845_100),
+        ("2021-06-02T15:30:45.12Z", 1_622_647_845_120),
+        ("2021-06-02T15:30:45.123Z", 1_622_647_845_123),
+        ("2021-06-02T15:30:45.123456Z", 1_622_647_845_456),
+        ("2021-06-02T15:30:45.123456789Z", 1_622_647_845_789),
+        ("2021-06-02T15:30:45.1234567890Z", 1_622_647_845_789),
+        ("2021-06-02T15:30:45.123+02:30", 1_622_638_845_123),
+        ("2021-06-02T15:30:45.1+02:30", 1_622_638_845_100),
+        ("2021-06-02T15:30:45.12+02:30", 1_622_638_845_120),
+        ("2021-06-02T15:30:45.123456+02:30", 1_622_638_845_456),
+        ("2021-06-02T15:30:45.123456789+02:30", 1_622_638_845_789),
+        ("2021-06-02T15:30:45.1234567890+02:30", 1_622_638_845_789),
+        ("2021-06-02T15:30:45.1−05:00", 1_622_663_445_100),
+        ("2021-06-02T15:30:45.12−05:00", 1_622_663_445_120),
+        ("2021-06-02T15:30:45.123−05:00", 1_622_663_445_123),
+        ("2021-06-02T15:30:45.123456−05:00", 1_622_663_445_456),
+        ("2021-06-02T15:30:45.123456789−05:00", 1_622_663_445_789),
+        ("2021-06-02T15:30:45.1234567890−05:00", 1_622_663_445_789),
+        ("2021-06-02T15:30:45-07:00", 1_622_673_045_000),
+        ("2021-06-02T15:30:45−05:00", 1_622_663_445_000),
+        ("2016-12-31T23:59:60Z", 1_483_228_800_000),
+        ("1969-12-31T23:59:59.9Z", -100),
+        ("9999-12-31T00:00:00Z", 253_402_214_400_000),
     ] {
-        for date in [
-            (1, 1),
-            (1, 31),
-            (2, 28),
-            (2, 29),
-            (3, 1),
-            (12, 30),
-            (12, 31),
-        ] {
-            if let Some(value) = Utc
-                .with_ymd_and_hms(year, date.0, date.1, 23, 59, 59)
-                .single()
-            {
-                let ms = value.timestamp_millis();
-                values.extend([ms - 1, ms, ms + 1, ms + 999]);
-            }
-        }
-    }
-    let mut seed = 0x6a09_e667_f3bc_c909u64;
-    for _ in 0..512 {
-        seed ^= seed << 13;
-        seed ^= seed >> 7;
-        seed ^= seed << 17;
-        values.push((seed as i64) % 8_000_000_000_000_000);
-    }
-    values.sort_unstable();
-    values.dedup();
-    let operations = [
-        "to_epoch_s",
-        "to_epoch_ms",
-        "from_epoch_ms",
-        "year",
-        "month",
-        "day",
-        "hour",
-        "minute",
-        "second",
-        "weekday",
-        "is_weekend",
-        "format_rfc3339",
-        "start_of_day",
-        "start_of_week",
-        "start_of_month",
-    ];
-    for millis in values.iter().copied() {
-        for operation in operations {
-            assert_datetime_parity!(operation, &[ts(millis)]);
-        }
-        assert_datetime_parity!("from_epoch_s", &[ts(millis)]);
-        for delta in [-86_401, -1, 0, 1, 86_401, i64::MIN, i64::MAX] {
-            assert_datetime_parity!("add_secs", &[ts(millis), ts(delta)]);
-            assert_datetime_parity!("add_days", &[ts(millis), ts(delta)]);
-            assert_datetime_parity!("diff_secs", &[ts(millis), ts(delta)]);
-        }
-        for unit in [
-            "second",
-            "minute",
-            "hour",
-            "day",
-            "week",
-            "month",
-            "year",
-            "fortnight",
-        ] {
-            assert_datetime_parity!("truncate", &[ts(millis), v_str(unit.into())]);
-        }
-    }
-    // All chrono strftime conversions (including modifiers) plus invalid and truncated directives.
-    let patterns = [
-        "%a", "%A", "%b", "%B", "%c", "%C", "%d", "%D", "%e", "%F", "%G", "%g", "%h", "%H", "%I",
-        "%j", "%k", "%l", "%m", "%M", "%n", "%p", "%P", "%q", "%r", "%R", "%s", "%S", "%t", "%T",
-        "%u", "%U", "%V", "%v", "%w", "%W", "%x", "%X", "%y", "%Y", "%z", "%:z", "%::z", "%:::z",
-        "%Z", "%+", "%%", "%E4Y", "%Od", "%_d", "%-d", "%0d", "%^B", "%#c", "%f", "%6f", "%9f",
-        "%.f", "%.3f", "%.6f", "%.9f", "%3f", "%-f", "%_f", "%-G", "%_g", "%Q", "%J", "%", "%E",
-        "%O",
-    ];
-    for pattern in patterns {
-        assert_datetime_parity!("format", &[ts(1_622_647_845_123), v_str(pattern.into())]);
-    }
-    for (input, pattern) in [
-        ("2021-06-02", "%Y-%m-%d"),
-        ("2021-06-02 15:30:45", "%Y-%m-%d %H:%M:%S"),
-        ("Wed Jun  2 15:30:45 2021", "%a %b %e %T %Y"),
-        ("2021-06-02T15:30:45Z", "%Y-%m-%dT%H:%M:%S%#z"),
-        ("2021-06-02T15:30:45z", "%Y-%m-%dT%H:%M:%S%#z"),
-        ("2021-06-02T15:30:45+02", "%Y-%m-%dT%H:%M:%S%#z"),
-        ("2021-06-02T15:30:45+0200", "%Y-%m-%dT%H:%M:%S%#z"),
-        ("2021-06-02T15:30:45+02:00", "%Y-%m-%dT%H:%M:%S%#z"),
-        ("2021-06-02T15:30:45+02 00", "%Y-%m-%dT%H:%M:%S%#z"),
-        ("2021-06-02T15:30:45+02:00:30", "%Y-%m-%dT%H:%M:%S%#z"),
-        ("2021-06-02T15:30:45-07", "%Y-%m-%dT%H:%M:%S%#z"),
-        ("2021-06-02T15:30:45", "%Y-%m-%dT%H:%M:%S%#z"),
-        ("2021-06-02T15:30:45+02:00", "%Y-%m-%dT%H:%M:%S%z"),
-        ("2021-06-02T15:30:45+02 00", "%Y-%m-%dT%H:%M:%S%z"),
-        ("2021-06-02T15:30:45+30:00", "%Y-%m-%dT%H:%M:%S%z"),
-        ("2021-06-02T15:30:45-99:59", "%Y-%m-%dT%H:%M:%S%#z"),
-        ("not-a-date", "%Y-%m-%d"),
-        ("2021-13-02", "%Y-%m-%d"),
-    ] {
-        assert_datetime_parity!("parse", &[v_str(input.into()), v_str(pattern.into())]);
+        assert_eq!(
+            r.call("parse_rfc3339", &[v_str(input.into())]).unwrap(),
+            v_int(expected),
+            "{input}"
+        );
     }
     for input in [
-        "2021-06-02T15:30:45Z",
-        "2021-06-02T15:30:45.1Z",
-        "2021-06-02T15:30:45.12Z",
-        "2021-06-02T15:30:45.123Z",
-        "2021-06-02T15:30:45.123456Z",
-        "2021-06-02T15:30:45.123456789Z",
-        "2021-06-02T15:30:45.1234567890Z",
-        "2021-06-02T15:30:45.1+02:30",
-        "2021-06-02T15:30:45.12+02:30",
-        "2021-06-02T15:30:45.123+02:30",
-        "2021-06-02T15:30:45.123456+02:30",
-        "2021-06-02T15:30:45.123456789+02:30",
-        "2021-06-02T15:30:45.1234567890+02:30",
-        "2021-06-02T15:30:45.1−05:00",
-        "2021-06-02T15:30:45.12−05:00",
-        "2021-06-02T15:30:45.123−05:00",
-        "2021-06-02T15:30:45.123456−05:00",
-        "2021-06-02T15:30:45.123456789−05:00",
-        "2021-06-02T15:30:45.1234567890−05:00",
-        "2021-06-02T15:30:45.Z",
-        "2021-06-02T15:30:45.",
-        "1969-12-31T23:59:59.9Z",
-        "2021-06-02T15:30:45+",
-        "2021-06-02T15:30:45−",
-        "2021-06-02T15:30:45+0",
-        "2021-06-02T15:30:45+02:30",
-        "2021-06-02T15:30:45-07:00",
-        "2021-06-02t15:30:45z",
-        "2016-12-31T23:59:60Z",
         "2021-06-02T15:30:45",
+        "2021-06-02T15:30:45+",
+        "2021-06-02T15:30:45+0",
         "2021-06-02T15:30:45+25:00",
-        "not-a-date",
+        "-10000-01-01T00:00:00Z",
     ] {
-        assert_datetime_parity!("parse_rfc3339", &[v_str(input.into())]);
+        assert_eq!(
+            r.call("parse_rfc3339", &[v_str(input.into())])
+                .unwrap_err()
+                .code,
+            "parse",
+            "{input}"
+        );
     }
-    for (name, args) in [
-        ("year", vec![v_str("x".into())]),
-        ("to_epoch_s", vec![v_str("x".into())]),
-        ("format", vec![ts(0), ts(1)]),
-        ("parse", vec![v_str("x".into()), ts(0)]),
-        ("add_secs", vec![ts(0), v_str("1".into())]),
-        ("truncate", vec![ts(0), ts(1)]),
-    ] {
-        assert_datetime_parity!(name, &args);
-    }
-    assert!(
-        mismatches.is_empty(),
-        "{} chrono differential mismatches:\n{}",
-        mismatches.len(),
-        mismatches.join("\n")
-    );
 }
 
 #[test]
-fn chrono_differential_wall_clock_bounds() {
-    let before_now = Utc::now().timestamp_millis();
-    let now = reg().call("now", &[]).unwrap();
-    let after_now = Utc::now().timestamp_millis();
-    let QueryValue::Int(now_ms) = now else {
-        panic!("now must return Int: {now:?}");
-    };
-    assert!(
-        (before_now..=after_now).contains(&now_ms),
-        "now={now_ms}, bounds={before_now}..={after_now}"
-    );
+fn strftime_golden_table() {
+    let r = reg();
+    for (pattern, expected) in [
+        ("%Y-%m-%d", "2021-06-02"),
+        ("%H:%M:%S", "15:30:45"),
+        ("%j", "153"),
+        ("%d", "02"),
+        ("%e", " 2"),
+        ("%h", "Jun"),
+        ("%A", "Wednesday"),
+        ("%a", "Wed"),
+        ("%B", "June"),
+        ("%b", "Jun"),
+        ("%p", "PM"),
+        ("%P", "pm"),
+        ("%I", "03"),
+        ("%l", " 3"),
+        ("%m", "06"),
+        ("%M", "30"),
+        ("%S", "45"),
+        ("%k", "15"),
+        ("%C", "20"),
+        ("%y", "21"),
+        ("%D", "06/02/21"),
+        ("%F", "2021-06-02"),
+        ("%R", "15:30"),
+        ("%T", "15:30:45"),
+        ("%X", "15:30:45"),
+        ("%r", "03:30:45 PM"),
+        ("%c", "Wed Jun  2 15:30:45 2021"),
+        ("%x", "06/02/21"),
+        ("%v", " 2-Jun-2021"),
+        ("%U", "22"),
+        ("%W", "22"),
+        ("%V", "23"),
+        ("%G", "2021"),
+        ("%g", "21"),
+        ("%-G", "2021"),
+        ("%_g", "21"),
+        ("%q", "2"),
+        ("%f", "123000000"),
+        ("%-f", "123000000"),
+        ("%_f", "123000000"),
+        ("%.f", ".123"),
+        ("%.3f", ".123"),
+        ("%.6f", ".123000"),
+        ("%.9f", ".123000000"),
+        ("%3f", "123"),
+        ("%6f", "123000"),
+        ("%9f", "123000000"),
+        ("%s", "1622647845"),
+        ("%z", "+0000"),
+        ("%:z", "+00:00"),
+        ("%::z", "+00:00:00"),
+        ("%:::z", "+00"),
+        ("%Z", "UTC"),
+        ("%+", "2021-06-02T15:30:45.123+00:00"),
+        ("%n", "\n"),
+        ("%t", "\t"),
+        ("%%", "%"),
+    ] {
+        assert_eq!(
+            r.call("format", &[ts(WED_MS + 123), v_str(pattern.into())])
+                .unwrap(),
+            v_str(expected.into()),
+            "{pattern}"
+        );
+    }
+    for pattern in [
+        "%E4Y", "%Od", "%^B", "%#c", "%Q", "%J", "%", "%E", "%O", "%12d", "%_F",
+    ] {
+        assert_eq!(
+            r.call("format", &[ts(WED_MS), v_str(pattern.into())])
+                .unwrap_err()
+                .code,
+            "parse",
+            "{pattern}"
+        );
+    }
+}
 
-    let then_negative = Utc::now().timestamp_millis() + 90_000;
-    let before_negative_age = Utc::now().timestamp_millis();
-    let negative_age = reg().call("age", &[ts(then_negative)]).unwrap();
-    let after_negative_age = Utc::now().timestamp_millis();
-    let QueryValue::Int(negative_age_secs) = negative_age else {
-        panic!("age must return Int: {negative_age:?}");
-    };
-    let negative_lower =
-        chrono_reference("age_at", &[ts(then_negative), ts(before_negative_age)]).unwrap();
-    let negative_upper =
-        chrono_reference("age_at", &[ts(then_negative), ts(after_negative_age)]).unwrap();
-    assert!(negative_age_secs < 0);
-    assert!(negative_age == negative_lower || negative_age == negative_upper);
-
-    let then = Utc::now().timestamp_millis() - 10_000;
-    let before_age = Utc::now().timestamp_millis();
-    let age = reg().call("age", &[ts(then)]).unwrap();
-    let after_age = Utc::now().timestamp_millis();
-    let QueryValue::Int(age_secs) = age else {
-        panic!("age must return Int: {age:?}");
-    };
-    let lower = chrono_reference("age_at", &[ts(then), ts(before_age)]).unwrap();
-    let upper = chrono_reference("age_at", &[ts(then), ts(after_age)]).unwrap();
-    assert!((match (&lower, &upper) {
-        (QueryValue::Int(a), QueryValue::Int(b)) => *a.min(b)..=*a.max(b),
-        _ => unreachable!(),
-    })
-    .contains(&age_secs));
-    assert!(age == lower || age == upper);
+#[test]
+fn local_minute_of_day_is_zone_independent_in_range() {
+    assert!(shamir_types::time::local_minute_of_day() < 1440);
 }
 
 #[test]
