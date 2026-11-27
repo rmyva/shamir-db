@@ -1,0 +1,7 @@
+base = "ffceb826af616d7d09f55d8ceb370b125ddd3dc4"
+
+[[allow_widen]]
+path = "crates/engine/shamir-engine-tx/src/drain/drainer/mod.rs"
+item = "orphan_repair"
+reason = "R4c: the engine and the facade tx tests call the orphan repair across the crate edge (the drainer moved into shamir-engine-tx)"
+owner = "<wave-R4c>"

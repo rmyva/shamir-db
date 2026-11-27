@@ -20,17 +20,7 @@
 #             to_path/to_item identify the head binary id/test name
 
 [[campaigns]]
-name = "engine-layering-R4b"
-packages = ["shamir-engine", "shamir-engine-table"]
-delta = ".rust-guard/stages/engine-layering-R4b.toml"
-discovery_delta = ".rust-guard/stages/engine-layering-R4b-discovery.toml"
-
-# R2a-1d: the landed engine-truncation-pin-R2a-1 campaign is superseded —
-# its entry and delta files are removed by this campaign's PR (see
-# tools/rust-guard/README.md: "A landed entry is inert; the next campaign's
-# PR removes it (and its delta files)").
-[[campaigns]]
-name = "engine-online-backup-R2a-1d"
-packages = ["shamir-engine"]
-delta = ".rust-guard/stages/r2a-1d-online-backup.toml"
-discovery_delta = ".rust-guard/stages/r2a-1d-online-backup-discovery.toml"
+name = "engine-layering-R4c"
+packages = ["shamir-engine", "shamir-engine-tx"]
+delta = ".rust-guard/stages/engine-layering-R4c.toml"
+discovery_delta = ".rust-guard/stages/engine-layering-R4c-discovery.toml"
