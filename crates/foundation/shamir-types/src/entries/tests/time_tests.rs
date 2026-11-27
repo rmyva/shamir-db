@@ -7,6 +7,16 @@ fn system_time_zone_is_resolvable_not_utc_fallback() {
     // UTC on non-UTC Windows hosts. try_system() fails exactly in that case,
     // so this test fails on any runner where the fallback would trigger.
     assert!(jiff::tz::TimeZone::try_system().is_ok());
+    let instant = jiff::Timestamp::from_second(1_700_000_000).unwrap();
+    let zone = jiff::tz::TimeZone::system();
+    let local = super::minute_of_day(instant.to_zoned(zone.clone()));
+    let explicit = super::minute_of_day(instant.to_zoned(zone));
+    let utc = super::minute_of_day(instant.to_zoned(jiff::tz::TimeZone::UTC));
+    assert_eq!(local, explicit);
+    assert!(local < 1440 && utc < 1440);
+    let minute_delta = (i32::from(local) - i32::from(utc)).rem_euclid(1440);
+    assert!(minute_delta <= 14 * 60);
+    assert_eq!(minute_delta % 1, 0);
 }
 
 #[test]

@@ -12,7 +12,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Jiff reports these valid civil clock components as signed integers; convert
 /// through their unsigned representation before arithmetic.
 pub fn local_minute_of_day() -> u32 {
-    let now = jiff::Zoned::now();
+    minute_of_day(jiff::Zoned::now())
+}
+
+fn minute_of_day(now: jiff::Zoned) -> u32 {
     u32::from(now.hour() as u8) * 60 + u32::from(now.minute() as u8)
 }
 

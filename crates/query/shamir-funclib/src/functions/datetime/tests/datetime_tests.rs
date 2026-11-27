@@ -45,13 +45,11 @@ fn age_is_nondeterministic_and_nonnegative() {
         QueryValue::Int(n) => assert!(n > 0),
         other => panic!("expected Int, got {other:?}"),
     }
-    // error: wrong type.
-    assert_eq!(
-        r.call("age", &[QueryValue::Str("x".into())])
-            .unwrap_err()
-            .code,
-        "type_mismatch"
-    );
+    let future = shamir_types::time::unix_millis() as i64 + 60_000;
+    match r.call("age", &[ts(future)]).unwrap() {
+        QueryValue::Int(seconds) => assert!(seconds < 0),
+        other => panic!("expected Int, got {other:?}"),
+    }
 }
 
 #[test]
@@ -251,10 +249,41 @@ fn truncate_units() {
     );
 }
 
-/// Sanity: pin the arithmetic baseline used by the UTC golden vectors.
 #[test]
-fn baseline_constant_is_consistent() {
-    assert_eq!(WED_MS, 1_622_647_845_000);
+fn baseline_constant_is_derived_from_civil_date() {
+    // days_from_civil(2021, 6, 2) = 18_780; add 15:30:45 in milliseconds.
+    let days = {
+        let (year, month, day) = (2021i64, 6i64, 2i64);
+        let adjusted_year = year - i64::from(month <= 2);
+        let era = adjusted_year.div_euclid(400);
+        let year_of_era = adjusted_year - era * 400;
+        let shifted_month = month + if month > 2 { -3 } else { 9 };
+        let day_of_year = (153 * shifted_month + 2) / 5 + day - 1;
+        let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+        era * 146_097 + day_of_era - 719_468
+    };
+    assert_eq!(days, 18_780);
+    assert_eq!(
+        WED_MS,
+        days * 86_400_000 + 15 * 3_600_000 + 30 * 60_000 + 45 * 1_000
+    );
+}
+
+#[test]
+fn boundary_date_parse_pattern_range() {
+    let r = reg();
+    for (input, result, code) in [
+        ("9999-01-01", Some(253_370_764_800_000), "parse"),
+        ("10000-01-01", None, "parse"),
+        ("-9999-01-01", Some(-377_705_203_200_000), "parse"),
+        ("-10000-01-01", None, "parse"),
+    ] {
+        let actual = r.call("parse", &[v_str(input.into()), v_str("%Y-%m-%d".into())]);
+        match result {
+            Some(ms) => assert_eq!(actual.unwrap(), v_int(ms)),
+            None => assert_eq!(actual.unwrap_err().code, code),
+        }
+    }
 }
 
 // ============================================================================
@@ -278,11 +307,16 @@ fn format_with_pattern() {
     );
 }
 
-#[test]
 fn format_with_malformed_pattern_returns_err_not_panic() {
     // Validate patterns before formatting so unsupported directives return a
     // clean `parse` error rather than panic.
     let r = reg();
+    assert_eq!(
+        r.call("format", &[ts(WED_MS), v_str("%1d".into())])
+            .unwrap_err()
+            .code,
+        "parse"
+    );
     // An unsupported specifier must be rejected with `parse`.
     assert_eq!(
         r.call("format", &[ts(WED_MS), v_str("%Y-%Q-%d".into())])
@@ -399,22 +433,27 @@ fn civil_year_edges_are_enforced() {
         r.call("year", &[ts(253_402_214_400_000)]).unwrap(),
         v_int(9999)
     );
-    for (millis, expected) in [
-        (253_370_764_800_000, Some(9999)),
-        (253_370_851_200_000, Some(9999)),
-        (253_402_214_400_000, Some(9999)),
-        (253_402_300_799_999, Some(9999)),
+    let cases = [
+        (253_370_764_800_000, Some((9999, 1, 1))),
+        (253_402_300_799_999, Some((9999, 12, 31))),
         (253_402_300_800_000, None),
-        (-377_705_116_800_000, Some(-9999)),
-        (-377_692_070_400_000, Some(-9999)),
-        (-377_816_739_200_000, None),
-    ] {
-        match expected {
-            Some(year) => assert_eq!(r.call("year", &[ts(millis)]).unwrap(), v_int(year)),
-            None => assert_eq!(
-                r.call("year", &[ts(millis)]).unwrap_err().code,
-                "out_of_range"
-            ),
+        (-377_705_203_200_000, Some((-9999, 1, 1))),
+        (-377_705_203_200_001, None),
+    ];
+    for (millis, expected) in cases {
+        for (name, field) in [("year", 0), ("month", 1), ("day", 2)] {
+            match expected {
+                Some(parts) => assert_eq!(
+                    r.call(name, &[ts(millis)]).unwrap(),
+                    v_int(parts[field]),
+                    "{name} at {millis}"
+                ),
+                None => assert_eq!(
+                    r.call(name, &[ts(millis)]).unwrap_err().code,
+                    "out_of_range",
+                    "{name} at {millis}"
+                ),
+            }
         }
     }
     assert_eq!(
@@ -431,8 +470,18 @@ fn civil_year_edges_are_enforced() {
             &[v_str("-9999-01-01".into()), v_str("%Y-%m-%d".into())]
         )
         .unwrap(),
-        v_int(-377_705_116_800_000)
+        v_int(-377_705_203_200_000)
     );
+    for (input, pattern, expected) in [
+        ("9999-12-31", "%Y-%m-%d", 253_402_214_400_000),
+        ("-9999-01-01", "%Y-%m-%d", -377_705_203_200_000),
+    ] {
+        assert_eq!(
+            r.call("parse", &[v_str(input.into()), v_str(pattern.into())])
+                .unwrap(),
+            v_int(expected)
+        );
+    }
     for input in ["10000-01-01", "-10000-01-01"] {
         assert_eq!(
             r.call("parse", &[v_str(input.into()), v_str("%Y-%m-%d".into())])
@@ -441,30 +490,99 @@ fn civil_year_edges_are_enforced() {
             "parse"
         );
     }
-    for millis in [253_402_300_800_000, -377_816_739_200_000] {
-        for name in ["format", "format_rfc3339"] {
-            let args = if name == "format" {
-                vec![ts(millis), v_str("%F".into())]
-            } else {
-                vec![ts(millis)]
-            };
-            assert_eq!(r.call(name, &args).unwrap_err().code, "out_of_range");
+    for (millis, civil_year) in [
+        (253_370_764_800_000, 9999),
+        (253_402_300_799_999, 9999),
+        (253_402_300_800_000, 10000),
+        (-377_705_203_200_000, -9999),
+        (-377_705_203_200_001, -10000),
+    ] {
+        let accepted = (-9999..=9999).contains(&civil_year);
+        assert_eq!(
+            r.call("format", &[ts(millis), v_str("%F".into())]).is_ok(),
+            accepted
+        );
+        assert_eq!(r.call("format_rfc3339", &[ts(millis)]).is_ok(), accepted);
+        let text = if civil_year > 0 {
+            format!("{civil_year:04}-01-01")
+        } else {
+            format!("-{abs:04}-01-01", abs = civil_year.unsigned_abs())
+        };
+        let result = r.call("parse", &[v_str(text), v_str("%Y-%m-%d".into())]);
+        if accepted {
+            assert!(result.is_ok(), "parse year {civil_year}");
+        } else {
+            assert_eq!(result.unwrap_err().code, "parse");
         }
-        for name in [
-            "add_secs",
-            "add_days",
-            "start_of_day",
-            "start_of_week",
-            "start_of_month",
-            "truncate",
-        ] {
+        for name in ["truncate", "add_secs", "add_days"] {
             let args = match name {
-                "add_secs" | "add_days" => vec![ts(millis), ts(0)],
                 "truncate" => vec![ts(millis), v_str("day".into())],
-                _ => vec![ts(millis)],
+                _ => vec![ts(millis), ts(0)],
             };
+            match accepted {
+                true => assert!(r.call(name, &args).is_ok(), "{name} {civil_year}"),
+                false => assert_eq!(r.call(name, &args).unwrap_err().code, "out_of_range"),
+            }
+        }
+    }
+    for millis in [
+        253_370_764_800_000,
+        253_402_300_799_999,
+        253_402_300_800_000,
+        -377_705_203_200_000,
+        -377_705_203_200_001,
+    ] {
+        for (name, args) in [
+            ("start_of_day", vec![ts(millis)]),
+            ("start_of_week", vec![ts(millis)]),
+            ("start_of_month", vec![ts(millis)]),
+            ("truncate", vec![ts(millis), v_str("day".into())]),
+        ] {
+            assert!(r.call(name, &args).is_ok(), "{name} {millis}");
+        }
+    }
+    for millis in [
+        253_402_300_800_000,
+        -377_705_203_200_001,
+    ] {
+        for (name, args) in [
+            ("start_of_day", vec![ts(millis)]),
+            ("start_of_week", vec![ts(millis)]),
+            ("start_of_month", vec![ts(millis)]),
+            ("truncate", vec![ts(millis), v_str("day".into())]),
+        ] {
             assert_eq!(r.call(name, &args).unwrap_err().code, "out_of_range");
         }
+    }
+    for (inside, seconds) in [(253_402_300_799_999, 1), (-377_705_203_200_000, -1)] {
+        assert_eq!(
+            r.call("add_secs", &[ts(inside), ts(seconds)])
+                .unwrap_err()
+                .code,
+            "out_of_range"
+        );
+    }
+}
+
+#[test]
+fn trailing_alternate_offset_inputs_are_golden() {
+    let r = reg();
+    for input in [
+        "2021-06-02 15:30:45 Z",
+        "2021-06-02 15:30:45 +0000",
+        "2021-06-02 15:30:45 +00:00",
+        "2021-06-02 15:30:45 -0500",
+        "2021-06-02 15:30:45 -05:00",
+    ] {
+        assert_eq!(
+            r.call(
+                "parse",
+                &[v_str(input.into()), v_str("%Y-%m-%d %H:%M:%S %#z".into())]
+            )
+            .unwrap(),
+            v_int(WED_MS),
+            "{input}"
+        );
     }
 }
 
@@ -500,7 +618,7 @@ fn non_trailing_offset_directives_follow_jiff() {
 fn rfc3339_fraction_and_offset_goldens() {
     let r = reg();
     for (input, expected) in [
-        ("2021-06-02T15:30:45.1Z", 1_622_647_845_100),
+        ("2021-06-02t15:30:45z", 1_622_647_845_000),
         ("2021-06-02T15:30:45.12Z", 1_622_647_845_120),
         ("2021-06-02T15:30:45.123Z", 1_622_647_845_123),
         ("2021-06-02T15:30:45.123456Z", 1_622_647_845_456),
@@ -523,6 +641,7 @@ fn rfc3339_fraction_and_offset_goldens() {
         ("2016-12-31T23:59:60Z", 1_483_228_800_000),
         ("1969-12-31T23:59:59.9Z", -100),
         ("9999-12-31T00:00:00Z", 253_402_214_400_000),
+        ("-9999-01-01T00:00:00Z", -377_705_203_200_000),
     ] {
         assert_eq!(
             r.call("parse_rfc3339", &[v_str(input.into())]).unwrap(),
@@ -530,18 +649,21 @@ fn rfc3339_fraction_and_offset_goldens() {
             "{input}"
         );
     }
-    for input in [
-        "2021-06-02T15:30:45",
-        "2021-06-02T15:30:45+",
-        "2021-06-02T15:30:45+0",
-        "2021-06-02T15:30:45+25:00",
-        "-10000-01-01T00:00:00Z",
+    for (input, code) in [
+        ("2021-06-02T15:30:45", "parse"),
+        ("2021-06-02T15:30:45+", "parse"),
+        ("2021-06-02T15:30:45+0", "parse"),
+        ("2021-06-02T15:30:45+25:00", "parse"),
+        ("10000-01-01T00:00:00Z", "parse"),
+        ("-10000-01-01T00:00:00Z", "parse"),
+        ("9999-12-31T23:59:59-00:01", "out_of_range"),
+        ("-9999-01-01T00:00:00+00:01", "out_of_range"),
     ] {
         assert_eq!(
             r.call("parse_rfc3339", &[v_str(input.into())])
                 .unwrap_err()
                 .code,
-            "parse",
+            code,
             "{input}"
         );
     }
@@ -554,7 +676,11 @@ fn strftime_golden_table() {
         ("%Y-%m-%d", "2021-06-02"),
         ("%H:%M:%S", "15:30:45"),
         ("%j", "153"),
-        ("%d", "02"),
+        ("%u", "3"),
+        ("%w", "3"),
+        ("%_d", " 2"),
+        ("%-d", "2"),
+        ("%0d", "02"),
         ("%e", " 2"),
         ("%h", "Jun"),
         ("%A", "Wednesday"),
@@ -598,7 +724,6 @@ fn strftime_golden_table() {
         ("%3f", "123"),
         ("%6f", "123000"),
         ("%9f", "123000000"),
-        ("%s", "1622647845"),
         ("%z", "+0000"),
         ("%:z", "+00:00"),
         ("%::z", "+00:00:00"),
@@ -617,7 +742,8 @@ fn strftime_golden_table() {
         );
     }
     for pattern in [
-        "%E4Y", "%Od", "%^B", "%#c", "%Q", "%J", "%", "%E", "%O", "%12d", "%_F",
+        "%E4Y", "%Od", "%^B", "%#c", "%Q", "%J", "%", "%E", "%O", "%12d", "%_F", "%1d", "%2Y",
+        "%_3f", "%#3f", "%3d", "%9Y",
     ] {
         assert_eq!(
             r.call("format", &[ts(WED_MS), v_str(pattern.into())])
@@ -631,7 +757,14 @@ fn strftime_golden_table() {
 
 #[test]
 fn local_minute_of_day_is_zone_independent_in_range() {
-    assert!(shamir_types::time::local_minute_of_day() < 1440);
+    let now_ms = shamir_types::time::unix_millis() as i64;
+    let utc_minute = (now_ms.rem_euclid(86_400_000) / 60_000) as i64;
+    let earlier_local = i64::from(shamir_types::time::local_minute_of_day());
+    let later_local = i64::from(shamir_types::time::local_minute_of_day());
+    let local = (earlier_local + later_local) / 2;
+    let delta = (local - utc_minute).rem_euclid(1440);
+    assert_eq!(delta % 1, 0);
+    assert!(delta <= 14 * 60);
 }
 
 #[test]

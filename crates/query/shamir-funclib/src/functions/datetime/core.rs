@@ -168,8 +168,16 @@ fn validate_pattern(pattern: &str) -> Result<(), ScalarError> {
             }
             continue;
         }
-        if matches!(spec, '1'..='9') {
-            return Err(invalid());
+        let mut width = 0usize;
+        while spec.is_ascii_digit() {
+            width = width * 10 + usize::from(spec as u8 - b'0');
+            spec = chars.next().ok_or_else(invalid)?;
+        }
+        if width > 0 {
+            if spec != 'f' || pad || alternate || !matches!(width, 3 | 6 | 9) {
+                return Err(invalid());
+            }
+            continue;
         }
         if spec == '.' {
             if pad || alternate {
@@ -180,12 +188,6 @@ fn validate_pattern(pattern: &str) -> Result<(), ScalarError> {
                 Some('3' | '6' | '9') if chars.next() == Some('f') => continue,
                 _ => return Err(invalid()),
             }
-        }
-        if matches!(spec, '3' | '6' | '9') {
-            if pad || alternate || chars.next() != Some('f') {
-                return Err(invalid());
-            }
-            continue;
         }
         if alternate && spec != 'z' {
             return Err(invalid());
