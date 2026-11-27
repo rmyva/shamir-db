@@ -1,5 +1,5 @@
-mod algorithm;
-mod classification;
+pub mod algorithm;
+pub mod classification;
 pub mod follower;
 pub mod lifecycle;
 mod receipt_recovery;

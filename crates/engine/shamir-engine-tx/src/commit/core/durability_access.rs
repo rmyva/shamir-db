@@ -309,7 +309,7 @@ impl RepoCore {
     /// The armed record is left as-is: the obligation persists until the next
     /// clean shutdown. A failed bump/flush propagates and blocks admission
     /// (`?` at the caller).
-    pub(crate) async fn note_unclean_open_bump(&self, permit: &RepoWritePermit) -> DbResult<()> {
+    pub async fn note_unclean_open_bump(&self, permit: &RepoWritePermit) -> DbResult<()> {
         let store = self.tx_info_store().await?;
         let record = crate::meta::repo_identity::load_state(&store).await?;
         if !crate::meta::repo_identity::requires_unclean_bump(record) {

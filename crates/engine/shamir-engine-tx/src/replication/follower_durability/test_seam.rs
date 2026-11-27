@@ -5,13 +5,13 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::Notify;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Phase {
+pub enum Phase {
     Prepared,
     Materialized,
     Checkpointed,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 fn maybe_panic_after(hook: &Hook, phase: Phase) {
     if *hook
         .panic_after
@@ -25,7 +25,7 @@ fn maybe_panic_after(hook: &Hook, phase: Phase) {
 }
 
 #[derive(Default)]
-pub(crate) struct Hook {
+pub struct Hook {
     pub park_at: Mutex<Option<Phase>>,
     pub abort_at: Mutex<Option<Phase>>,
     /// One-shot post-phase failure (S5c-X round 3): when the pipeline passes
@@ -41,7 +41,7 @@ pub(crate) struct Hook {
     /// pipeline must park immediately instead of entering the 3-retry loop.
     pub fail_after_reopen: AtomicBool,
     /// Panic synchronously immediately after the selected phase boundary.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub panic_after: Mutex<Option<Phase>>,
     pub reached: Notify,
     pub resume: Notify,
@@ -53,7 +53,7 @@ fn hooks() -> &'static Mutex<TFxMap<String, Arc<Hook>>> {
 }
 
 #[cfg(feature = "fjall")]
-pub(crate) fn install(repo_name: &str, hook: Arc<Hook>) {
+pub fn install(repo_name: &str, hook: Arc<Hook>) {
     hooks()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -61,7 +61,7 @@ pub(crate) fn install(repo_name: &str, hook: Arc<Hook>) {
 }
 
 #[cfg(feature = "fjall")]
-pub(crate) fn remove(repo_name: &str) {
+pub fn remove(repo_name: &str) {
     hooks()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -72,7 +72,7 @@ pub(crate) fn remove(repo_name: &str) {
 /// only when it holds exactly this phase). Returns `true` exactly when the
 /// caller must return the injected `DbError::Storage("injected")`. Sticky
 /// mode leaves the flag armed so every retry attempt fails too.
-pub(crate) fn take_fail_after(repo_name: &str, phase: Phase) -> bool {
+pub fn take_fail_after(repo_name: &str, phase: Phase) -> bool {
     let hooks = hooks()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -95,7 +95,7 @@ pub(crate) fn take_fail_after(repo_name: &str, phase: Phase) -> bool {
 
 /// Whether the armed `fail_after` for `repo_name` injects the NON-retryable
 /// `RepoRequiresReopen` kind instead of `Storage`.
-pub(crate) fn fail_after_reopen(repo_name: &str) -> bool {
+pub fn fail_after_reopen(repo_name: &str) -> bool {
     hooks()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -122,7 +122,7 @@ pub(crate) async fn phase(repo_name: &str, phase: Phase) {
             hook.reached.notify_waiters();
             resumed.await;
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-util"))]
         maybe_panic_after(&hook, phase);
         if *hook
             .abort_at

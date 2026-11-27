@@ -48,7 +48,7 @@ pub(crate) async fn reconcile_cold_start(
     reconcile_with_hook(repo, entries, permit, &mut |_| Ok(())).await
 }
 
-pub(super) async fn reconcile_with_hook(
+pub async fn reconcile_with_hook(
     repo: &RepoCore,
     entries: &[WalEntryV2],
     permit: &crate::repo::RepoWritePermit,

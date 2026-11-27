@@ -149,7 +149,8 @@ async fn version_guard_is_armed_by_protection_before_panic() {
     );
 }
 
-impl FailClosedResource for Arc<()> {
+struct LocalResource(Arc<()>);
+impl FailClosedResource for LocalResource {
     fn arm_fail_closed(&mut self) {}
 }
 
@@ -190,9 +191,9 @@ async fn protected_local_resource_survives_timeout_until_worker_join() {
     let entered = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let (worker_entered, worker_release) = (Arc::clone(&entered), Arc::clone(&release));
-    let resource = Arc::new(());
-    let weak_resource = Arc::downgrade(&resource);
-    let worker_resource = Arc::clone(&resource);
+    let resource = LocalResource(Arc::new(()));
+    let weak_resource = Arc::downgrade(&resource.0);
+    let worker_resource = LocalResource(Arc::clone(&resource.0));
     spawn_worker(&owner, NoopLease, move |state| async move {
         let _protected = state.protect_guard(worker_resource);
         worker_entered.notify_one();

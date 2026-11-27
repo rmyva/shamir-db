@@ -32,14 +32,13 @@ use crate::tx::apply_replicated::follower_durability::test_seam::{self, Phase};
 use crate::tx::apply_replicated::{apply_replicated_batch, ApplyOutcome, ApplyPolicy};
 use crate::tx::ReplicatedEvent;
 
+use crate::tx::replication::follower_durability::receipt::checkpoint::set_fail_final_flush;
 use crate::tx::replication::follower_durability::receipt::stage::set_simulate_uncertain;
 
 struct FailFlushReset(String);
 impl Drop for FailFlushReset {
     fn drop(&mut self) {
-        crate::tx::replication::follower_durability::receipt::checkpoint::set_fail_final_flush(
-            &self.0, false,
-        );
+        set_fail_final_flush(&self.0, false);
     }
 }
 
@@ -727,9 +726,7 @@ async fn upstream_bookmark_does_not_skip_unpublished_local_chunk() {
     let key2 = key_bytes(2).await;
     let key3 = key_bytes(3).await;
     let _reset = FailFlushReset(name.clone());
-    crate::tx::replication::follower_durability::receipt::checkpoint::set_fail_final_flush(
-        &name, true,
-    );
+    set_fail_final_flush(&name, true);
     let outcome = apply_replicated_batch(
         &repo.core,
         &[event(100, 1), event(101, 2)],
@@ -737,9 +734,7 @@ async fn upstream_bookmark_does_not_skip_unpublished_local_chunk() {
         ApplyPolicy::Trusted,
     )
     .await;
-    crate::tx::replication::follower_durability::receipt::checkpoint::set_fail_final_flush(
-        &name, false,
-    );
+    set_fail_final_flush(&name, false);
     assert_eq!(outcome.unwrap(), ApplyOutcome::Applied { local_version: 2 });
     let info = repo.tx_info_store().await.unwrap();
     let v3 = load_bookmark_v3(&info).await.unwrap().unwrap();
@@ -903,18 +898,14 @@ async fn post_checkpoint_flush_failure_fresh_chunk_is_done() {
     let keys = [key_bytes(1).await, key_bytes(2).await];
     let events = [event(1, 1), event(2, 2)];
     let _reset = FailFlushReset(name.clone());
-    crate::tx::replication::follower_durability::receipt::checkpoint::set_fail_final_flush(
-        &name, true,
-    );
+    set_fail_final_flush(&name, true);
     assert_eq!(
         apply_replicated_batch(&repo.core, &events, 0, ApplyPolicy::Trusted)
             .await
             .unwrap(),
         ApplyOutcome::Applied { local_version: 2 }
     );
-    crate::tx::replication::follower_durability::receipt::checkpoint::set_fail_final_flush(
-        &name, false,
-    );
+    set_fail_final_flush(&name, false);
     for (key, version) in keys.iter().zip([1, 2]) {
         assert_eq!(history_versions(&repo, key).await, vec![version]);
     }
@@ -963,15 +954,11 @@ async fn post_checkpoint_flush_failure_resumed_chunk_is_done() {
     let hook = crashed_prepared(&repo, &name, &[event(1, 1)]).await;
     disarm(&hook);
     let _reset = FailFlushReset(name.clone());
-    crate::tx::replication::follower_durability::receipt::checkpoint::set_fail_final_flush(
-        &name, true,
-    );
+    set_fail_final_flush(&name, true);
     let error = apply_replicated_batch(&repo.core, &[event(1, 1)], 0, ApplyPolicy::Trusted)
         .await
         .unwrap_err();
-    crate::tx::replication::follower_durability::receipt::checkpoint::set_fail_final_flush(
-        &name, false,
-    );
+    set_fail_final_flush(&name, false);
     assert!(matches!(error, DbError::Storage(_)));
     assert!(!repo.write_domain().has_outstanding_reservation());
     let permit = repo.write_domain().admit().await.unwrap();

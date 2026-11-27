@@ -15,7 +15,7 @@ impl RepoCore {
     /// tx-facing seam (`tx/recovery/clean_horizon/checkpoint.rs` imports
     /// `crate::repo::durability_policy::checkpoint_allocation_floor`). Resolves
     /// the journal store and delegates to the repo-layer core.
-    pub(crate) async fn checkpoint_allocation_floor(&self) -> DbResult<u64> {
+    pub async fn checkpoint_allocation_floor(&self) -> DbResult<u64> {
         let store = self.repo.store_get("__changelog__").await?;
         crate::repo::durability_policy::checkpoint_allocation_floor_for(store).await
     }

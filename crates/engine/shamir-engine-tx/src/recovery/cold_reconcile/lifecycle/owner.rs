@@ -39,7 +39,7 @@ use super::worker::{WorkerExecutionState, WorkerLease};
 const DEFAULT_CHANNEL_BOUND: usize = 16;
 
 /// Test seam run between the quarantine check and lease-hook registration.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 type InstallSeam = Box<dyn FnOnce(Arc<CoreState>) + Send>;
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -54,7 +54,7 @@ pub enum WorkerTerminal {
 
 /// Shared owner/supervisor/worker state. Atomic observations coexist with
 /// synchronous mutexes for admission/quarantine and publication serialization.
-pub(crate) struct CoreState {
+pub struct CoreState {
     interlock: PubTermInterlock,
     /// Synchronous gate serializing submit's acceptance point with
     /// quarantine. Lock order is admission_gate then owner control.
@@ -75,7 +75,7 @@ pub(crate) struct CoreState {
     /// Installed lease cleanup hook; taken before invocation so callback
     /// re-entry never occurs while this registration lock is held.
     quarantine_hook: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     before_quarantine_hook_install: Mutex<Option<InstallSeam>>,
 }
 
@@ -88,7 +88,7 @@ impl CoreState {
     /// UNCONDITIONAL quarantine: sticky `quarantined` + `reopen_required`
     /// (both Release), then `interlock.terminate()`. The parked-guard count
     /// is NEVER consulted. Timeout and panic BOTH route here.
-    pub(crate) fn quarantine(&self, reason: &str) {
+    pub fn quarantine(&self, reason: &str) {
         log::warn!("worker lifecycle quarantine: {reason}");
         let mut recorded = self
             .quarantine_reason
@@ -233,7 +233,7 @@ impl<J: Send, R: Send> RepoWorkerLifecycle<J, R> {
                 supervisor_joined: AtomicBool::new(false),
                 quarantine_reason: Mutex::new(None),
                 quarantine_hook: Mutex::new(None),
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-util"))]
                 before_quarantine_hook_install: Mutex::new(None),
                 terminal_tx,
             }),
@@ -253,8 +253,9 @@ impl<J: Send, R: Send> RepoWorkerLifecycle<J, R> {
         self.core.quarantined.load(Ordering::Acquire)
     }
 
-    #[cfg(test)]
-    pub(crate) fn set_before_quarantine_hook_install(&self, seam: InstallSeam) {
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    pub fn set_before_quarantine_hook_install(&self, seam: InstallSeam) {
         *self
             .core
             .before_quarantine_hook_install
@@ -352,7 +353,7 @@ impl<J: Send, R: Send> RepoWorkerLifecycle<J, R> {
         let core_w = Arc::clone(&self.core);
         let inner = async move { handler(state).await };
         let quarantine_lease = Arc::downgrade(&lease);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-util"))]
         if let Some(seam) = self
             .core
             .before_quarantine_hook_install

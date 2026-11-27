@@ -10,7 +10,7 @@ pub struct CommitTailBarrier {
 }
 
 impl CommitTailBarrier {
-    pub(crate) fn enter(self: &Arc<Self>) -> CommitTailGuard {
+    pub fn enter(self: &Arc<Self>) -> CommitTailGuard {
         self.active.fetch_add(1, Ordering::AcqRel);
         CommitTailGuard {
             barrier: Arc::clone(self),
@@ -33,7 +33,7 @@ impl CommitTailBarrier {
     }
 }
 
-pub(crate) struct CommitTailGuard {
+pub struct CommitTailGuard {
     barrier: Arc<CommitTailBarrier>,
 }
 

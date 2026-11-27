@@ -5,7 +5,7 @@
 //! synchronous and must not block waiting for async work or re-enter lifecycle operations.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 use std::sync::TryLockError;
 use std::sync::{Mutex, MutexGuard};
 
@@ -57,8 +57,9 @@ impl PubTermInterlock {
     }
 
     /// Test-only wrapper reports real gate contention before normal termination.
-    #[cfg(test)]
-    pub(crate) fn terminate_after_observed_contention_for_test(
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    pub fn terminate_after_observed_contention_for_test(
         &self,
         on_contention: impl FnOnce(),
     ) -> bool {
@@ -76,8 +77,9 @@ impl PubTermInterlock {
     }
 
     /// Test-only negative control omits only waiting for the publication gate.
-    #[cfg(test)]
-    pub(crate) fn nonwaiting_termination_for_test(&self) -> bool {
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    pub fn nonwaiting_termination_for_test(&self) -> bool {
         !self.terminated.swap(true, Ordering::AcqRel)
     }
 }

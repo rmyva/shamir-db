@@ -29,7 +29,7 @@ pub struct RepoCore {
     /// Durability bundle (R2b): the durability-related Arc cells of this
     /// repo, owned by the repo layer; cloned shallowly like every field.
     pub(crate) durability_handle: DurabilityHandle,
-    pub(crate) horizon: TxHorizon,
+    pub horizon: TxHorizon,
     /// One deletion-admission registry per open repo, shared by all clones.
     pub(crate) truncation_pins: Arc<crate::drain::truncation_pin::TruncationPin>,
     /// `Weak` of the shell's repo-liveness token (dead on background clones);

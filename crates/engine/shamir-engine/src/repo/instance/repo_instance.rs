@@ -15,8 +15,6 @@ pub use crate::tx::drain::truncation_pin_guard::TruncationPinGuard;
 use crate::tx::{CommitTailBarrier, RepoCore};
 pub use lifecycle::{OnlineBackupError, SealHold};
 use shamir_query_types::batch::VisibilityWait;
-#[cfg(test)]
-use shamir_storage::error::DbResult;
 use shamir_types::types::common::{new_dash_map_wc, TDashMap, THasher};
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
@@ -172,12 +170,4 @@ impl RepoInstance {
             metrics: Arc::new(EngineMetrics::default()),
         }
     }
-}
-
-/// tx-facing seam (`tx/recovery/clean_horizon/checkpoint.rs` imports
-/// `crate::repo::durability_policy::checkpoint_allocation_floor`). Resolves
-/// the journal store and delegates to the repo-layer core.
-#[cfg(test)]
-pub(crate) async fn checkpoint_allocation_floor(repo: &RepoInstance) -> DbResult<u64> {
-    repo.core.checkpoint_allocation_floor().await
 }

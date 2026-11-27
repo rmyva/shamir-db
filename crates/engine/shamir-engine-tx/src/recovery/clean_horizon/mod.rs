@@ -14,6 +14,6 @@
 //! re-exports are kept so the surface stays greppable.
 
 pub mod checkpoint;
-pub(crate) mod recovery_floor;
-pub(crate) mod repair_pending_drain;
-pub(crate) mod retention;
+pub mod recovery_floor;
+pub mod repair_pending_drain;
+pub mod retention;

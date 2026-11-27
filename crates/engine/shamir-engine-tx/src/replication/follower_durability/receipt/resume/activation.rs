@@ -24,7 +24,7 @@ use crate::meta::repl::bookmark_v3::{classify_follower_bookmark, FollowerBookmar
 
 /// Admission verdict for the first follower apply.
 #[derive(Debug)]
-pub(crate) enum FollowerAdmission {
+pub enum FollowerAdmission {
     /// A valid v3 bookmark record exists: durably identified follower.
     Native,
     /// No bookmark record and no floor/installation conflict: eligible —
@@ -44,7 +44,7 @@ pub(crate) enum FollowerAdmission {
 /// adoption write or allocation happens.
 /// `Fresh` here means state-eligible only; the seed-install conflict check
 /// stays in [`admit_follower`] because it needs the info store.
-pub(crate) fn admission_decision(
+pub fn admission_decision(
     supports_atomic_batch: bool,
     state: FollowerBookmarkState,
 ) -> DbResult<FollowerAdmission> {
@@ -69,10 +69,7 @@ pub(crate) fn admission_decision(
 /// Validate durable follower state at first follower admission. Typed
 /// refusals propagate; `Fresh` means the caller must adopt (write the v3
 /// baseline) before any apply work.
-pub(crate) async fn admit_follower(
-    repo: &RepoCore,
-    info: &Arc<dyn Store>,
-) -> DbResult<FollowerAdmission> {
+pub async fn admit_follower(repo: &RepoCore, info: &Arc<dyn Store>) -> DbResult<FollowerAdmission> {
     let state = classify_follower_bookmark(info).await?;
     let admission = admission_decision(repo.storage_supports_atomic_batch(), state).map_err(
         |error| match error {

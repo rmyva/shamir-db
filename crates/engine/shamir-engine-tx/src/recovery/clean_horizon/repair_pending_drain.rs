@@ -34,7 +34,7 @@ use crate::commit::core::RepoCore;
 /// Called from `Drainer::settle_and_truncate` — i.e. on every drain pass
 /// where truncation matters — BEFORE the truncation ceiling is computed, so
 /// an admission immediately lifts its clamp.
-pub(crate) async fn drain_repair_pending(repo: &RepoCore) -> DbResult<usize> {
+pub async fn drain_repair_pending(repo: &RepoCore) -> DbResult<usize> {
     // Fast path: one atomic load per pass (runs on EVERY drain pass).
     let feed = repo.changefeed().await?;
     if feed.feed.repair_pending_depth() == 0 {

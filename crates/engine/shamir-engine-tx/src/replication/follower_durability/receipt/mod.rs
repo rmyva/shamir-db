@@ -15,8 +15,10 @@ mod apply;
 #[doc(hidden)]
 pub mod checkpoint;
 pub(crate) mod publish;
-pub(crate) mod resume;
-pub(crate) mod stage;
+#[doc(hidden)]
+pub mod resume;
+#[doc(hidden)]
+pub mod stage;
 
 pub use crate::ApplyOutcome;
 pub(crate) use apply::apply_batch_receipt;

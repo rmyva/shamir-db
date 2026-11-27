@@ -94,7 +94,7 @@ struct LeaseInner {
 }
 
 impl ReceiptLease {
-    pub(crate) fn new(
+    pub fn new(
         gate: Arc<RepoTxGate>,
         status: crate::cold_reconcile::lifecycle::LifecycleStatus,
     ) -> Self {
@@ -151,8 +151,9 @@ impl ReceiptLease {
     }
 
     /// Idle count of parked guards, for tests and diagnostics.
-    #[cfg(all(test, feature = "fjall"))]
-    pub(crate) fn parked_count(&self) -> usize {
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    pub fn parked_count(&self) -> usize {
         self.inner
             .parked
             .lock()
@@ -208,8 +209,9 @@ impl ReceiptLease {
     /// arm-then-check Notify pattern (mirrors `CommitTailBarrier::wait_zero`):
     /// the future is armed BEFORE the counter is checked, so the final
     /// decrement can never race this waiter — no sleeps, no yield loops.
-    #[cfg(all(test, feature = "fjall"))]
-    pub(crate) async fn wait_idle(&self) {
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    pub async fn wait_idle(&self) {
         loop {
             let notified = self.inner.idle.notified();
             tokio::pin!(notified);
@@ -223,7 +225,7 @@ impl ReceiptLease {
     }
 
     /// The publication callback is synchronous and must not re-enter lifecycle operations.
-    pub(crate) fn publish<T>(
+    pub fn publish<T>(
         &self,
         callback: impl FnOnce() -> T,
     ) -> Result<T, crate::cold_reconcile::lifecycle::PublicationClosed> {

@@ -33,8 +33,9 @@ impl Drainer {
         orphan_repair::record_orphan_failure(self, failed, error);
     }
 
-    #[cfg(test)]
-    pub(crate) fn record_orphan_failure_for_test(&self, failed: &mut bool, error: &str) {
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    pub fn record_orphan_failure_for_test(&self, failed: &mut bool, error: &str) {
         self.record_orphan_failure(failed, error);
     }
 

@@ -4,7 +4,7 @@ use crate::commit::core::RepoCore;
 #[path = "checkpoint/test_seam.rs"]
 pub mod test_seam;
 
-pub(crate) async fn checkpoint_before_truncate(repo: &RepoCore) -> bool {
+pub async fn checkpoint_before_truncate(repo: &RepoCore) -> bool {
     if repo.initialized_mem_wal() {
         return true;
     }

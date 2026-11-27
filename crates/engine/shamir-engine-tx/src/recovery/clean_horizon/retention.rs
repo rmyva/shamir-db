@@ -3,15 +3,12 @@ use shamir_storage::error::DbResult;
 use crate::commit::core::RepoCore;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RetentionAction {
+pub enum RetentionAction {
     NoOverflow,
     Refused,
 }
 
-pub(crate) async fn enforce_retention(
-    repo: &RepoCore,
-    safe_ceiling: u64,
-) -> DbResult<RetentionAction> {
+pub async fn enforce_retention(repo: &RepoCore, safe_ceiling: u64) -> DbResult<RetentionAction> {
     let group = repo.wal_group().await?;
     if group.is_mem_sink() {
         return Ok(RetentionAction::NoOverflow);

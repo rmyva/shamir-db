@@ -4,13 +4,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 use shamir_collections::TFxMap;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 use std::sync::{Mutex, OnceLock};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 use tokio::sync::Notify;
 
 use bytes::Bytes;
@@ -32,17 +32,18 @@ const TX_STORE: &str = "__tx__";
 /// Test-only seam: after a `Committed` checkpoint outcome, pretend it was
 /// `Uncertain` so the read-back reconcile path runs in tests (mirrors
 /// stage.rs's `SIMULATE_UNCERTAIN`).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 static SIMULATE_CHECKPOINT_UNCERTAIN: AtomicBool = AtomicBool::new(false);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 fn fail_final_flushes() -> &'static Mutex<TFxMap<String, bool>> {
     static FAIL_FINAL_FLUSH: OnceLock<Mutex<TFxMap<String, bool>>> = OnceLock::new();
     FAIL_FINAL_FLUSH.get_or_init(|| Mutex::new(TFxMap::default()))
 }
 
-#[cfg(all(test, feature = "fjall"))]
-pub(crate) fn set_fail_final_flush(repo_name: &str, fail: bool) {
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub fn set_fail_final_flush(repo_name: &str, fail: bool) {
     let mut failures = fail_final_flushes()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -53,7 +54,7 @@ pub(crate) fn set_fail_final_flush(repo_name: &str, fail: bool) {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 fn fail_final_flush(repo_name: &str) -> bool {
     fail_final_flushes()
         .lock()
@@ -63,8 +64,9 @@ fn fail_final_flush(repo_name: &str) -> bool {
         .unwrap_or(false)
 }
 
-#[cfg(all(test, feature = "fjall"))]
-pub(crate) fn set_simulate_checkpoint_uncertain(on: bool) {
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub fn set_simulate_checkpoint_uncertain(on: bool) {
     SIMULATE_CHECKPOINT_UNCERTAIN.store(on, Ordering::Release);
 }
 
@@ -76,11 +78,12 @@ pub(crate) fn set_simulate_checkpoint_uncertain(on: bool) {
 /// tests discriminate real read-back protection and not merely branch entry:
 /// with this seam ON the settled-state assertions (bookmark advanced, clean
 /// horizon, receipt retired) provably FAIL.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 static DISABLE_UNCERTAIN_RECONCILE: AtomicBool = AtomicBool::new(false);
 
-#[cfg(all(test, feature = "fjall"))]
-pub(crate) fn disable_uncertain_reconcile(on: bool) {
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub fn disable_uncertain_reconcile(on: bool) {
     DISABLE_UNCERTAIN_RECONCILE.store(on, Ordering::Release);
 }
 
@@ -88,11 +91,12 @@ pub(crate) fn disable_uncertain_reconcile(on: bool) {
 /// `Uncertain` WITHOUT staging or committing anything, so the durable state
 /// is genuinely unsettled (bookmark not advanced, receipt outstanding) —
 /// exactly the situation the read-back/retry protection exists to repair.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 static UNCERTAIN_WITHOUT_COMMIT: AtomicBool = AtomicBool::new(false);
 
-#[cfg(all(test, feature = "fjall"))]
-pub(crate) fn set_uncertain_without_commit(on: bool) {
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub fn set_uncertain_without_commit(on: bool) {
     UNCERTAIN_WITHOUT_COMMIT.store(on, Ordering::Release);
 }
 
@@ -100,11 +104,12 @@ pub(crate) fn set_uncertain_without_commit(on: bool) {
 /// read-back/reconcile branch actually ran (one increment per Uncertain
 /// outcome). Lets tests prove the reconcile path executed instead of merely
 /// inferring it from the settled state.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 static CHECKPOINT_RECONCILES: AtomicUsize = AtomicUsize::new(0);
 
-#[cfg(all(test, feature = "fjall"))]
-pub(crate) fn checkpoint_reconciles() -> usize {
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub fn checkpoint_reconciles() -> usize {
     CHECKPOINT_RECONCILES.load(Ordering::Acquire)
 }
 
@@ -114,11 +119,12 @@ pub(crate) fn checkpoint_reconciles() -> usize {
 /// tests hold the guard across `.await` points for their whole body, so a
 /// poisoning-`Mutex` guard would trip `clippy::await_holding_lock` — this
 /// is the workspace-sanctioned `tokio::sync::Mutex` case.
-#[cfg(all(test, feature = "fjall"))]
+#[cfg(any(test, feature = "test-util"))]
 static CHECKPOINT_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-#[cfg(all(test, feature = "fjall"))]
-pub(crate) async fn checkpoint_test_lock() -> tokio::sync::MutexGuard<'static, ()> {
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub async fn checkpoint_test_lock() -> tokio::sync::MutexGuard<'static, ()> {
     CHECKPOINT_TEST_LOCK.lock().await
 }
 
@@ -127,43 +133,47 @@ pub(crate) async fn checkpoint_test_lock() -> tokio::sync::MutexGuard<'static, (
 /// the CALLER future (and its reply receiver) while the repository-owned
 /// lifecycle worker is mid-checkpoint — and then watch the detached worker
 /// complete.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 static COMMIT_PARK_ARMED: AtomicBool = AtomicBool::new(false);
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 static COMMIT_PARK_REACHED: Notify = Notify::const_new();
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 static COMMIT_PARK_RELEASE: Notify = Notify::const_new();
 
-#[cfg(all(test, feature = "fjall"))]
-pub(crate) fn arm_commit_park(on: bool) {
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub fn arm_commit_park(on: bool) {
     COMMIT_PARK_ARMED.store(on, Ordering::Release);
 }
 
 /// Same gate, INSIDE the Uncertain reconcile branch (immediately before the
 /// read-back): parks the reconcile path so a test can drop the caller
 /// future before the reconcile completes.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 static RECONCILE_PARK_ARMED: AtomicBool = AtomicBool::new(false);
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 static RECONCILE_PARK_REACHED: Notify = Notify::const_new();
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 static RECONCILE_PARK_RELEASE: Notify = Notify::const_new();
 
-#[cfg(all(test, feature = "fjall"))]
-pub(crate) fn arm_reconcile_park(on: bool) {
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub fn arm_reconcile_park(on: bool) {
     RECONCILE_PARK_ARMED.store(on, Ordering::Release);
 }
 
-#[cfg(all(test, feature = "fjall"))]
-pub(crate) async fn wait_reconcile_park_reached() {
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub async fn wait_reconcile_park_reached() {
     let notified = RECONCILE_PARK_REACHED.notified();
     tokio::pin!(notified);
     notified.as_mut().enable();
     notified.await;
 }
 
-#[cfg(all(test, feature = "fjall"))]
-pub(crate) fn release_reconcile_park() {
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub fn release_reconcile_park() {
     RECONCILE_PARK_RELEASE.notify_waiters();
 }
 
@@ -284,7 +294,7 @@ async fn stage_checkpoint_batch(
 /// (`UNCERTAIN_WITHOUT_COMMIT`) so the reconcile branch below runs against
 /// genuinely unsettled durable state; the production build runs the plain
 /// staging path — zero behavior change when the seam is unarmed.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 async fn staged_checkpoint_outcome(
     repo: &RepoCore,
     permit: &RepoWritePermit,
@@ -302,7 +312,7 @@ async fn staged_checkpoint_outcome(
         .await
 }
 
-#[cfg(not(test))]
+#[cfg(not(any(test, feature = "test-util")))]
 async fn staged_checkpoint_outcome(
     repo: &RepoCore,
     permit: &RepoWritePermit,
@@ -377,13 +387,13 @@ pub(crate) async fn checkpoint(
     // commit's poll resolving and the RAM publication (see the cancellation
     // proof on `publish::apply_publication`).
     let group = repo.wal_group().await.ok();
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     if COMMIT_PARK_ARMED.load(Ordering::Acquire) {
         COMMIT_PARK_REACHED.notify_waiters();
         COMMIT_PARK_RELEASE.notified().await;
     }
     let outcome = staged_checkpoint_outcome(repo, permit, receipt, old).await?;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     let outcome = if outcome == AtomicCommitOutcome::Committed
         && SIMULATE_CHECKPOINT_UNCERTAIN.load(Ordering::Acquire)
     {
@@ -396,18 +406,18 @@ pub(crate) async fn checkpoint(
     if let AtomicCommitOutcome::Uncertain { detail } = outcome {
         // The read-back/reconcile branch RAN — observable in tests via
         // `checkpoint_reconciles()`.
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-util"))]
         CHECKPOINT_RECONCILES.fetch_add(1, Ordering::AcqRel);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-util"))]
         if RECONCILE_PARK_ARMED.load(Ordering::Acquire) {
             RECONCILE_PARK_REACHED.notify_waiters();
             RECONCILE_PARK_RELEASE.notified().await;
         }
         // PRODUCTION always reconciles: only the negative-control
-        // short-circuit is test-only. The `#[cfg(test)]` attribute applies to
+        // short-circuit is test-only. The `#[cfg(any(test, feature = "test-util"))]` attribute applies to
         // the inner `if` STATEMENT alone; the non-test build runs
         // `reconcile_uncertain` unconditionally.
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-util"))]
         if DISABLE_UNCERTAIN_RECONCILE.load(Ordering::Acquire) {
             // Negative control: protection removed. Treat the outcome as
             // settled without the read-back or the retry — the branch was
@@ -421,7 +431,7 @@ pub(crate) async fn checkpoint(
         } else {
             reconcile_uncertain(repo, permit, info, receipt, old, detail).await?;
         }
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-util")))]
         reconcile_uncertain(repo, permit, info, receipt, old, detail).await?;
     }
     if let Some(lease) = completion.lease {
@@ -441,7 +451,7 @@ pub(crate) async fn checkpoint(
     // Phase::Checkpointed fires only AFTER the publication has completed —
     // a test that drops the apply future at this phase can never observe
     // the commit-without-publication window.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     super::super::test_seam::phase(repo.name(), super::super::test_seam::Phase::Checkpointed).await;
     log::info!(
         "follower receipt: Checkpointed upstream {}..={} on repo {}",
@@ -449,7 +459,7 @@ pub(crate) async fn checkpoint(
         receipt.upstream_end,
         repo.name()
     );
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     if fail_final_flush(repo.name()) {
         return Err(DbError::Storage("injected final flush failure".into()));
     }

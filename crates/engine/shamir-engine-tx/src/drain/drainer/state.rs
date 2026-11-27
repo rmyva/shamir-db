@@ -44,7 +44,7 @@ pub struct Drainer {
     /// pub(super): read directly by the `orphan_repair` modules
     /// (mounted in the parent `drainer`); audience identical to the
     /// pre-split private-in-`drainer` scope.
-    pub(super) orphan_replay_failures_total: AtomicU64,
+    pub orphan_replay_failures_total: AtomicU64,
     /// pub(super): read directly by the `orphan_repair` modules
     /// (mounted in the parent `drainer`); audience identical to the
     /// pre-split private-in-`drainer` scope.
@@ -52,11 +52,11 @@ pub struct Drainer {
     /// pub(super): read/written directly by the `orphan_repair` modules
     /// (mounted in the parent `drainer`); audience identical to the
     /// pre-split private-in-`drainer` scope.
-    pub(super) orphan_replay_last_error: ArcSwapOption<String>,
+    pub orphan_replay_last_error: ArcSwapOption<String>,
     /// pub(super): read/written directly by the `orphan_repair` modules
     /// (mounted in the parent `drainer`); audience identical to the
     /// pre-split private-in-`drainer` scope.
-    pub(super) orphan_repair_metrics: super::orphan_repair::Metrics,
+    pub orphan_repair_metrics: super::orphan_repair::Metrics,
     /// Per-repo ordered window of inflight WAL entries already offered by
     /// the commit path. Replaces wal.recover() on the drain hot path —
     /// see Op #2 design.
@@ -200,8 +200,9 @@ impl Drainer {
     /// is refused with `DrainPauseBusy` before it can ever park), so the
     /// flag-cleanup path of a cancelled acquisition is reachable only when
     /// someone else (a drain pass) holds the lock flag-free.
-    #[cfg(test)]
-    pub(crate) fn test_replaying_lock(
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    pub fn test_replaying_lock(
         &self,
     ) -> impl std::future::Future<Output = tokio::sync::OwnedMutexGuard<()>> {
         Arc::clone(&self.replaying).lock_owned()

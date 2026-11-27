@@ -31,7 +31,7 @@ pub(in crate::drain::drainer) fn record_orphan_failure(
 }
 
 #[derive(Default)]
-pub(in crate::drain::drainer) struct Metrics {
+pub struct Metrics {
     repaired: AtomicU64,
     gaps: AtomicU64,
 }
@@ -45,7 +45,7 @@ impl Metrics {
         self.gaps.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(in crate::drain::drainer) fn snapshot(&self) -> (u64, u64) {
+    pub fn snapshot(&self) -> (u64, u64) {
         (
             self.repaired.load(Ordering::Relaxed),
             self.gaps.load(Ordering::Relaxed),

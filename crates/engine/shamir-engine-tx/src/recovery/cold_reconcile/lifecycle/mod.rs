@@ -17,7 +17,7 @@ pub use interlock::PubTermInterlock;
 pub(crate) use interlock::PublicationClosed;
 // Receipt-pipeline production surface (PR6b-2c): re-exported unconditionally;
 // ShutdownError is only named in tests, the rest are production-wired.
-pub(crate) use job::JobSubmitError;
+pub use job::JobSubmitError;
 #[cfg(any(test, feature = "test-util"))]
 #[doc(hidden)]
 pub use owner::RepoUnitLifecycle;
@@ -26,9 +26,9 @@ pub use owner::RepoUnitLifecycle;
 pub use owner::{
     ForegroundLifecycle, InstallError, RepoWorkerLifecycle, ShutdownError, WorkerTerminal,
 };
-pub(crate) use worker::LifecycleStatus;
+pub use worker::LifecycleStatus;
 pub(crate) use worker::WorkerExecutionState;
-pub(crate) use worker::WorkerLease;
+pub use worker::WorkerLease;
 #[cfg(any(test, feature = "test-util"))]
 #[doc(hidden)]
 pub use worker::{spawn_worker, FailClosedResource};

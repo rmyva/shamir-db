@@ -42,8 +42,9 @@ impl Drainer {
             .unwrap_or(false)
     }
 
-    #[cfg(test)]
-    pub(crate) fn posting_version_for_test(&self, table: u64, key: &bytes::Bytes) -> Option<u64> {
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    pub fn posting_version_for_test(&self, table: u64, key: &bytes::Bytes) -> Option<u64> {
         self.posting_applied
             .read_sync(&(table, key.clone()), |_, version| *version)
     }
@@ -158,21 +159,24 @@ impl Drainer {
     }
 
     /// Test-only window length probe (replaces public `len` to keep API tight).
-    #[cfg(test)]
-    #[allow(clippy::disallowed_methods)] // O(N) ack: test-only accessor; depth mirror is window_depth()
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
     pub fn window_len(&self) -> usize {
-        self.window.len()
+        let guard = scc::Guard::new();
+        self.window.iter(&guard).count()
     }
 
     /// Test-only: collect window keys in ascending order.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
     pub fn window_keys(&self) -> Vec<u64> {
         let guard = scc::Guard::new();
         self.window.iter(&guard).map(|(k, _)| *k).collect()
     }
 
     /// Test-only: retrieve a window entry by commit_version.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
     pub fn window_entry(&self, version: u64) -> Option<Arc<WalEntryV2>> {
         self.window.peek_with(&version, |_, v| Arc::clone(v))
     }
@@ -188,28 +192,32 @@ impl Drainer {
     }
 
     /// Test-only: read the current window high-watermark.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
     pub fn window_high_watermark(&self) -> usize {
         self.window_high_watermark.load(Ordering::Relaxed)
     }
 
     /// Test-only: remove a window entry by commit_version (for gap simulation).
-    #[cfg(test)]
-    pub(crate) fn window_remove_for_test(&self, version: u64) {
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    pub fn window_remove_for_test(&self, version: u64) {
         if self.window.remove_sync(&version) {
             self.window_depth.fetch_sub(1, Ordering::Relaxed);
         }
     }
 
     /// Test-only: read the approximate window depth (atomic mirror).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
     pub fn window_depth(&self) -> usize {
         self.window_depth.load(Ordering::Relaxed)
     }
 
     /// Test-only: hold the same replay lock used by drain_step.
-    #[cfg(test)]
-    pub(crate) async fn replay_lock_for_test(&self) -> tokio::sync::MutexGuard<'_, ()> {
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    pub async fn replay_lock_for_test(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.replaying.lock().await
     }
 }

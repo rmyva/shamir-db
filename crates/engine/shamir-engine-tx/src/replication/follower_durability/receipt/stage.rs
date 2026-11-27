@@ -12,10 +12,10 @@
 //! #183's lock order) and threads through unchanged — there is no second
 //! admission mechanism anywhere in the pipeline.
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 use std::sync::Mutex;
 
 use bytes::Bytes;
@@ -41,23 +41,24 @@ use crate::repo::meta::{MetaEnvelope, MetaKey};
 const TX_STORE: &str = "__tx__";
 const CHANGELOG_STORE: &str = "__changelog__";
 
-#[cfg(test)]
-#[cfg(all(test, feature = "fjall"))]
+#[cfg(any(test, feature = "test-util"))]
 type MaterializationFailureQueues = TFxMap<String, Vec<MaterializationBatchFailure>>;
 
-#[cfg(all(test, feature = "fjall"))]
+#[cfg(any(test, feature = "test-util"))]
 static MATERIALIZATION_BATCH_FAILURES: Mutex<Option<MaterializationFailureQueues>> =
     Mutex::new(None);
 
-#[cfg(all(test, feature = "fjall"))]
+#[cfg(any(test, feature = "test-util"))]
 #[derive(Clone, Copy)]
-pub(crate) enum MaterializationBatchFailure {
+#[doc(hidden)]
+pub enum MaterializationBatchFailure {
     BeforeCommit,
     AfterCommitUncertain,
 }
 
-#[cfg(all(test, feature = "fjall"))]
-pub(crate) fn inject_materialization_batch_failures(
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub fn inject_materialization_batch_failures(
     repo_name: &str,
     failures: &[MaterializationBatchFailure],
 ) {
@@ -68,8 +69,9 @@ pub(crate) fn inject_materialization_batch_failures(
         .insert(repo_name.to_owned(), failures.to_vec());
 }
 
-#[cfg(all(test, feature = "fjall"))]
-pub(crate) fn clear_materialization_batch_failures(repo_name: &str) {
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub fn clear_materialization_batch_failures(repo_name: &str) {
     if let Some(queues) = MATERIALIZATION_BATCH_FAILURES
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -84,7 +86,7 @@ pub(crate) fn clear_materialization_batch_failures(repo_name: &str) {
         .and_then(|map| map.remove(repo_name));
 }
 
-#[cfg(all(test, feature = "fjall"))]
+#[cfg(any(test, feature = "test-util"))]
 fn wrap_materialization_batch(
     batch: Box<dyn AtomicBatch>,
     repo_name: &str,
@@ -95,13 +97,13 @@ fn wrap_materialization_batch(
     })
 }
 
-#[cfg(all(test, feature = "fjall"))]
+#[cfg(any(test, feature = "test-util"))]
 struct InjectedMaterializationBatch {
     inner: Box<dyn AtomicBatch>,
     repo_name: String,
 }
 
-#[cfg(all(test, feature = "fjall"))]
+#[cfg(any(test, feature = "test-util"))]
 #[async_trait::async_trait]
 impl AtomicBatch for InjectedMaterializationBatch {
     fn set(&mut self, store: &str, key: RecordKey, value: Bytes) -> DbResult<()> {
@@ -140,11 +142,12 @@ impl AtomicBatch for InjectedMaterializationBatch {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 static MATERIALIZATION_READBACK_UNAVAILABLE: Mutex<Option<TFxMap<String, bool>>> = Mutex::new(None);
 
-#[cfg(all(test, feature = "fjall"))]
-pub(crate) fn set_materialization_readback_unavailable(repo_name: &str, on: bool) {
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub fn set_materialization_readback_unavailable(repo_name: &str, on: bool) {
     MATERIALIZATION_READBACK_UNAVAILABLE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -152,7 +155,7 @@ pub(crate) fn set_materialization_readback_unavailable(repo_name: &str, on: bool
         .insert(repo_name.to_owned(), on);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 fn take_materialization_readback_failure(repo_name: &str) -> bool {
     MATERIALIZATION_READBACK_UNAVAILABLE
         .lock()
@@ -162,11 +165,12 @@ fn take_materialization_readback_failure(repo_name: &str) -> bool {
         .unwrap_or(false)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 static MATERIALIZATION_COMMITS: Mutex<Option<TFxMap<String, usize>>> = Mutex::new(None);
 
-#[cfg(all(test, feature = "fjall"))]
-pub(crate) fn materialization_commit_count(repo_name: &str) -> usize {
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub fn materialization_commit_count(repo_name: &str) -> usize {
     MATERIALIZATION_COMMITS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -175,7 +179,7 @@ pub(crate) fn materialization_commit_count(repo_name: &str) -> usize {
         .unwrap_or(0)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 fn record_materialization_commit(repo_name: &str) {
     let mut counts = MATERIALIZATION_COMMITS.lock().unwrap();
     let counts = counts.get_or_insert_with(TFxMap::default);
@@ -184,11 +188,12 @@ fn record_materialization_commit(repo_name: &str) {
 
 /// Test-only seam: after a `Committed` outcome, pretend it was `Uncertain`
 /// so the read-back reconcile path runs in tests.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 static SIMULATE_UNCERTAIN: AtomicBool = AtomicBool::new(false);
 
-#[cfg(all(test, feature = "fjall"))]
-pub(crate) fn set_simulate_uncertain(on: bool) {
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub fn set_simulate_uncertain(on: bool) {
     SIMULATE_UNCERTAIN.store(on, Ordering::Release);
 }
 
@@ -478,7 +483,7 @@ pub(crate) async fn commit_prepared(
         }
     }
     info.flush().await?;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     super::super::test_seam::phase(repo.name(), super::super::test_seam::Phase::Prepared).await;
     log::info!(
         "follower receipt: Prepared upstream {}..={} on repo {}",
@@ -723,7 +728,7 @@ async fn stage_materialized_batch(
     old: &BookmarkV3,
 ) -> DbResult<Box<dyn AtomicBatch>> {
     let batch = repo.begin_repo_atomic_batch(permit).await?;
-    #[cfg(all(test, feature = "fjall"))]
+    #[cfg(any(test, feature = "test-util"))]
     let batch = wrap_materialization_batch(batch, repo.name());
     let mut batch = batch;
     for (table, history, info_store, count_after) in table_rows(repo, work)? {
@@ -836,11 +841,11 @@ pub(crate) async fn commit_materialized_work(
         .await?
         .commit()
         .await?;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     if outcome == AtomicCommitOutcome::Committed {
         record_materialization_commit(repo.name());
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     let outcome = if outcome == AtomicCommitOutcome::Committed
         && SIMULATE_UNCERTAIN.load(Ordering::Acquire)
     {
@@ -851,9 +856,9 @@ pub(crate) async fn commit_materialized_work(
         outcome
     };
     if let AtomicCommitOutcome::Uncertain { detail } = outcome {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-util"))]
         let force_unresolved_readback = take_materialization_readback_failure(repo.name());
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-util"))]
         let settled = if force_unresolved_readback {
             false
         } else {
@@ -862,7 +867,7 @@ pub(crate) async fn commit_materialized_work(
                 Ok(Some(receipt)) if receipt.phase == ReceiptPhase::Materialized,
             )
         };
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-util")))]
         let settled = matches!(
             load_outstanding_receipt(info, &work.receipt_id).await,
             Ok(Some(receipt)) if receipt.phase == ReceiptPhase::Materialized,
@@ -875,7 +880,7 @@ pub(crate) async fn commit_materialized_work(
             };
             match retry_outcome {
                 Ok(AtomicCommitOutcome::Committed) => {
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "test-util"))]
                     record_materialization_commit(repo.name());
                 }
                 Ok(AtomicCommitOutcome::Uncertain { detail }) => {
@@ -911,7 +916,7 @@ pub(crate) async fn commit_materialized_work(
         receipt.upstream_end,
         repo.name()
     );
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     super::super::test_seam::phase(repo.name(), super::super::test_seam::Phase::Materialized).await;
     Ok((receipt, counters))
 }

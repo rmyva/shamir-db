@@ -40,7 +40,7 @@ struct ColdOpenState {
 /// INTO the spawned task by [`ColdOpenTasks::spawn_registered`]: a future the
 /// runtime drops before its first poll drops the moved-in registration, so
 /// the count cannot leak. The drop notifies a drain waiting for zero.
-pub(crate) struct ColdOpenRegistration(Arc<Inner>);
+pub struct ColdOpenRegistration(Arc<Inner>);
 
 impl Drop for ColdOpenRegistration {
     fn drop(&mut self) {
@@ -56,8 +56,14 @@ impl Drop for ColdOpenRegistration {
     }
 }
 
+impl Default for ColdOpenTasks {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ColdOpenTasks {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             inner: Arc::new(Inner {
                 state: Mutex::new(ColdOpenState::default()),
@@ -69,7 +75,7 @@ impl ColdOpenTasks {
     /// Whether [`Self::close`] already closed admission. Fresh cold opens
     /// are refused with a typed error BEFORE they start (no admission permit,
     /// no store lookup) once shutdown is draining.
-    pub(crate) fn is_closed(&self) -> bool {
+    pub fn is_closed(&self) -> bool {
         self.inner
             .state
             .lock()
@@ -83,7 +89,7 @@ impl ColdOpenTasks {
     /// of the returned registration transfers with the open: pass it to
     /// [`Self::spawn_registered`] when the open is handed off, or drop it
     /// when the open completes inline.
-    pub(crate) fn register(&self) -> Option<ColdOpenRegistration> {
+    pub fn register(&self) -> Option<ColdOpenRegistration> {
         let mut state = self
             .inner
             .state
@@ -104,7 +110,7 @@ impl ColdOpenTasks {
     /// runtime discards the task before its first poll, so the live count
     /// cannot leak. `false` only outside a live tokio runtime: the caller
     /// drops the registration together with the future.
-    pub(crate) fn spawn_registered<F>(&self, registration: ColdOpenRegistration, work: F) -> bool
+    pub fn spawn_registered<F>(&self, registration: ColdOpenRegistration, work: F) -> bool
     where
         F: Future<Output = ()> + Send + 'static,
     {

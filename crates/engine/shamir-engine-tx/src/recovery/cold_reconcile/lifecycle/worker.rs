@@ -36,7 +36,7 @@ impl LifecycleStatus {
 
     /// Runs a synchronous publication callback under the lifecycle interlock.
     /// The callback must not re-enter lifecycle operations.
-    pub(crate) fn publish<T>(
+    pub fn publish<T>(
         &self,
         callback: impl FnOnce() -> T,
     ) -> Result<T, super::interlock::PublicationClosed> {

@@ -216,14 +216,16 @@ impl CommitAdmissionGate {
     }
 
     /// Diagnostic / test observation: current ACTIVE lease count.
-    #[cfg(test)]
-    pub(crate) fn active_count(&self) -> usize {
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    pub fn active_count(&self) -> usize {
         self.state.load(Ordering::Acquire) & ACTIVE_MASK
     }
 
     /// Diagnostic / test observation: is CLOSED set?
-    #[cfg(test)]
-    pub(crate) fn is_closed(&self) -> bool {
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    pub fn is_closed(&self) -> bool {
         self.state.load(Ordering::Acquire) & CLOSED != 0
     }
 }

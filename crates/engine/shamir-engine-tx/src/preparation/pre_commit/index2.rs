@@ -36,7 +36,7 @@ pub struct RederivePreTxReadFailHook {
     pub inner: std::sync::Mutex<Vec<(u64, RecordId)>>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 impl RederivePreTxReadFailHook {
     /// Arm a one-shot injected `Err` for the next
     /// `read_pre_tx_bytes(table_token, id)`.
@@ -70,7 +70,7 @@ pub(super) async fn read_pre_tx_bytes(
     #[cfg_attr(not(test), allow(unused_variables))] rid: RecordId,
     key: &RecordKey,
 ) -> Result<Option<bytes::Bytes>, DbError> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     if let Some(hook) = TEST_REDERIVE_PRE_TX_READ_FAILURE.get() {
         if let Some(err) = hook.take_injected(table_token, rid) {
             return Err(err);

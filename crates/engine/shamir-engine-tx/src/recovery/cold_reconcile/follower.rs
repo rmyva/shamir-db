@@ -7,7 +7,7 @@
 //! interval after the clean horizon. An old record without a known `J`
 //! keeps the conservative behaviour unchanged.
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -16,12 +16,13 @@ use shamir_storage::types::Store;
 
 use crate::meta::repl_bookmark::load_clean_horizon;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 static IGNORE_BOOKMARK_J: AtomicBool = AtomicBool::new(false);
 
 /// Negative-control seam: pretend the stored record has no known `J` so the
 /// pre-PR6c conservative whole-window GAP is reproduced.
-#[cfg(all(test, feature = "fjall"))]
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
 pub fn ignore_bookmark_j(ignore: bool) {
     IGNORE_BOOKMARK_J.store(ignore, Ordering::SeqCst);
 }
