@@ -12,7 +12,8 @@ use std::os::unix::fs::PermissionsExt;
 #[cfg(unix)]
 use crate::server::open_lock_is_discovery_gap;
 use crate::server::{
-    bounded_probe_for_test, release_stores, wait_stores_released, ReleaseOutcome, UnverifiedReason,
+    bounded_probe_for_test, install_re_probe_gate, release_stores, wait_stores_released,
+    ReleaseOutcome, UnverifiedReason, RE_PROBE_SUBMITS,
 };
 use tokio::time::Instant;
 
@@ -466,13 +467,28 @@ fn a_starved_first_probe_is_unverified() {
     );
 }
 
-/// The last COMPLETED observation is the verdict even when the next probe can
-/// never run: a store observed held stays `StillLocked`.
+/// The verdict comes from a RE-PROBE that was really SUBMITTED, and the last
+/// held observation survives its starvation.
 ///
-/// Mutant: a barrier that answers `StillLocked` for a store it never observed
-/// (discovery-seeded), or that forgets the observation when the re-probe cannot
-/// run (`Unverified`), or whose poll lets the re-probe run before the deadline
-/// and answer `Released` for a still-held store — all three fail the assertion.
+/// Order: the barrier itself signals, at the re-probe seam, that a first
+/// observation COMPLETED (the seam sits only after the `held.is_empty()` and
+/// deadline checks); the second occupier parks BEFORE the seam is released, so
+/// the re-probe can never run. The process-global submission counter must read
+/// exactly 1 after the verdict: a barrier that answers `StillLocked` from the
+/// first observation — discovery-seeded, or a fallback returned without ever
+/// submitting the re-probe — leaves it at 0 or never reaches the seam at all.
+///
+/// ONE absolute deadline (150 s, computed once) bounds every wait in the test,
+/// including the worker starts and the joins; the barrier budget (10 s) is the
+/// time the starved re-probe waits before its verdict, so it stays far below
+/// that deadline and far above the channel handshakes.
+///
+/// Mutants killed: the re-probe skipped (a fallback returned right after the
+/// seam — the counter stays 0); the re-probe reordered before the first
+/// observation (the barrier finishes before the seam signals — panic branch);
+/// a lost observation (`Unverified` — fails the match at the end); a verdict
+/// answered from the discovery instead of the completed observation (finishes
+/// before arrival — panic branch).
 #[test]
 fn a_starved_re_probe_keeps_the_last_held_observation() {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -483,49 +499,105 @@ fn a_starved_re_probe_keeps_the_last_held_observation() {
     let temp = tempfile::tempdir().expect("test root");
     let store = make_store(temp.path(), "counters");
     let holder = hold_lock(&store);
+    let deadline = std::time::Instant::now() + Duration::from_secs(150);
 
-    let outcome = runtime.block_on(async {
-        // One worker, parked on `first_gate_rx`, so the pool takes jobs in QUEUE
-        // order: the barrier's first probe, then the second occupier. Releasing
-        // the first occupier lets that probe run (it observes the held lock);
-        // the second occupier then owns the worker for the rest of the budget,
-        // so the re-probe can never run. Rendezvous by channel, never a sleep.
-        let (started_tx, started_rx) = std::sync::mpsc::channel();
-        let (first_gate_tx, first_gate_rx) = std::sync::mpsc::channel::<()>();
+    let outcome = runtime.block_on(async move {
+        let deadline = tokio::time::Instant::from_std(deadline);
+        // 1. Occupy the ONLY blocking worker; the barrier's first probe queues
+        //    behind it. Released by channel, never a sleep.
+        let (first_started_tx, first_started_rx) = tokio::sync::oneshot::channel();
+        let (first_release_tx, first_release_rx) = std::sync::mpsc::channel::<()>();
         let first = tokio::task::spawn_blocking(move || {
-            let _ = started_tx.send(());
-            let _ = first_gate_rx.recv();
+            let _ = first_started_tx.send(());
+            let _ = first_release_rx.recv();
         });
-        started_rx
-            .recv_timeout(Duration::from_secs(30))
-            .expect("the pool worker started the first occupier");
-        let (second_gate_tx, second_gate_rx) = std::sync::mpsc::channel::<()>();
+        tokio::time::timeout_at(deadline, first_started_rx)
+            .await
+            .expect("the first occupier started within the test deadline")
+            .expect("the first occupier signalled");
 
-        // Poll the barrier's first future turn directly: it synchronously
-        // submits its first blocking probe before returning Pending. Only then
-        // queue the second occupier behind that probe in the one-worker pool.
+        // 2. Install the re-probe gate, then poll the barrier's first future
+        //    turn directly: it synchronously submits its first probe before
+        //    returning Pending.
+        let mut gate = install_re_probe_gate();
         let root = temp.path().to_path_buf();
-        let budget = Duration::from_millis(300);
-        let mut barrier = Box::pin(release_stores(&root, budget));
-        let waker = std::task::Waker::noop();
-        let mut context = std::task::Context::from_waker(waker);
+        // The verdict of the starved re-probe arrives only when this budget
+        // runs out, so it must be far below the test deadline; the first
+        // observation (a lock probe once the first occupier is released) needs
+        // a tiny fraction of it.
+        let mut barrier = Box::pin(release_stores(&root, Duration::from_secs(10)));
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
         assert!(
             std::future::Future::poll(barrier.as_mut(), &mut context).is_pending(),
             "the first probe is queued behind the first occupier"
         );
-        let second = tokio::task::spawn_blocking(move || {
-            let _ = second_gate_rx.recv();
-        });
-        let _ = first_gate_tx.send(());
 
-        let outcome = barrier.await;
-        let _ = second_gate_tx.send(());
-        first.await.expect("the first occupier joined");
-        second.await.expect("the second occupier joined");
+        // 3. Free the worker: the queued first probe runs, observes the held
+        //    store, and the loop reaches the seam.
+        drop(first_release_tx);
+
+        // 4. Drive the barrier until the seam's arrival signal. A verdict
+        //    arriving first means the re-probe path was skipped or reordered.
+        let arrived = tokio::time::timeout_at(deadline, async {
+            tokio::select! {
+                biased;
+                signal = gate.arrived.recv() => signal,
+                outcome = &mut barrier => panic!(
+                    "the barrier finished before the re-probe seam: the re-probe was \
+                     skipped or reordered (mutant): {outcome:?}"
+                ),
+            }
+        })
+        .await
+        .expect("the re-probe seam arrived within the test deadline");
+        assert!(
+            arrived.is_some(),
+            "the seam must signal the test before parking"
+        );
+
+        // 5. Park a second occupier on the worker: the re-probe, submitted
+        //    only AFTER this, can never run inside the budget.
+        let (second_started_tx, second_started_rx) = tokio::sync::oneshot::channel();
+        let (second_release_tx, second_release_rx) = std::sync::mpsc::channel::<()>();
+        let second = tokio::task::spawn_blocking(move || {
+            let _ = second_started_tx.send(());
+            let _ = second_release_rx.recv();
+        });
+        tokio::time::timeout_at(deadline, second_started_rx)
+            .await
+            .expect("the second occupier started within the test deadline")
+            .expect("the second occupier signalled");
+
+        // 6. Release the seam: the re-probe is submitted behind the parked
+        //    second occupier and starves.
+        tokio::time::timeout_at(deadline, gate.release.send(()))
+            .await
+            .expect("the re-probe gate released within the test deadline")
+            .expect("the re-probe seam receiver remains alive");
+
+        let outcome = tokio::time::timeout_at(deadline, barrier.as_mut())
+            .await
+            .expect("the barrier verdict arrived within the test deadline");
+        drop(second_release_tx);
+        tokio::time::timeout_at(deadline, first)
+            .await
+            .expect("the first occupier joined within the test deadline")
+            .expect("the first occupier joined");
+        tokio::time::timeout_at(deadline, second)
+            .await
+            .expect("the second occupier joined within the test deadline")
+            .expect("the second occupier joined");
         outcome
     });
 
     drop(holder);
+    // The fallback answer must come FROM a submitted re-probe: a barrier that
+    // returns `StillLocked` without ever submitting one fails here.
+    assert_eq!(
+        RE_PROBE_SUBMITS.load(std::sync::atomic::Ordering::Relaxed),
+        1,
+        "exactly one re-probe must have been submitted before the verdict"
+    );
     match outcome {
         ReleaseOutcome::StillLocked(still) => assert_eq!(
             still,
@@ -538,4 +610,76 @@ fn a_starved_re_probe_keeps_the_last_held_observation() {
              is not an observation, and a lost observation is not a release): got {other:?}"
         ),
     }
+}
+
+/// A REAL re-probe on a FREE pool answers differently from the first
+/// observation: the lock is released while the barrier parks at the seam, so
+/// the re-probe must answer `Released` where the first observation saw held.
+///
+/// Mutants killed: the re-probe skipped or answered from the first observation
+/// (`StillLocked` from the stale held set instead of `Released`); the re-probe
+/// reordered before the first observation (the barrier then answers from a
+/// free FIRST probe and finishes before the seam signals — panic branch); the
+/// first observation forged empty (`Released` before arrival — panic branch).
+#[test]
+fn the_re_probe_sees_the_lock_free_after_the_first_observation() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime");
+    let temp = tempfile::tempdir().expect("test root");
+    make_store(temp.path(), "counters");
+    let holder = hold_lock(&temp.path().join("counters"));
+    let deadline = std::time::Instant::now() + Duration::from_secs(150);
+
+    let outcome = runtime.block_on(async move {
+        let deadline = tokio::time::Instant::from_std(deadline);
+        let mut gate = install_re_probe_gate();
+        let root = temp.path().to_path_buf();
+        let probe_budget = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let mut barrier = Box::pin(release_stores(&root, probe_budget));
+        // The pool is FREE: the first probe runs at once and the loop reaches
+        // the seam with the completed held observation.
+        let arrived = tokio::time::timeout_at(deadline, async {
+            tokio::select! {
+                biased;
+                signal = gate.arrived.recv() => signal,
+                outcome = &mut barrier => panic!(
+                    "the barrier finished before the re-probe seam (mutant: the first \
+                     observation was forged empty or the re-probe ran early): {outcome:?}"
+                ),
+            }
+        })
+        .await
+        .expect("the re-probe seam arrived within the test deadline");
+        assert!(
+            arrived.is_some(),
+            "the seam must signal the test before parking"
+        );
+
+        // Change the world the re-probe will see: the lock is released while
+        // the barrier is parked at the seam.
+        drop(holder);
+
+        // Release the seam: the re-probe runs on the free pool and must see
+        // the lock FREE — the answer must change.
+        tokio::time::timeout_at(deadline, gate.release.send(()))
+            .await
+            .expect("the re-probe gate released within the test deadline")
+            .expect("the re-probe seam receiver remains alive");
+        tokio::time::timeout_at(deadline, barrier.as_mut())
+            .await
+            .expect("the barrier verdict arrived within the test deadline")
+    });
+
+    assert_eq!(
+        RE_PROBE_SUBMITS.load(std::sync::atomic::Ordering::Relaxed),
+        1,
+        "exactly one re-probe must have been submitted before the verdict"
+    );
+    assert!(
+        matches!(outcome, ReleaseOutcome::Released),
+        "a re-probe on a free pool must answer Released, not repeat the first held \
+         observation: {outcome:?}"
+    );
 }

@@ -28,7 +28,7 @@ use crate::sync::durability::backup::online::manifest::{
     WalSection, WalSegmentEntry,
 };
 use crate::sync::durability::backup::{
-    verify_retention_candidate, verify_retention_candidate_cancellable, BackupError,
+    verify_retention_candidate, verify_retention_candidate_cancellable, BackupError, HashCancelled,
     ManifestFileEntry,
 };
 
@@ -173,4 +173,72 @@ fn uncancelled_verify_hashes_the_whole_payload() {
         "the streaming digest must be byte-identical to the whole-file hash"
     );
     assert_eq!(decoded.files[0].size_bytes, size_bytes);
+}
+
+/// A verify cancelled from its very first hash chunk keeps the TYPED
+/// `HashCancelled` payload inside the returned `io::Error`, so the retention
+/// classifier can tell a deliberate cancellation from an ordinary `EINTR`
+/// and from a corrupt snapshot.
+///
+/// Mutant killed: re-wrapping the streaming hash's error into a fresh string
+/// payload (the former `map_err` in `v2_verify::verify_decoded_manifest_v2`)
+/// dropped the marker — the assertion below then saw a `String` payload and
+/// the snapshot was reported incomplete instead of cancelled.
+#[test]
+fn a_cancelled_files_loop_hash_keeps_the_typed_cancel_marker() {
+    let (dir, raw) = large_wal_candidate();
+
+    let error = verify_retention_candidate_cancellable(dir.path(), &raw, &|| true)
+        .expect_err("a cancelled verify must not report success");
+
+    assert!(
+        matches!(&error, BackupError::Io(error)
+            if error.get_ref().is_some_and(|inner| inner.is::<HashCancelled>())),
+        "a cancelled hash must carry the typed HashCancelled payload, got: {error:?}"
+    );
+    assert!(
+        matches!(&error, BackupError::Io(error)
+            if error.kind() == ErrorKind::Interrupted),
+        "the cancellation must still surface as Interrupted for the io layer"
+    );
+}
+
+/// The WAL-loop re-hash site preserves the marker. A `cfg(test)` thread-local
+/// probe goes true only WHILE that exact call site is hashing, so the cancel
+/// predicate fires on its first chunk regardless of short non-EOF reads in
+/// either the manifest-file loop or the WAL re-hash.
+///
+/// Mutant killed: a `map_err` on the WAL-segment hash that re-wraps into a
+/// fresh string payload drops the typed marker for THIS site only — the
+/// assertion below then sees a `String` payload. A mutant that skips the WAL
+/// re-hash entirely leaves verification successful (no cancellation) and also
+/// fails `expect_err`.
+#[test]
+fn a_cancelled_wal_rehash_keeps_the_typed_cancel_marker() {
+    let (dir, raw) = large_wal_candidate();
+    // Counts only the calls made WHILE the WAL re-hash marker is active: the
+    // manifest-file loop calls the predicate too (several times, before the
+    // WAL segments), and short reads can add more.
+    let wal_calls = Cell::new(0usize);
+    let probe = || {
+        let active = super::super::v2_verify::wal_rehash_active_for_test();
+        if active {
+            wal_calls.set(wal_calls.get() + 1);
+        }
+        active
+    };
+
+    let error = verify_retention_candidate_cancellable(dir.path(), &raw, &probe)
+        .expect_err("the WAL re-hash must observe cancellation");
+
+    assert_eq!(
+        wal_calls.get(),
+        1,
+        "the cancel predicate must fire once inside the WAL re-hash, on its first chunk"
+    );
+    assert!(
+        matches!(&error, BackupError::Io(error)
+            if error.get_ref().is_some_and(|inner| inner.is::<HashCancelled>())),
+        "a cancelled WAL re-hash must carry the typed HashCancelled payload, got: {error:?}"
+    );
 }

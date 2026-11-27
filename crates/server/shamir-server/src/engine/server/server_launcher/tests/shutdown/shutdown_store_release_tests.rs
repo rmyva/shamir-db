@@ -392,6 +392,178 @@ fn a_saturated_blocking_pool_submits_an_unverified_release_probe() {
     );
 }
 
+/// The `DiscoveryGap` verdict keeps its OWN wording in the REAL shutdown
+/// report: discovery was incomplete, distinct from a probe that ended without
+/// a result. The gap is planted by leaving directories below the discovery
+/// walk's depth cap under `data_dir` — the store set is then unknowable by
+/// construction, on every platform.
+///
+/// Mutant killed: the summary/detail texts of `UnverifiedReason::DiscoveryGap`
+/// swapped with `ProbeError`'s, merged into one generic string, or dropped
+/// from the report — the exact-substring and absence assertions fail.
+#[test]
+fn a_discovery_gap_is_reported_with_its_own_wording() {
+    let guard = FlakeGuard::with_watchdog(
+        "a_discovery_gap_is_reported_with_its_own_wording",
+        Duration::from_secs(300),
+    );
+    try_install_global_tracing_ring();
+    let temp = tempfile::tempdir().expect("test root");
+    let data_dir = temp.path().join("data");
+    create_private_dir(&data_dir).expect("private data directory");
+    // Directories below the barrier walk's depth cap: discovery cannot
+    // finish, so the release state is UNKNOWN (a gap, never a release).
+    let mut deep = data_dir.clone();
+    for name in ["a", "b", "c", "d", "e", "f", "g", "h"] {
+        deep.push(name);
+    }
+    std::fs::create_dir_all(&deep).expect("directories below the depth cap");
+    guard.mark("depth-cap directories planted");
+    // ONE absolute deadline for the whole test: every stage waits for the
+    // REMAINING time, never a fresh budget per stage.
+    let deadline = std::time::Instant::now() + BOUND;
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime");
+    let boot_data_dir = data_dir.clone();
+    let handle = runtime
+        .block_on(async {
+            tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                Box::pin(
+                    ServerLauncher {
+                        config: boot_config(boot_data_dir),
+                        bootstrap: BootstrapMode::Skip,
+                        node_mode: NodeMode::ReadWrite,
+                    }
+                    .launch(),
+                ),
+            )
+            .await
+        })
+        .expect("launcher boot within the bound")
+        .expect("launcher boot");
+    guard.mark("launcher booted with the depth-cap gap planted");
+    let report = runtime
+        .block_on(async {
+            tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                crate::runtime::drain_server(handle, Duration::from_secs(30)),
+            )
+            .await
+        })
+        .expect("shutdown report bounded");
+    guard.mark("drained with the depth-cap gap planted");
+
+    assert!(
+        report.errors().iter().any(
+            |error| error.contains("store release could not be verified")
+                && error.contains("store discovery was incomplete")
+                && error.contains("the store set could not be fully discovered")
+        ),
+        "the DiscoveryGap verdict must keep its own wording in the report: {report:?}"
+    );
+    // Scoped to the store-release verdict: the audit close has its own
+    // "ended without a result" wording that is unrelated to discovery.
+    assert!(
+        !report.errors().iter().any(|error| {
+            error.contains("store release could not be verified")
+                && error.contains("ended without a result")
+        }),
+        "a discovery gap must not be worded as a probe error: {report:?}"
+    );
+    assert!(
+        !report.is_clean(),
+        "a discovery gap makes shutdown unclean: {report:?}"
+    );
+}
+
+/// The `ProbeError` verdict keeps its OWN wording in the REAL shutdown report:
+/// the blocking job ended without a result, distinct from an incomplete
+/// discovery. The error is planted as a store-shaped directory whose `lock`
+/// marker is a DIRECTORY: the verifier classifies it as a store (`version`
+/// file + `lock` entry), then cannot open the directory lock for reading and
+/// writing on any platform.
+///
+/// Mutant killed: the summary/detail texts of `UnverifiedReason::ProbeError`
+/// swapped with `DiscoveryGap`'s, merged into one generic string, or dropped
+/// from the report — the exact-substring and absence assertions fail.
+#[test]
+fn a_probe_error_is_reported_with_its_own_wording() {
+    let guard = FlakeGuard::with_watchdog(
+        "a_probe_error_is_reported_with_its_own_wording",
+        Duration::from_secs(300),
+    );
+    try_install_global_tracing_ring();
+    let temp = tempfile::tempdir().expect("test root");
+    let data_dir = temp.path().join("data");
+    create_private_dir(&data_dir).expect("private data directory");
+    let planted = data_dir.join("probe_error_store");
+    // `lock` as a DIRECTORY: classified a store, unopenable as a lock file.
+    std::fs::create_dir_all(planted.join("lock")).expect("`lock` directory marker");
+    std::fs::write(planted.join("version"), b"v").expect("version marker");
+    guard.mark("probe-error store planted");
+    // ONE absolute deadline for the whole test: every stage waits for the
+    // REMAINING time, never a fresh budget per stage.
+    let deadline = std::time::Instant::now() + BOUND;
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime");
+    let boot_data_dir = data_dir.clone();
+    let handle = runtime
+        .block_on(async {
+            tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                Box::pin(
+                    ServerLauncher {
+                        config: boot_config(boot_data_dir),
+                        bootstrap: BootstrapMode::Skip,
+                        node_mode: NodeMode::ReadWrite,
+                    }
+                    .launch(),
+                ),
+            )
+            .await
+        })
+        .expect("launcher boot within the bound")
+        .expect("launcher boot");
+    guard.mark("launcher booted with the probe-error store planted");
+    let report = runtime
+        .block_on(async {
+            tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                crate::runtime::drain_server(handle, Duration::from_secs(30)),
+            )
+            .await
+        })
+        .expect("shutdown report bounded");
+    guard.mark("drained with the probe-error store planted");
+
+    assert!(
+        report.errors().iter().any(
+            |error| error.contains("store release could not be verified")
+                && error.contains("the store-release blocking job ended without a result")
+                && error.contains("discovery or a lock probe did not complete successfully")
+        ),
+        "the ProbeError verdict must keep its own wording in the report: {report:?}"
+    );
+    assert!(
+        !report
+            .errors()
+            .iter()
+            .any(|error| error.contains("store discovery was incomplete")),
+        "a probe error must not be worded as a discovery gap: {report:?}"
+    );
+    assert!(
+        !report.is_clean(),
+        "a probe error makes shutdown unclean: {report:?}"
+    );
+}
+
 /// Releases a parked blocking-pool worker even if an assertion unwinds.
 struct ReleaseBlockingWorker(std::sync::mpsc::Sender<()>);
 

@@ -367,6 +367,15 @@ pub(crate) async fn release_stores_until(root: &Path, deadline: Instant) -> Rele
         // RUN (a saturated pool, or a budget spent while scheduling) must not
         // discard locks already observed held.
         let fallback = held.clone();
+        // Test seam: an installed gate parks the barrier here, after the
+        // first COMPLETED observation and before the re-probe is submitted.
+        #[cfg(test)]
+        wait_at_re_probe_gate().await;
+        // Counts reaching the statement that submits the re-probe job: a
+        // barrier that answers from the first observation without getting
+        // here leaves the counter untouched.
+        #[cfg(test)]
+        RE_PROBE_SUBMITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         observed = match bounded_probe(deadline, move || observe(&held)).await {
             Ok(Ok(observed)) => Some(observed),
             Ok(Err(LockState::ProbeError)) => {
@@ -441,6 +450,72 @@ pub(crate) async fn bounded_probe_for_test<T: Send + 'static>(
     probe: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, UnverifiedReason> {
     bounded_probe(deadline, probe).await
+}
+
+/// Test seam for the RE-PROBE point of [`release_stores_until`]: while a gate
+/// is installed, the barrier — at the moment it is about to submit a re-probe
+/// AFTER a completed first observation — signals the test and then blocks
+/// (bounded by 120 s) until the test drops the gate's release sender. The
+/// gate is consumed once; production installs nothing, so the wait is never
+/// taken outside tests.
+/// LIMIT: one gate per process — the static is process-global, and under
+/// nextest (one process per test) only the intended test can install it.
+#[cfg(test)]
+pub(crate) static RE_PROBE_GATE: std::sync::Mutex<
+    Option<(
+        tokio::sync::mpsc::Sender<()>,
+        tokio::sync::mpsc::Receiver<()>,
+    )>,
+> = std::sync::Mutex::new(None);
+
+/// Test-only count of re-probe jobs SUBMITTED to the blocking pool by
+/// [`release_stores_until`]: incremented at exactly the submission point (the
+/// `bounded_probe` call that follows the seam), so a mutant that answers from
+/// the first observation without submitting a re-probe leaves it at zero.
+/// LIMIT: one counter per process — under nextest (one process per test) only
+/// the intended test observes it; assert the exact value after the verdict.
+#[cfg(test)]
+pub(crate) static RE_PROBE_SUBMITS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// An installed re-probe gate: `arrived` resolves when the barrier reached
+/// the seam; dropping `release` (or the guard itself) lets the barrier
+/// continue. A guard dropped while the gate is UNCONSUMED removes it, so a
+/// failed assertion cannot strand a later test at the seam.
+#[cfg(test)]
+pub(crate) struct ReProbeGate {
+    pub(crate) arrived: tokio::sync::mpsc::Receiver<()>,
+    pub(crate) release: tokio::sync::mpsc::Sender<()>,
+}
+
+#[cfg(test)]
+impl Drop for ReProbeGate {
+    fn drop(&mut self) {
+        drop(RE_PROBE_GATE.lock().expect("re-probe gate lock").take());
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn install_re_probe_gate() -> ReProbeGate {
+    let (arrived_tx, arrived_rx) = tokio::sync::mpsc::channel(1);
+    let (release_tx, release_rx) = tokio::sync::mpsc::channel(1);
+    *RE_PROBE_GATE.lock().expect("re-probe gate lock") = Some((arrived_tx, release_rx));
+    ReProbeGate {
+        arrived: arrived_rx,
+        release: release_tx,
+    }
+}
+
+/// The seam itself: consume the installed gate, signal arrival, and wait
+/// (bounded) for the test's release.
+#[cfg(test)]
+async fn wait_at_re_probe_gate() {
+    let Some((arrived, mut release)) = RE_PROBE_GATE.lock().expect("re-probe gate lock").take()
+    else {
+        return;
+    };
+    let _ = arrived.send(()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(120), release.recv()).await;
 }
 
 /// Test seam for the Unix lock-open classification: a marker that exists but

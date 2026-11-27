@@ -726,7 +726,11 @@ jobs:
   integration:
     name: cargo test integration (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    # Manual and scheduled runs also execute the 1 GiB logical-dump budget
+    # test (three operations of up to 600 s each), so they get a longer cap.
+    # The pipeline canary of a ci.yml change spent 43.5 minutes in the Windows
+    # test step alone, so the pull-request cap is 60, not 45.
+    timeout-minutes: ${{ contains(fromJSON('["workflow_dispatch","schedule"]'), github.event_name) && 120 || 60 }}
     needs: [plan, affected]
     if: needs.plan.outputs.full == 'true' && needs.affected.outputs.tree_green != 'true'
     strategy:
@@ -792,6 +796,9 @@ jobs:
           INTEGRATION_FILTER: ${{ needs.affected.outputs.integration_filter }}
           INTEGRATION_TARGETS: ${{ needs.affected.outputs.integration_targets }}
           SHAMIR_CARGO_TIMINGS: '1'
+          # Enables streaming_1gib_variant_meets_budgets_when_enabled (it runs
+          # only when the value is exactly "1"); PR runs leave it empty.
+          SHAMIR_LOGICAL_DUMP_LARGE: ${{ contains(fromJSON('["workflow_dispatch","schedule"]'), github.event_name) && '1' || '' }}
         shell: bash
         run: |
           set -euo pipefail

@@ -20,6 +20,16 @@ impl RepoInstance {
     }
 
     async fn shutdown_clean_inner(&self, budget: std::time::Duration) -> DbResult<()> {
+        let result = Box::pin(self.shutdown_clean_window(budget)).await;
+        // The cold-open close latch spans THIS shutdown window only: the
+        // repository stays usable after a flush (embedders and tests flush
+        // mid-life), so the latch is lifted when the window ends. A future
+        // dropped mid-window never gets here and leaves the latch closed.
+        self.core.cold_opens().reopen();
+        result
+    }
+
+    async fn shutdown_clean_window(&self, budget: std::time::Duration) -> DbResult<()> {
         let deadline = tokio::time::Instant::now() + budget;
         let lifecycle = self.worker_lifecycle();
         if let Some(lifecycle) = lifecycle {

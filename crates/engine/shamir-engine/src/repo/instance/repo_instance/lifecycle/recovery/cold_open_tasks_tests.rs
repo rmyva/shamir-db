@@ -98,3 +98,19 @@ fn register_refuses_after_close() {
     assert!(tasks.is_closed());
     assert!(tasks.register().is_none(), "closed admission must refuse");
 }
+
+/// The close latch spans one shutdown window: `reopen` lifts it, so a
+/// repository flushed mid-life (embedders, tests) admits fresh cold opens
+/// again. Mutant: `shutdown_clean` leaving the latch closed after the flush.
+#[test]
+fn reopen_lifts_the_close_latch() {
+    let tasks = ColdOpenTasks::new();
+    tasks.close();
+    assert!(tasks.register().is_none());
+    tasks.reopen();
+    assert!(!tasks.is_closed());
+    assert!(
+        tasks.register().is_some(),
+        "reopened admission must admit a fresh open"
+    );
+}

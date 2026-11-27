@@ -585,9 +585,20 @@ fn adoption_rereads_are_charged_before_a_late_digest_rejection() {
     );
 }
 
-/// Mutant killed: a mutant that skips the rereads before rejecting would
-/// succeed on this budget (one byte below the true reads); the rereads are
-/// charged first, so the late read runs out of budget and the pass refuses.
+/// Budget relation, exact: the appended byte makes the late manifest reread
+/// charge ONE byte more than `adopted_candidate_reads` records, so the true
+/// mutated cost is `adopted_candidate_reads + 1` and THIS budget is that cost
+/// minus one — numerically the unmutated exact cost, and exactly one byte
+/// below what the pass really charges with the mutation in place. The
+/// companion test above passes at `adopted_candidate_reads + 1`, so the pair
+/// pins the charged byte exactly.
+///
+/// Mutant killed: a mutant that skips the rereads before rejecting charges
+/// only the unmutated scan reads and would SUCCEED on this budget; the
+/// rereads are charged first, so the late read runs out of budget and the
+/// pass refuses. The test asserts the after-scan mutation actually fired —
+/// without that assertion the budget verdict could come from an unmutated
+/// tree and the test would pass with the mutation machinery broken.
 #[test]
 fn one_byte_short_of_the_rereads_refuses_before_the_late_rejection() {
     let (_temp, root) = private_root();
@@ -595,14 +606,22 @@ fn one_byte_short_of_the_rereads_refuses_before_the_late_rejection() {
     let fresh = copy_with_payload(&root, "20200101_000002", 2, None, b"");
     let record = (dir_name(&tracked), 1, manifest_digest(&tracked));
     let pending: BTreeSet<_> = [record].into_iter().collect();
-    let budget_bytes = adopted_candidate_reads(&tracked, &fresh) - 1;
+    // The mutated cost is `adopted_candidate_reads + 1` (the appended byte the
+    // late manifest reread charges); the budget is that cost minus one —
+    // numerically the unmutated exact cost, one byte below the real charge.
+    let budget_bytes = adopted_candidate_reads(&tracked, &fresh) + 1 - 1;
+    let changed = Arc::new(AtomicBool::new(false));
     let subscriber = tracing_subscriber::registry().with(MutateManifestBeforeAdoption {
         manifest: tracked.join(MANIFEST_FILE_NAME),
-        changed: Arc::new(AtomicBool::new(false)),
+        changed: Arc::clone(&changed),
     });
     let (refusal, outcome) = tracing::subscriber::with_default(subscriber, || {
         run_pass_with_budget(&root, &fresh, 2, &pending, budget_bytes)
     });
+    assert!(
+        changed.load(Ordering::SeqCst),
+        "the after-scan seam must fire, or the budget verdict proves nothing"
+    );
     assert!(
         matches!(refusal, Err(Refusal::Budget)),
         "the rereads precede the late rejection: one byte less must refuse"
@@ -657,9 +676,9 @@ fn pre_cancelled_pass_returns_cancelled_without_retention_mutations() {
 
 /// Verifier-error classification semantics: the typed cancel-hook marker maps
 /// to `Cancelled`, plain EINTR and other I/O errors remain `Incomplete`, and
-/// non-I/O errors are `Unverifiable`. This classifier-only test does not model
-/// the v2 verifier's hash path: that path wraps the marker in an I/O error
-/// string, so the inner `HashCancelled` type is not preserved for this match.
+/// non-I/O errors are `Unverifiable`. This classifier-only test pins the
+/// mapping itself; the preservation of the marker THROUGH the v2 verifier's
+/// hash path is pinned end to end by `retention_cancel_tests` in shamir-sync.
 #[test]
 fn only_the_cancel_marker_classifies_as_cancelled() {
     let cancelled = BackupError::Io(std::io::Error::new(ErrorKind::Interrupted, HashCancelled));
