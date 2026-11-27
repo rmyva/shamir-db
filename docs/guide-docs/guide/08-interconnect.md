@@ -168,7 +168,7 @@ runbook and real process-crash acceptance scenario belong to SEED-5.
 `target_match.rs`, `filter_eval.rs`, `reactive.rs`, `push.rs`,
 `decode_cache.rs`, `deliver_cache.rs`, `payload.rs`) — сервер держит
 живое соединение и отправляет unsolicited push-фреймы с изменениями,
-матчащими подписку клиента. При отказе повторной ACL-проверки во время activation весь ответ запроса заменяется фиксированным `unknown_table` (`table is unavailable`), хотя более ранние записи batch уже могли commit-иться. На wire-уровне это `BatchOp::Subscribe`
+матчащими подписку клиента. При отказе повторной ACL-проверки во время activation весь ответ запроса заменяется фиксированным `unknown_table` (`table is unavailable`), хотя более ранние записи batch уже могли commit-иться. Раньше, ещё на batch-preflight (до выполнения любой операции batch), каждый источник подписки классифицируется: отсутствующий ИЛИ закрытый для актора источник отказывает весь запрос ОДИН раз фиксированным `unknown_table` (`table is unavailable`) — без частичной подписки и без деталей по конкретным таблицам (`SUBSCRIPTIONS.md`, §7). На wire-уровне это `BatchOp::Subscribe`
 (`SubscribeOp`) / `BatchOp::Unsubscribe` (`UnsubscribeOp`)
 (`crates/query/shamir-query-types/src/batch/batch_op.rs`), Не путать с DDL
 `CreateSubscription`/`DropSubscription`/`AlterSubscription`/`ListSubscriptions`:

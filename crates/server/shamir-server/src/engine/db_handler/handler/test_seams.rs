@@ -93,6 +93,10 @@ pub(in crate::engine::db_handler) struct BeginPause {
     get_record_identity: GetRecordIdentityPause,
     create_cursor_identity: CreateCursorIdentityPause,
     fetch_identity: FetchIdentityPause,
+    /// Test-only cumulative count of raw-native-path decoded requests (token
+    /// REST and WebSocket decode separately and are not counted). The
+    /// production increment compiles out; see the caller in `core.rs`.
+    decoded_requests: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl BeginPause {
@@ -114,6 +118,21 @@ impl BeginPause {
             reached.wait().await;
             resume.wait().await;
         }
+    }
+
+    /// Counts one decoded raw-native request. Test-only: the only call site
+    /// is `#[cfg(test)]`.
+    #[cfg(test)]
+    pub(in crate::engine::db_handler) fn note_decoded_request(&self) {
+        self.decoded_requests
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Reads the raw-native-path decode counter.
+    #[cfg(test)]
+    pub(in crate::engine::db_handler) fn decoded_request_count(&self) -> u64 {
+        self.decoded_requests
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -176,8 +195,7 @@ impl ShamirDbHandler {
     /// Reads the raw-native-path decode counter (test-only reader).
     #[cfg(test)]
     pub(in crate::engine::db_handler) fn decoded_request_count(&self) -> u64 {
-        self.decoded_requests
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.begin_pause.decoded_request_count()
     }
 
     /// Install a one-shot pause before this handler's cursor removal.
