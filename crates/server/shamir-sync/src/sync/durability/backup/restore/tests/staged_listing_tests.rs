@@ -32,7 +32,9 @@ use tempfile::TempDir;
 use crate::sync::durability::backup::offline::{verify_manifest, Manifest, ManifestFileEntry};
 use crate::sync::durability::backup::online::copy_engine::hash_file;
 use crate::sync::durability::backup::online::manifest::BACKUP_META_FILE_NAME;
-use crate::sync::durability::backup::restore::{restore_impl, RestoreError};
+use crate::sync::durability::backup::restore::{
+    has_external_staging_location, restore_impl, RestoreError,
+};
 use crate::sync::durability::backup::snapshot_lease;
 
 /// The listed file lives under `payload/`, NOT under `users/`: the restore
@@ -659,4 +661,13 @@ fn managed_snapshot_lease_blocks_retention_until_the_refusal_releases_it() {
 
     assert_staged_file_missing(err, root.path());
     assert_target_and_siblings_clean(root.path(), &data_dir);
+}
+
+/// Catches staging inside the live root, which makes pre-swap refusals write into the target.
+#[test]
+fn staging_location_rejects_root_paths_but_allows_normal_targets() {
+    assert!(!has_external_staging_location(Path::new("C:/")));
+    assert!(!has_external_staging_location(Path::new("/")));
+    let normal_target = std::env::temp_dir().join("restore-target");
+    assert!(has_external_staging_location(&normal_target));
 }

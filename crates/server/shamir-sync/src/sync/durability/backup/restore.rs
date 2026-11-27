@@ -770,29 +770,13 @@ where
     Ok(report)
 }
 
-#[cfg(test)]
-mod staging_location_tests {
-    /// Catches staging inside the live root, which makes pre-swap refusals write into the target.
-    #[test]
-    fn rejects_root_paths_but_allows_normal_targets() {
-        assert!(!super::has_external_staging_location(std::path::Path::new(
-            "C:/"
-        )));
-        assert!(!super::has_external_staging_location(std::path::Path::new(
-            "/"
-        )));
-        let normal_target = std::env::temp_dir().join("restore-target");
-        assert!(super::has_external_staging_location(&normal_target));
-    }
-}
-
 fn has_external_staging_location(data_dir: &Path) -> bool {
     let text = data_dir.to_string_lossy();
     let windows_drive_root = text.len() == 3
         && text.as_bytes()[0].is_ascii_alphabetic()
         && text.as_bytes()[1] == b':'
         && matches!(text.as_bytes()[2], b'/' | b'\\');
-    !windows_drive_root && data_dir.parent().map_or(false, |parent| parent != data_dir)
+    !windows_drive_root && data_dir.parent().is_some_and(|parent| parent != data_dir)
 }
 
 const RESTORE_MARKER: &str = ".shamir_restore_epoch";

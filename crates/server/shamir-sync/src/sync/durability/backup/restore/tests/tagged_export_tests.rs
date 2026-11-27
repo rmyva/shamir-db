@@ -28,6 +28,7 @@ use crate::sync::durability::backup::offline::{
     verify_manifest, Manifest, ManifestFileEntry, SNAPSHOT_LEASE_FILE_NAME,
 };
 use crate::sync::durability::backup::online::copy_engine::hash_file;
+use crate::sync::durability::backup::online::manifest as manifest_v2;
 use crate::sync::durability::backup::online::manifest::BackupKind;
 use crate::sync::durability::backup::online::manifest::BACKUP_META_FILE_NAME;
 use crate::sync::durability::backup::restore::{restore_with_probe, RestoreError};
@@ -88,7 +89,7 @@ fn build_v2_offline_export() -> TempDir {
     fs::create_dir_all(snapshot.join("payload")).expect("snapshot payload dir");
     fs::write(snapshot.join(LISTED_PAYLOAD), PAYLOAD_BYTES).expect("write payload");
     let (sha256, size_bytes) = hash_file(&snapshot.join(LISTED_PAYLOAD)).expect("hash payload");
-    let manifest = crate::sync::durability::backup::online::manifest::ManifestV2 {
+    let manifest = manifest_v2::ManifestV2 {
         format_version: 2,
         kind: BackupKind::Offline,
         created_at_unix_ns: 1_700_000_000_000,
@@ -105,8 +106,7 @@ fn build_v2_offline_export() -> TempDir {
     };
     fs::write(
         snapshot.join("manifest.json"),
-        crate::sync::durability::backup::online::manifest::encode(&manifest)
-            .expect("encode v2 offline manifest"),
+        manifest_v2::encode(&manifest).expect("encode v2 offline manifest"),
     )
     .expect("write v2 offline manifest");
     parent
@@ -143,7 +143,7 @@ fn refresh_manifest(snapshot: &Path, version: u32) {
         )
         .expect("write refreshed v1 manifest");
     } else {
-        let manifest = crate::sync::durability::backup::online::manifest::ManifestV2 {
+        let manifest = manifest_v2::ManifestV2 {
             format_version: 2,
             kind: BackupKind::Offline,
             created_at_unix_ns: 1_700_000_000_000,
@@ -156,8 +156,7 @@ fn refresh_manifest(snapshot: &Path, version: u32) {
         };
         fs::write(
             snapshot.join("manifest.json"),
-            crate::sync::durability::backup::online::manifest::encode(&manifest)
-                .expect("encode refreshed v2 manifest"),
+            manifest_v2::encode(&manifest).expect("encode refreshed v2 manifest"),
         )
         .expect("write refreshed v2 manifest");
     }
