@@ -23,4 +23,7 @@ pub(crate) mod lease;
 
 #[cfg(any(test, feature = "test-util"))]
 #[doc(hidden)]
-pub mod tests;
+pub mod close_helpers;
+
+#[cfg(test)]
+mod tests;

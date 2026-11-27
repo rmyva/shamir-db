@@ -20,7 +20,7 @@ use shamir_types::types::value::InnerValue;
 use crate::repo::{BoxRepo, RepoInstance};
 use crate::table::table_manager::table_token_for;
 use crate::table::TableConfig;
-use crate::tx::commit::pipeline::admission::tests::close_helpers::close;
+use crate::tx::commit::pipeline::admission::close_helpers::close;
 use crate::tx::{apply_replicated_batch, ApplyOutcome, ApplyPolicy, ReplicatedEvent};
 
 fn follower_repo() -> RepoInstance {

@@ -8,9 +8,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::super::close_owner::CommitAdmissionCloseOwner;
-use super::super::error::CommitAdmissionError;
-use super::super::gate::CommitAdmissionGate;
+use super::close_owner::CommitAdmissionCloseOwner;
+use super::error::CommitAdmissionError;
+use super::gate::CommitAdmissionGate;
 
 /// Close and await zero pre-close-admitted leases (unbounded, the old
 /// `close()` shape); the owner reopens on drop.

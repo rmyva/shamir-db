@@ -1,22 +1,13 @@
 //! Gate-level state-machine tests: admit/release counts, close single
 //! ownership, follower-style immediate refusal, reopen leak-freedom.
 
-// Test-only module: compiled empty when the crate is built with `test-util` alone.
-#![cfg(test)]
-
-#[cfg(test)]
 use std::sync::Arc;
-#[cfg(test)]
 use std::time::Duration;
 
-#[cfg(test)]
+use super::super::close_helpers::close;
 use super::super::error::CommitAdmissionError;
-#[cfg(test)]
 use super::super::gate::{CommitAdmissionGate, ADMISSION_REOPEN_WAIT_CAP};
-#[cfg(test)]
 use super::super::lease::CommitAdmissionLease;
-#[cfg(test)]
-use super::close_helpers::close;
 
 #[tokio::test]
 async fn admit_release_counts_are_exact_and_reopen_leaks_no_count() {
