@@ -54,11 +54,13 @@ fn challenge_layout_v2_json_and_toml_vectors_agree_and_decode() {
     }
 }
 
+/// The caller already stripped the opening quote with the key prefix.
 fn json_string_value(value: &str) -> String {
-    let value = value.trim_end_matches(',');
-    let bytes = value.as_bytes();
-    assert!(!bytes.is_empty() && bytes.first() == Some(&b'\"') && bytes.last() == Some(&b'\"'));
-    String::from_utf8(bytes[1..bytes.len() - 1].to_vec()).unwrap()
+    value
+        .trim_end_matches(',')
+        .strip_suffix('"')
+        .expect("a json string value ends with a quote")
+        .to_string()
 }
 
 fn encoded_parts(previous: &[u8], deadline: u64, proof: &[u8]) -> Vec<u8> {

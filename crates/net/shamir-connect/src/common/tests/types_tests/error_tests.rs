@@ -49,7 +49,15 @@ fn rv_connect_94e37810_to_wire_collapse_set_oracle() {
     }
     classify(Error::AuthFailed);
     classify(Error::RateLimited { retry_after: 7 });
+    assert!(matches!(
+        Error::RateLimited { retry_after: 7 }.to_wire(),
+        Error::RateLimited { retry_after: 7 }
+    ));
     classify(Error::ServerBusy { retry_after: 9 });
+    assert!(matches!(
+        Error::ServerBusy { retry_after: 9 }.to_wire(),
+        Error::ServerBusy { retry_after: 9 }
+    ));
     classify(Error::UnsupportedVersion);
     classify(Error::HandshakeVersionMismatch);
     classify(Error::ChallengeLayout);

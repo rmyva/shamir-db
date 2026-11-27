@@ -402,29 +402,37 @@ fn valid_rotation_rejects_only_corrupted_challenge_signature() {
     ));
 }
 
+fn exporter_fixture(
+    signed_exporter: [u8; 32],
+) -> (
+    crate::client::handshake::ClientHandshake,
+    Ed25519Keypair,
+    ServerChallengeV2,
+) {
+    let local_exporter = [0x41; 32];
+    let signer = Ed25519Keypair::from_seed(&[20; 32]);
+    let client = client_with_exporter(sha256(&signer.public_bytes()), local_exporter);
+    let challenge = challenge_signed_for(&client, &signer, &signed_exporter);
+    (client, signer, challenge)
+}
+
 #[test]
 fn exporter_mismatch_is_rejected() {
-    // Discriminates against verifying an exporter-bound signature with zero/local-wrong exporter.
-    let exporter = [0x31; 32];
-    let key = Ed25519Keypair::from_seed(&[20; 32]);
-    let c = client_with_exporter(sha256(&key.public_bytes()), exporter);
-    let ch = challenge_signed_for(&c, &key, &[0x32; 32]);
+    // The fixture is identical to the match oracle except the signed exporter; all other transcript fields match.
+    let (client, _signer, challenge) = exporter_fixture([0x42; 32]);
     assert!(matches!(
-        c.verify_challenge_identity(&ch, NOW),
+        client.verify_challenge_identity(&challenge, NOW),
         Err(crate::common::Error::ServerIdentityChanged)
     ));
 }
 
 #[test]
 fn exporter_match_accepts_valid_challenge_and_returns_key() {
-    // Discriminates against rejecting a signature made for the correct non-zero local exporter.
-    let exporter = [0x41; 32];
-    let key = Ed25519Keypair::from_seed(&[21; 32]);
-    let c = client_with_exporter(sha256(&key.public_bytes()), exporter);
-    let ch = challenge_signed_for(&c, &key, &exporter);
+    // The same non-zero local exporter is signed; only this field differs from the mismatch oracle.
+    let (client, signer, challenge) = exporter_fixture([0x41; 32]);
     assert_eq!(
-        c.verify_challenge_identity(&ch, NOW).unwrap(),
-        key.public_bytes()
+        client.verify_challenge_identity(&challenge, NOW).unwrap(),
+        signer.public_bytes()
     );
 }
 
